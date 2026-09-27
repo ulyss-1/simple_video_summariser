@@ -41,6 +41,8 @@ Setup
   on 2026-09-27, `faster-whisper` 1.2.1 with `ctranslate2` 4.8.2 and its
   whole tree installed from wheels and transcribed in `python:3.14-slim`
   (task #4, O7, architecture.md §16.2)
+- `cp .env.example .env` - once per checkout, then fill in `POSTGRES_PASSWORD`.
+  `.env` is gitignored (task #7)
 
 Commands
 
@@ -50,7 +52,14 @@ Activate `.venv` first; all Python commands assume it.
 - `pytest` - the whole suite; requires Docker Desktop running
 - `pytest tests/test_queue.py` - one test file
 - `ruff check .` and `mypy .` - lint and types
-- `docker compose run --rm migrate` - apply migrations
+- `docker compose up -d db` - bring up just the dev Postgres (task #7);
+  refuses to start without `POSTGRES_PASSWORD` set
+- `alembic upgrade head` / `alembic downgrade base` - from the host venv,
+  against the dev DB on `127.0.0.1:5432` (`compose.override.yml`); needs
+  `DATABASE_URL` set in the shell, since `common/config.py` reads only the
+  process environment, never `.env` (task #7)
+- `docker compose run --rm migrate` - apply migrations in the deployed stack
+  (added by #55/#58; not yet part of `compose.yml`)
 - `docker compose up -d --build` - bring the stack up
 - `npm ci && npm run build` - in `web/`, frontend only
 

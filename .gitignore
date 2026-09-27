@@ -11,3 +11,6 @@ node_modules/
 .mypy_cache/
 .ruff_cache/
 *.egg-info/
+
+# Local secrets (task #7); .env.example is committed as the placeholder seed.
+.env

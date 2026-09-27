@@ -1,0 +1,12 @@
+# Auto-merged by `docker compose` locally; never used for the server deploy,
+# which runs `docker compose -f compose.yml up -d` explicitly (AGENTS.md).
+#
+# This is the seed of the dev overlay that #59 completes (bind mounts,
+# `uvicorn --reload`, the Vite dev server). For now it only publishes
+# Postgres so the host venv's `alembic` and `psql` can reach it directly
+# (architecture.md 11.7; task #7).
+
+services:
+  db:
+    ports:
+      - "127.0.0.1:5432:5432"

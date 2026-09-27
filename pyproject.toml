@@ -15,6 +15,9 @@ dev = [
     "hypothesis",
     "ruff",
     "mypy",
+    # One-Postgres-container-per-session fixture for integration tests
+    # (architecture.md 13; task #7).
+    "testcontainers[postgres]==4.15.0",
 ]
 
 [tool.setuptools.packages.find]

@@ -1,0 +1,40 @@
+name: ytdigest
+
+# This file defines only the `db` service (task #7). The `migrate` service
+# needs the backend image and moves to #55/#58; `api`, `planner`, `analyzer`,
+# `transcriber` and `web` are added by their own tasks (architecture.md 11.4).
+# Production deploys use `docker compose -f compose.yml up -d` explicitly, so
+# `compose.override.yml` (dev-only) is never applied by accident.
+
+x-logging: &logging
+  driver: json-file
+  options: {max-size: "10m", max-file: "3"}
+
+services:
+  db:
+    image: postgres:18-alpine   # >=18.6 (architecture.md 16.1)
+    environment:
+      POSTGRES_USER: ytdigest
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      POSTGRES_DB: ytdigest
+    # postgres:18's image moved PGDATA under /var/lib/postgresql/<major>/docker
+    # and declares VOLUME /var/lib/postgresql (not .../data as in older
+    # images and architecture.md's literal example): mounting at .../data
+    # makes the entrypoint refuse to start, seeing "unused" data there.
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ytdigest -d ytdigest"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [internal]
+    logging: *logging
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+
+networks:
+  internal:
+    internal: true
