@@ -13,7 +13,6 @@ database's own ``now()``, not the test process's clock.
 
 from __future__ import annotations
 
-import logging
 import random
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -78,20 +77,6 @@ def _settings(**overrides: object) -> Settings:
     values: dict[str, object] = {"DATABASE_URL": "postgresql://u:p@h/db"}
     values.update(overrides)
     return Settings(**values)  # type: ignore[arg-type]
-
-
-@pytest.fixture(autouse=True)
-def _undo_alembic_log_disabling(conn: psycopg.Connection[Any]) -> Iterator[None]:
-    # alembic's env.py calls logging.config.fileConfig(alembic.ini) (task
-    # #7), which by default disables every logger already instantiated in
-    # this process that the ini file doesn't name - including
-    # common.queue's, imported at the top of this module. Production never
-    # runs migrations and the queue in the same process (AGENTS.md -> Rules:
-    # "Migrations run as a standalone command"), so this is purely a test
-    # artifact; undo it so caplog can see common.queue's warnings.
-    logger = logging.getLogger("common.queue")
-    logger.disabled = False
-    yield
 
 
 @pytest.fixture
