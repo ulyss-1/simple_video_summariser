@@ -1,0 +1,142 @@
+"""Runtime configuration (architecture.md 10).
+
+This is the only module that reads environment variables; ruff's TID251 rule
+bans ``os.environ`` and ``os.getenv`` everywhere else. Services call
+``get_settings()`` once at startup, so a bad value fails fast with a message
+naming the variable.
+
+Importing the module validates nothing: tests, Alembic and tooling can import
+it with an empty environment. Only ``get_settings()`` builds and checks the
+object.
+
+Values come from the process environment only. There is deliberately no
+``.env`` or secrets-directory source, so a stray file in the working
+directory cannot change behaviour. Secrets (``DATABASE_URL``,
+``ANTHROPIC_API_KEY``) are ``SecretStr`` and never appear in ``repr``,
+``str`` or validation errors.
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Literal
+
+from pydantic import (
+    Field,
+    NonNegativeInt,
+    PositiveFloat,
+    PositiveInt,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
+
+type LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
+
+class Settings(BaseSettings):
+    """Every backend setting, named exactly as its environment variable."""
+
+    model_config = SettingsConfigDict(
+        case_sensitive=True,
+        env_file=None,
+        secrets_dir=None,
+        extra="ignore",
+        frozen=True,
+        # Validation errors are logged at startup; never echo raw inputs,
+        # which would include the API key and the database password.
+        hide_input_in_errors=True,
+    )
+
+    DATABASE_URL: SecretStr
+
+    # Summarizer. The API key is optional here: api and planner share
+    # SUMMARIZER but never receive the key (11.4); the Anthropic adapter
+    # checks for it.
+    SUMMARIZER: Literal["ollama", "anthropic"] = "ollama"
+    OLLAMA_MODEL: str = "qwen3.5:4b"
+    OLLAMA_HOST: str = "http://host.docker.internal:11434"
+    ANTHROPIC_API_KEY: SecretStr | None = None
+    ANTHROPIC_MODEL: str = "claude-haiku-4-5"
+    ANTHROPIC_BATCH: bool = True
+
+    # Becomes a directory name under prompts/, so it must be a plain slug.
+    PROMPT_VERSION: str = Field(default="v1", pattern=r"^[a-z0-9_-]+$")
+
+    CHUNK_SEC: PositiveInt = 900
+    OVERLAP_SEC: NonNegativeInt = 60
+
+    WHISPER_MODEL: str = "large-v3"
+    WHISPER_COMPUTE: str = "int8"
+    WHISPER_THREADS: NonNegativeInt = 0  # 0 = auto
+    PREFER_WHISPER: bool = False
+    AUTO_CAPTION_FALLBACK: bool = True
+
+    AUDIO_DIR: Path = Path("/data/audio")
+    AUDIO_KEEP: bool = True
+    AUDIO_TTL_DAYS: PositiveInt = 30
+    AUDIO_MAX_GB: PositiveFloat = 20
+    YTDLP_COOKIE_FILE: Path | None = None
+
+    POLL_INTERVAL_SEC: PositiveInt = 3600
+    HEARTBEAT_SEC: PositiveInt = 60
+    REAP_AFTER_SEC: PositiveInt = 300
+    MAX_ATTEMPTS_TRANSCRIBE: PositiveInt = 2
+    WORKER_SHUTDOWN_GRACE_SEC: PositiveInt = 20
+
+    LOG_LEVEL: LogLevel = "INFO"
+    LOG_FORMAT: Literal["json", "console"] = "json"
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # Constructor arguments and the process environment only.
+        return (init_settings, env_settings)
+
+    @field_validator("DATABASE_URL")
+    @classmethod
+    def _database_url_not_blank(cls, value: SecretStr) -> SecretStr:
+        if not value.get_secret_value().strip():
+            raise ValueError("must not be empty")
+        return value
+
+    @field_validator("ANTHROPIC_API_KEY", "YTDLP_COOKIE_FILE", mode="before")
+    @classmethod
+    def _empty_means_unset(cls, value: Any) -> Any:
+        # Compose passes `${VAR:-}` through as an empty string.
+        return None if value == "" else value
+
+    @field_validator("LOG_LEVEL", mode="before")
+    @classmethod
+    def _upper_log_level(cls, value: Any) -> Any:
+        return value.upper() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def _overlap_shorter_than_chunk(self) -> Settings:
+        if self.OVERLAP_SEC >= self.CHUNK_SEC:
+            raise ValueError(
+                f"OVERLAP_SEC ({self.OVERLAP_SEC}) must be less than "
+                f"CHUNK_SEC ({self.CHUNK_SEC})"
+            )
+        return self
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """Build and validate settings from the environment, once per process.
+
+    Raises ``pydantic.ValidationError`` naming each bad variable.
+    """
+    return Settings()  # type: ignore[call-arg]  # DATABASE_URL comes from env

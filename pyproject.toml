@@ -31,7 +31,15 @@ markers = [
 extend-exclude = ["web", "_docs"]
 
 [tool.ruff.lint]
-extend-select = ["I", "UP", "B"]
+extend-select = ["I", "UP", "B", "TID251"]
+
+# Only common/config.py reads environment variables (architecture.md 10).
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"os.environ".msg = "Read settings via common.config.get_settings()"
+"os.getenv".msg = "Read settings via common.config.get_settings()"
+
+[tool.ruff.lint.per-file-ignores]
+"common/config.py" = ["TID251"]
 
 [tool.mypy]
 strict = true
