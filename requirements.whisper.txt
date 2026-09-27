@@ -1,0 +1,12 @@
+# Speech-to-text-only dependencies (issue #20; architecture.md 16.2, 16.6).
+#
+# Kept separate from requirements.backend.txt so the ~2 GB this pulls in
+# transitively (ctranslate2, onnxruntime, ...) never lands in an image that
+# doesn't transcribe audio (AGENTS.md -> Rules). Not installed on the host
+# either (AGENTS.md -> Setup): unit tests inject a fake WhisperModel, and the
+# one real smoke test (`pytest -m whisper`) installs this file into a
+# throwaway venv first.
+#
+# Pinned to the exact version task #4 verified for Python 3.14
+# (architecture.md 16.2).
+faster-whisper==1.2.1

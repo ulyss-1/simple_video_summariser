@@ -1,9 +1,10 @@
 """Domain dataclasses shared across services and adapters."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,3 +63,36 @@ class AudioRef:
 class AudioSource(Protocol):
     # returns 16 kHz mono opus, relative to `dest` (architecture.md 3, D6b)
     def fetch_normalized(self, video_id: str, dest: Path) -> AudioRef: ...
+
+
+# TranscriptResult/Transcriber belong to #20 (faster-whisper adapter). Same
+# reasoning as AudioRef/AudioSource above: the port and its return type live
+# here per architecture.md 3, next to what they consume (AudioRef, Segment).
+
+
+@dataclass(frozen=True, slots=True)
+class TranscriptResult:
+    """What a ``Transcriber`` returns for one ``AudioRef``.
+
+    ``segments`` are in time order, whitespace-trimmed, with empty segments
+    already dropped. ``language`` is the language actually used for decoding
+    - the caller's request if one was given, otherwise the detected one.
+    ``engine_meta`` is a JSON-safe dict persisted verbatim to
+    ``transcripts.engine_meta`` (architecture.md 7.2), e.g. engine name and
+    version, model, compute_type, beam_size, vad, threads, audio_sec,
+    load_sec, transcribe_sec and rtf.
+    """
+
+    segments: tuple[Segment, ...]
+    language: str
+    engine_meta: dict[str, Any]
+
+
+class Transcriber(Protocol):
+    def transcribe(
+        self,
+        audio: AudioRef,
+        *,
+        language: str | None = None,
+        on_progress: Callable[[float], None] | None = None,
+    ) -> TranscriptResult: ...
