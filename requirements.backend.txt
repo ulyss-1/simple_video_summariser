@@ -9,3 +9,7 @@
 #
 # Each dependency is added by the first task that needs it. Ask before
 # adding one.
+
+# YouTube metadata, subtitles and audio. Pinned exactly; a scheduled update
+# check keeps it fresh (architecture.md 16.11).
+yt-dlp==2026.8.19

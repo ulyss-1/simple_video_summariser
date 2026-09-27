@@ -1,0 +1,294 @@
+# Real yt-dlp stderr, one [[case]] per row, for tests/adapters/youtube/test_errors.py.
+#
+# The version pinned in requirements.backend.txt is yt-dlp 2026.08.19. Every case
+# names the yt-dlp version it came from and how it was obtained:
+#   live run  - captured on the dev machine; watch URLs passed in full
+#   issue log - copied verbatim from a yt-dlp GitHub issue, for failures that
+#               cannot be provoked from here (geoblock, bot check, 403 on
+#               video data, broken extractor)
+#   SOURCE    - assembled from the yt-dlp source at the stated version, for the
+#               current wording of a line whose only captured log is older
+# Do not paraphrase. Add new cases the same way when yt-dlp output changes.
+
+[[case]]
+# live run on 2026-09-27, yt-dlp 2026.08.19, https://www.youtube.com/watch?v=aaaaaaaaaaa (well-formed ID, no such video)
+stderr = '''
+ERROR: [youtube] aaaaaaaaaaa: This video is unavailable
+'''
+returncode = 1
+error_class = "PERMANENT_SOURCE"
+reason = "removed"
+
+[[case]]
+# live run on 2026-09-27, yt-dlp 2026.08.19, https://www.youtube.com/watch?v=-aaaaaaaaaa (ID with a leading dash)
+stderr = '''
+ERROR: [youtube] -aaaaaaaaaa: This video is unavailable
+'''
+returncode = 1
+error_class = "PERMANENT_SOURCE"
+reason = "removed"
+
+[[case]]
+# live run on 2026-09-27, yt-dlp 2026.08.19, https://www.youtube.com/watch?v=sJL6WA-aGkQ (full stderr)
+stderr = '''
+WARNING: [youtube] No supported JavaScript runtime could be found. Only deno is enabled by default; to use another runtime add  --js-runtimes RUNTIME[:PATH]  to your command/config. YouTube extraction without a JS runtime has been deprecated, and some formats may be missing. See  https://github.com/yt-dlp/yt-dlp/wiki/EJS  for details on installing one
+ERROR: [youtube] sJL6WA-aGkQ: Video unavailable
+'''
+returncode = 1
+error_class = "PERMANENT_SOURCE"
+reason = "removed"
+
+[[case]]
+# live run on 2026-09-27, yt-dlp 2026.08.19, https://www.youtube.com/watch?v=6SJNVb0GnPI (full stderr). Mentions
+# "in your country" but is a removal, not a geoblock
+stderr = '''
+WARNING: [youtube] No supported JavaScript runtime could be found. Only deno is enabled by default; to use another runtime add  --js-runtimes RUNTIME[:PATH]  to your command/config. YouTube extraction without a JS runtime has been deprecated, and some formats may be missing. See  https://github.com/yt-dlp/yt-dlp/wiki/EJS  for details on installing one
+ERROR: [youtube] 6SJNVb0GnPI: This video has been removed for violating YouTube's policy on hate speech. Learn more about combating hate speech in your country.
+'''
+returncode = 1
+error_class = "PERMANENT_SOURCE"
+reason = "removed"
+
+[[case]]
+# live run on 2026-09-27, yt-dlp 2026.08.19, https://www.youtube.com/watch?v=yZIXLfi8CZQ (full stderr)
+stderr = '''
+WARNING: [youtube] No supported JavaScript runtime could be found. Only deno is enabled by default; to use another runtime add  --js-runtimes RUNTIME[:PATH]  to your command/config. YouTube extraction without a JS runtime has been deprecated, and some formats may be missing. See  https://github.com/yt-dlp/yt-dlp/wiki/EJS  for details on installing one
+ERROR: [youtube] yZIXLfi8CZQ: Private video
+'''
+returncode = 1
+error_class = "PERMANENT_SOURCE"
+reason = "private"
+
+[[case]]
+# live run on 2026-09-27, yt-dlp 2026.08.19, https://www.youtube.com/watch?v=hPWDjkoiwUU (members-only upload, full stderr)
+stderr = '''
+WARNING: [youtube] No supported JavaScript runtime could be found. Only deno is enabled by default; to use another runtime add  --js-runtimes RUNTIME[:PATH]  to your command/config. YouTube extraction without a JS runtime has been deprecated, and some formats may be missing. See  https://github.com/yt-dlp/yt-dlp/wiki/EJS  for details on installing one
+ERROR: [youtube] hPWDjkoiwUU: This video is available to this channel's members on level: LTT Members Plus (or any higher level). Join this channel to get access to members-only content and other exclusive perks.
+'''
+returncode = 1
+error_class = "PERMANENT_SOURCE"
+reason = "private"
+
+[[case]]
+# live run on 2026-09-27, yt-dlp 2026.08.19, https://www.youtube.com/watch?v=HtVdAasjOgU (full stderr)
+stderr = '''
+WARNING: [youtube] No supported JavaScript runtime could be found. Only deno is enabled by default; to use another runtime add  --js-runtimes RUNTIME[:PATH]  to your command/config. YouTube extraction without a JS runtime has been deprecated, and some formats may be missing. See  https://github.com/yt-dlp/yt-dlp/wiki/EJS  for details on installing one
+WARNING: [youtube] HtVdAasjOgU: n challenge solving failed: Some formats may be missing. Ensure you have a supported JavaScript runtime and challenge solver script distribution installed. Review any warnings presented before this message. For more details, refer to  https://github.com/yt-dlp/yt-dlp/wiki/EJS
+ERROR: [youtube] HtVdAasjOgU: Sign in to confirm your age. Use --cookies-from-browser or --cookies for the authentication. See  https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies. Also see  https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies  for tips on effectively exporting YouTube cookies
+'''
+returncode = 1
+error_class = "PERMANENT_SOURCE"
+reason = "agegated"
+
+[[case]]
+# live run on 2026-09-27, yt-dlp 2026.08.19, https://www.youtube.com/watch?v=Tq92D6wQ1mg (full stderr)
+stderr = '''
+WARNING: [youtube] No supported JavaScript runtime could be found. Only deno is enabled by default; to use another runtime add  --js-runtimes RUNTIME[:PATH]  to your command/config. YouTube extraction without a JS runtime has been deprecated, and some formats may be missing. See  https://github.com/yt-dlp/yt-dlp/wiki/EJS  for details on installing one
+ERROR: [youtube] Tq92D6wQ1mg: Sign in to confirm your age. Use --cookies-from-browser or --cookies for the authentication. See  https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies. Also see  https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies  for tips on effectively exporting YouTube cookies
+'''
+returncode = 1
+error_class = "PERMANENT_SOURCE"
+reason = "agegated"
+
+[[case]]
+# yt-dlp 2022.08.19, copied from the log in https://github.com/yt-dlp/yt-dlp/issues/4713
+# (not reproducible from this machine's location)
+stderr = '''
+ERROR: [youtube] jwCz9KmGuYY: Video unavailable. The uploader has not made this video available in your country
+'''
+returncode = 1
+error_class = "PERMANENT_SOURCE"
+reason = "geoblocked"
+
+[[case]]
+# yt-dlp 2026.08.19 SOURCE, not a live run: the current wording of the line above.
+# _video.py:4056-4061 passes YouTube's subreason alone to raise_geo_restricted(), and
+# ExtractorError.__msg (utils/_utils.py:1004) prefixes '[youtube] <id>: '; the
+# subreason text is YouTube's, as in the issue #4713 log
+stderr = '''
+ERROR: [youtube] jwCz9KmGuYY: The uploader has not made this video available in your country
+'''
+returncode = 1
+error_class = "PERMANENT_SOURCE"
+reason = "geoblocked"
+
+[[case]]
+# live run on 2026-09-27, yt-dlp 2026.08.19, https://www.youtube.com/watch?v=j9epFget1W8 (scheduled NASA stream, full stderr)
+stderr = '''
+WARNING: [youtube] No supported JavaScript runtime could be found. Only deno is enabled by default; to use another runtime add  --js-runtimes RUNTIME[:PATH]  to your command/config. YouTube extraction without a JS runtime has been deprecated, and some formats may be missing. See  https://github.com/yt-dlp/yt-dlp/wiki/EJS  for details on installing one
+ERROR: [youtube] j9epFget1W8: This live event will begin in 22 hours.
+'''
+returncode = 1
+error_class = "TRANSIENT_NETWORK"
+upcoming = true
+
+[[case]]
+# yt-dlp stable@2026.03.03, copied from the log in https://github.com/yt-dlp/yt-dlp/issues/16190
+stderr = '''
+ERROR: [youtube] aZV8D9ohIVo: Premieres in 23 hours
+'''
+returncode = 1
+error_class = "TRANSIENT_NETWORK"
+upcoming = true
+
+[[case]]
+# yt-dlp nightly@2026.08.30.232658, copied from the log in
+# https://github.com/yt-dlp/yt-dlp/issues/17690 (a bot check cannot be provoked
+# responsibly). Note the typographic apostrophe in "you’re"
+stderr = '''
+ERROR: [youtube] Oud-fcGs7CY: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication. See  https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies. Also see  https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies  for tips on effectively exporting YouTube cookies
+'''
+returncode = 1
+error_class = "RATE_LIMITED"
+
+[[case]]
+# live run on 2026-09-27, yt-dlp 2026.08.19, against a local HTTP server answering 429 (generic extractor)
+stderr = '''
+ERROR: [generic] 429: Unable to download webpage: HTTP Error 429: Too Many Requests (caused by <HTTPError 429: Too Many Requests>)
+'''
+returncode = 1
+error_class = "RATE_LIMITED"
+
+[[case]]
+# live run on 2026-09-27, yt-dlp 2026.08.19, against a local HTTP server answering 403 (generic extractor)
+stderr = '''
+ERROR: [generic] 403: Unable to download webpage: HTTP Error 403: Forbidden (caused by <HTTPError 403: Forbidden>)
+'''
+returncode = 1
+error_class = "TOOL_FAILURE"
+
+[[case]]
+# yt-dlp stable@2026.07.04, copied from the log in https://github.com/yt-dlp/yt-dlp/issues/17475
+stderr = '''
+ERROR: unable to download video data: HTTP Error 403: Forbidden
+'''
+returncode = 1
+error_class = "TOOL_FAILURE"
+
+[[case]]
+# yt-dlp stable@2026.08.19, copied from the log in https://github.com/yt-dlp/yt-dlp/issues/17705.
+# The progress line has no newline, so "ERROR:" lands mid-line
+stderr = '''
+[download]   4.5% of  219.08MiB at   63.68MiB/s ETA 00:03ERROR: unable to download video data: HTTP Error 403: Forbidden
+'''
+returncode = 1
+error_class = "TOOL_FAILURE"
+
+[[case]]
+# yt-dlp stable@2026.08.19, copied from the log in https://github.com/yt-dlp/yt-dlp/issues/17556
+# (markdown bold markers removed)
+stderr = '''
+WARNING: [youtube] unable to extract yt initial data; please report this issue on  https://github.com/yt-dlp/yt-dlp/issues?q= , filling out the appropriate issue template. Confirm you are on the latest version using  yt-dlp -U
+'''
+returncode = 1
+error_class = "TOOL_FAILURE"
+
+[[case]]
+# yt-dlp stable@2026.08.19, copied from the verbose traceback in
+# https://github.com/yt-dlp/yt-dlp/issues/17705
+stderr = '''
+yt_dlp.utils.ExtractorError: [youtube] IPyO0K8pIDI: Requested format is not available. Use --list-formats for a list of available formats
+'''
+returncode = 1
+error_class = "TOOL_FAILURE"
+
+[[case]]
+# yt-dlp 2024.06.15, copied from the log in https://github.com/yt-dlp/yt-dlp/issues/13661
+# (YouTube returned a body that is not JSON)
+stderr = '''
+WARNING: [youtube] Failed to parse JSON (caused by JSONDecodeError("Expecting value in '': line 1 column 1 (char 0)"))
+'''
+returncode = 1
+error_class = "TOOL_FAILURE"
+
+[[case]]
+# yt-dlp stable@2026.08.19, copied from the log in https://github.com/yt-dlp/yt-dlp/issues/17705.
+# Unrecognized message: must be TOOL_FAILURE, never BUG
+stderr = '''
+ERROR: [youtube] IPyO0K8pIDI: The page needs to be reloaded.
+'''
+returncode = 1
+error_class = "TOOL_FAILURE"
+
+[[case]]
+# yt-dlp stable@2026.08.19, copied from the log in https://github.com/yt-dlp/yt-dlp/issues/17705.
+# Unrecognized message: must be TOOL_FAILURE, never BUG
+stderr = '''
+ERROR: [youtube] IPyO0K8pIDI: Requested format is not available. Use --list-formats for a list of available formats
+'''
+returncode = 1
+error_class = "TOOL_FAILURE"
+
+[[case]]
+# Empty stderr with a failing exit code: must be TOOL_FAILURE, never BUG
+stderr = '''
+'''
+returncode = 1
+error_class = "TOOL_FAILURE"
+
+[[case]]
+# live run on 2026-09-27, yt-dlp 2026.08.19, against a local HTTP server answering 500 (generic extractor)
+stderr = '''
+ERROR: [generic] 500: Unable to download webpage: HTTP Error 500: Internal Server Error (caused by <HTTPError 500: Internal Server Error>)
+'''
+returncode = 1
+error_class = "TRANSIENT_NETWORK"
+
+[[case]]
+# live run on 2026-09-27, yt-dlp 2026.08.19, against a local HTTP server answering 502 (generic extractor)
+stderr = '''
+ERROR: [generic] 502: Unable to download webpage: HTTP Error 502: Bad Gateway (caused by <HTTPError 502: Bad Gateway>)
+'''
+returncode = 1
+error_class = "TRANSIENT_NETWORK"
+
+[[case]]
+# live run on 2026-09-27, yt-dlp 2026.08.19, against a local HTTP server answering 503 (generic extractor).
+# "Service Unavailable" must not read as "Video unavailable"
+stderr = '''
+ERROR: [generic] 503: Unable to download webpage: HTTP Error 503: Service Unavailable (caused by <HTTPError 503: Service Unavailable>)
+'''
+returncode = 1
+error_class = "TRANSIENT_NETWORK"
+
+[[case]]
+# live run on 2026-09-27, yt-dlp 2026.08.19, https://www.youtube.com/watch?v=aaaaaaaaaaa with --socket-timeout 0.001
+# (full stderr)
+stderr = '''
+WARNING: [youtube] timed out. Retrying (1/3)...
+WARNING: [youtube] timed out. Retrying (2/3)...
+WARNING: [youtube] timed out. Retrying (3/3)...
+WARNING: [youtube] aaaaaaaaaaa: Unable to download webpage: timed out (caused by TransportError('timed out')). Giving up after 3 retries
+WARNING: [youtube] timed out. Retrying (1/3)...
+WARNING: [youtube] timed out. Retrying (2/3)...
+WARNING: [youtube] timed out. Retrying (3/3)...
+ERROR: [youtube] aaaaaaaaaaa: Unable to download API page: timed out (caused by TransportError('timed out'))
+'''
+returncode = 1
+error_class = "TRANSIENT_NETWORK"
+
+[[case]]
+# live run on 2026-09-27, yt-dlp 2026.08.19, https://www.youtube.com/watch?v=aaaaaaaaaaa inside a network namespace
+# with no interfaces (unshare -rn), full stderr
+stderr = '''
+WARNING: [youtube] [Errno -3] Temporary failure in name resolution. Retrying (1/3)...
+WARNING: [youtube] [Errno -3] Temporary failure in name resolution. Retrying (2/3)...
+WARNING: [youtube] [Errno -3] Temporary failure in name resolution. Retrying (3/3)...
+WARNING: [youtube] aaaaaaaaaaa: Unable to download webpage: [Errno -3] Temporary failure in name resolution (caused by TransportError('[Errno -3] Temporary failure in name resolution')). Giving up after 3 retries
+WARNING: [youtube] [Errno -3] Temporary failure in name resolution. Retrying (1/3)...
+WARNING: [youtube] [Errno -3] Temporary failure in name resolution. Retrying (2/3)...
+WARNING: [youtube] [Errno -3] Temporary failure in name resolution. Retrying (3/3)...
+ERROR: [youtube] aaaaaaaaaaa: Unable to download API page: [Errno -3] Temporary failure in name resolution (caused by TransportError('[Errno -3] Temporary failure in name resolution'))
+'''
+returncode = 1
+error_class = "TRANSIENT_NETWORK"
+
+[[case]]
+# live run on 2026-09-27, yt-dlp 2026.08.19, https://www.youtube.com/watch?v=jNQXAC9IVRw with --print-to-file ... /dev/full
+# (full stderr)
+stderr = '''
+WARNING: [youtube] No supported JavaScript runtime could be found. Only deno is enabled by default; to use another runtime add  --js-runtimes RUNTIME[:PATH]  to your command/config. YouTube extraction without a JS runtime has been deprecated, and some formats may be missing. See  https://github.com/yt-dlp/yt-dlp/wiki/EJS  for details on installing one
+ERROR: [Errno 28] No space left on device
+'''
+returncode = 1
+error_class = "RESOURCE"
