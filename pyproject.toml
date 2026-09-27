@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ytdigest"
+version = "0.1.0"
+description = "Structured, queryable summaries of YouTube videos and channels."
+requires-python = ">=3.14,<3.15"
+readme = "README.md"
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "hypothesis",
+    "ruff",
+    "mypy",
+]
+
+[tool.setuptools.packages.find]
+include = ["common*", "adapters*", "services*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers"]
+markers = [
+    "integration: needs a real Postgres (Docker Desktop running); deselect with -m \"not integration\"",
+]
+
+[tool.ruff]
+extend-exclude = ["web", "_docs"]
+
+[tool.ruff.lint]
+extend-select = ["I", "UP", "B"]
+
+[tool.mypy]
+strict = true
+exclude = [
+    '^\.venv/',
+    '^web/',
+    '^_docs/',
+]

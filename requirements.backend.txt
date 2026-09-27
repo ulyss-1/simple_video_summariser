@@ -1,0 +1,11 @@
+# Runtime Python dependencies for the backend services (api, planner,
+# analyzer, migrate, and the transcriber base image).
+#
+# Runtime deps only, per AGENTS.md -> Rules:
+# - speech-to-text-only deps belong in requirements.whisper.txt
+# - dev tooling (pytest, hypothesis, ruff, mypy) belongs in the `dev` extra
+#   of pyproject.toml
+# - frontend deps belong in web/package.json
+#
+# Each dependency is added by the first task that needs it. Ask before
+# adding one.

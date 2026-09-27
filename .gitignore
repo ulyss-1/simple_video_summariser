@@ -5,3 +5,9 @@
 __pycache__/
 node_modules/
 .hypothesis/
+
+# Python tool caches and build metadata
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
