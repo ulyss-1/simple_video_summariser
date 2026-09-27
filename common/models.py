@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Protocol
 
 
@@ -33,3 +34,31 @@ class VideoMeta:
 
 class MetadataSource(Protocol):
     def fetch(self, video_id: str) -> VideoMeta: ...
+
+
+# AudioRef and AudioSource, below, belong to #19 (audio acquisition and
+# normalization). #19's own file list names only adapters/youtube/audio.py
+# and its tests, but the port and its return type live in common/models.py
+# per architecture.md §3 - the same place #16 put MetadataSource beside
+# VideoMeta. #20's Transcriber port also consumes AudioRef, so it cannot
+# live in adapters/youtube/ (services/ -> adapters/ -> common/, AGENTS.md).
+
+
+@dataclass(frozen=True, slots=True)
+class AudioRef:
+    """Where normalized audio ended up, and its real duration.
+
+    ``rel_path`` is relative to ``AUDIO_DIR`` (#10's storage rule), e.g.
+    ``"ab/abc123def45.opus"`` - never an absolute path. ``bytes`` is the
+    size of the file on disk. ``duration_sec`` is measured by ``ffprobe``
+    on the normalized audio itself (#19), never taken from video metadata.
+    """
+
+    rel_path: str
+    bytes: int
+    duration_sec: float
+
+
+class AudioSource(Protocol):
+    # returns 16 kHz mono opus, relative to `dest` (architecture.md 3, D6b)
+    def fetch_normalized(self, video_id: str, dest: Path) -> AudioRef: ...

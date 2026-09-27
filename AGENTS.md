@@ -32,6 +32,8 @@ Setup
 
 - `sudo apt install python3.14-venv` - once per machine; stock Ubuntu ships
   `python3.14` without `ensurepip`, so `python3.14 -m venv` fails without it
+- `sudo apt install ffmpeg` - once per machine; `ffmpeg`/`ffprobe` normalize
+  downloaded audio (#19) and are needed by its tests and #3's bake-off
 - `python3.14 -m venv .venv && . .venv/bin/activate`
 - `pip install -r requirements.backend.txt -e ".[dev]"` - runtime and dev
   dependencies. `requirements.whisper.txt` is deliberately not installed on
