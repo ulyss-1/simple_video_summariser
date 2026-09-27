@@ -35,8 +35,10 @@ Setup
 - `python3.14 -m venv .venv && . .venv/bin/activate`
 - `pip install -r requirements.backend.txt -e ".[dev]"` - runtime and dev
   dependencies. `requirements.whisper.txt` is deliberately not installed on
-  the host: it adds ~2 GB, and its `ctranslate2` wheel for 3.14 is still
-  unverified (see task #4 and open question O7)
+  the host because it adds ~2 GB. Wheels for 3.14 are no longer in doubt:
+  on 2026-09-27, `faster-whisper` 1.2.1 with `ctranslate2` 4.8.2 and its
+  whole tree installed from wheels and transcribed in `python:3.14-slim`
+  (task #4, O7, architecture.md §16.2)
 
 Commands
 

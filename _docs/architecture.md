@@ -1211,7 +1211,7 @@ subtitles-only until Phase 2.
 | O3 | `AUDIO_TTL_DAYS` 30 vs 90 | Disk provisioning | Follows from O1/O2 |
 | O4 | Local vs cloud summarizer (D5) | Cost model | Phase 5, via Compare view |
 | O5 | Embedding model + dimension (D9c) | v2 schema | Deferred; chunk table already prepared |
-| O7 | `ctranslate2` wheel availability for Python 3.14 | transcriber image build | Check in Phase 0; fall back to split 3.13 image (16.2) — moot if Parakeet wins |
+| O7 | `ctranslate2` wheel availability for Python 3.14 | transcriber image build | **Resolved 2026-09-27 (task #4): wheels exist for the whole tree; `faster-whisper` 1.2.1 installs and transcribes on `python:3.14-slim`.** The transcriber can derive from the 3.14 backend image; the 3.13 split is not needed. Details in 16.2 |
 | O6 | Whether `speaker_coercions_total` justifies diarization (D4) | v2 scope | Observe during Phase 5 |
 
 ---
@@ -1283,9 +1283,56 @@ host catch up on its own schedule.
 (under `faster-whisper`) ships platform-specific wheels and has historically
 lagged new CPython minors: it notably had no 3.13 wheels *and no source
 distribution* for a period, which left 3.12 as the only option. CTranslate2
-release notes confirm 3.13 support; **3.14 support is unconfirmed as of this
-writing**. With no sdist fallback, a missing wheel is a hard build failure, not
-a slow source compile.
+release notes confirm 3.13 support. 3.14 support was unconfirmed when this
+section was first written. It has since been verified, with the result below.
+With no sdist fallback, a missing wheel is a hard build failure, not a slow
+source compile.
+
+**Verified 2026-09-27 (task #4): 3.14 works.** The checks ran in throwaway
+containers on the Docker Desktop daemon, never on the host.
+
+- *Wheel download.* `pip download faster-whisper --only-binary=:all:
+  --python-version 3.14` resolved the full tree from wheels for
+  Linux x86_64 (glibc), with no sdists. It ran twice with identical results:
+  once natively inside `python:3.14-slim` and once cross-platform with
+  `--platform manylinux_2_{17..28}_x86_64 --platform manylinux2014_x86_64`.
+- *Smoke test.* In `python:3.14-slim` (Python 3.14.7, pip 26.2.1, Debian
+  glibc 2.41), `pip install --only-binary=:all: faster-whisper` succeeded. The
+  `tiny` model (CPU, `int8`) then transcribed three clips without error: a
+  5 s 440 Hz sine passed as a numpy array (0 segments, as expected), the same
+  sine with `vad_filter=True` (which loads `onnxruntime`), and a 5.5 s
+  espeak-ng speech WAV decoded from a file path through PyAV. For the WAV it
+  returned *"the quick brown fox jump over the rainy dog. The low world, this
+  is a test."*
+
+| Package | Version | Wheel resolved for cp314 | Result |
+|---|---|---|---|
+| faster-whisper | 1.2.1 | `py3-none-any` | pass |
+| ctranslate2 | 4.8.2 | `cp314-cp314-manylinux_2_27/2_28_x86_64` | pass |
+| av (PyAV) | 18.1.0 | `cp311-abi3-manylinux_2_28_x86_64` | pass |
+| tokenizers | 0.23.2 | `cp310-abi3-manylinux_2_17_x86_64` | pass |
+| onnxruntime | 1.30.0 | `cp314-cp314-manylinux_2_28_x86_64` | pass |
+| numpy | 2.5.3 | `cp314-cp314-manylinux_2_27/2_28_x86_64` | pass |
+| pyyaml | 6.0.3 | `cp314-cp314-manylinux_2_17/2_28_x86_64` | pass |
+| protobuf | 7.36.2 | `cp310-abi3-manylinux2014_x86_64` | pass |
+| hf-xet | 1.6.0 | `cp38-abi3-manylinux_2_17_x86_64` | pass |
+| flatbuffers 25.12.19, huggingface-hub 1.33.0, httpx 0.28.1, httpcore 1.0.9, h11 0.16.0, anyio 4.15.1, idna 3.20, certifi 2026.7.22, click 8.5.0, filelock 4.0.4, fsspec 2026.9.0, packaging 26.3, tqdm 4.70.1, typing-extensions 4.16.0 | — | pure-Python `py3-none-any` | pass |
+
+Python 3.13 (`python:3.13-slim`, 3.13.15) was also run through both steps.
+Both passed, with the same versions and the `cp313` builds of the three
+version-specific wheels (ctranslate2, numpy, onnxruntime), and an identical
+transcript. So the fallback in mitigation 2 is known to work too, but it is
+not needed.
+
+*Pitfall with the download check.* Passing a single
+`--platform manylinux_2_28_x86_64` makes pip accept **only** that exact tag.
+Unlike an install on a real glibc system, it does not also accept older
+`manylinux_2_17` / `manylinux2014` wheels. `tokenizers` publishes only
+`manylinux_2_17` abi3 wheels, so that form of the command fails with
+"no matching distributions: av, tokenizers" on 3.14 **and on 3.13 alike**.
+The failure is a false negative. For cross-platform checks, list every
+manylinux tag from `2_17` to the target, or run the check natively inside
+the target image.
 
 Three mitigations, in order of preference:
 
