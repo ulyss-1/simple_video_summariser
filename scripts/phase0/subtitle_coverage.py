@@ -175,13 +175,25 @@ def classify(info: dict[str, Any]) -> tuple[str, str]:
 NOISE_MARKERS = ("No supported JavaScript runtime",)
 
 
-def first_line(stderr: str) -> str:
-    """First meaningful line of yt-dlp's stderr."""
-    for line in stderr.splitlines():
-        line = line.strip()
-        if line and not any(marker in line for marker in NOISE_MARKERS):
+def first_line(stderr: str, video_id: str) -> str:
+    """First line of yt-dlp's stderr that says why this video failed.
+
+    Prefers an ``ERROR:`` line, then the per-video reason yt-dlp tags with
+    ``<video_id>:`` (e.g. "Sign in to confirm you're not a bot"), then the
+    first line that is not environment noise.
+    """
+    lines = [
+        line.strip()
+        for line in stderr.splitlines()
+        if line.strip() and not any(marker in line for marker in NOISE_MARKERS)
+    ]
+    for line in lines:
+        if line.startswith("ERROR:"):
             return line
-    return ""
+    for line in lines:
+        if f"{video_id}:" in line:
+            return line
+    return lines[0] if lines else ""
 
 
 def check_video(channel_id: str, entry: FeedEntry) -> VideoResult:
@@ -214,7 +226,10 @@ def check_video(channel_id: str, entry: FeedEntry) -> VideoResult:
     except subprocess.TimeoutExpired:
         return result("error", f"yt-dlp timed out after {YTDLP_TIMEOUT_SEC}s")
     if proc.returncode != 0:
-        reason = first_line(proc.stderr) or f"yt-dlp exited with {proc.returncode}"
+        reason = (
+            first_line(proc.stderr, entry.video_id)
+            or f"yt-dlp exited with {proc.returncode}"
+        )
         return result("error", reason)
     try:
         info = json.loads(proc.stdout)
@@ -225,7 +240,10 @@ def check_video(channel_id: str, entry: FeedEntry) -> VideoResult:
 
     live_status = info.get("live_status")
     if not info.get("formats") and live_status not in EXCLUDED_LIVE_STATUSES:
-        return result("error", first_line(proc.stderr) or "yt-dlp found no formats")
+        return result(
+            "error",
+            first_line(proc.stderr, entry.video_id) or "yt-dlp found no formats",
+        )
 
     raw_duration = info.get("duration")
     duration = int(raw_duration) if isinstance(raw_duration, (int, float)) else None
