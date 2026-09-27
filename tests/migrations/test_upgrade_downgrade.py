@@ -14,6 +14,7 @@ import psycopg
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 
 from common.config import get_settings
 
@@ -34,22 +35,28 @@ def _config_for(dsn: str, monkeypatch: pytest.MonkeyPatch) -> Config:
     return config
 
 
+def _current_head(config: Config) -> str:
+    (head,) = ScriptDirectory.from_config(config).get_heads()
+    return head
+
+
 def _version_rows(dsn: str) -> list[tuple[str, ...]]:
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("SELECT version_num FROM alembic_version")
         return cur.fetchall()
 
 
-def test_upgrade_head_creates_alembic_version_at_0001(
+def test_upgrade_head_creates_alembic_version_at_head(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Name kept from #7; head moved to 0002 once #8 added the core schema
-    # revision on top of the 0001 baseline.
+    # Name kept generic from #7; compares against the script directory's
+    # own head rather than a hardcoded id, so it keeps working as later
+    # migrations (#9, #10, ...) move head forward.
     config = _config_for(postgres_dsn, monkeypatch)
 
     command.upgrade(config, "head")
 
-    assert _version_rows(postgres_dsn) == [("0002",)]
+    assert _version_rows(postgres_dsn) == [(_current_head(config),)]
 
 
 def test_downgrade_base_empties_alembic_version(
@@ -72,7 +79,7 @@ def test_upgrade_downgrade_upgrade_round_trip_succeeds(
     command.downgrade(config, "base")
     command.upgrade(config, "head")
 
-    assert _version_rows(postgres_dsn) == [("0002",)]
+    assert _version_rows(postgres_dsn) == [(_current_head(config),)]
 
 
 @pytest.mark.parametrize("scheme", ["postgresql://", "postgresql+psycopg://"])
@@ -86,4 +93,4 @@ def test_env_accepts_both_the_plain_and_psycopg_url_schemes(
 
     command.upgrade(config, "head")
 
-    assert _version_rows(postgres_dsn) == [("0002",)]
+    assert _version_rows(postgres_dsn) == [(_current_head(config),)]
