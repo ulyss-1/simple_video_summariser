@@ -28,5 +28,7 @@ def test_migration_history_has_exactly_one_head() -> None:
 
 
 def test_revision_0001_baseline_is_a_real_revision() -> None:
+    # Walked from head to base, so 0002 (#8) precedes 0001. Grows by one
+    # entry each time a later migration (#9, #10, ...) extends the chain.
     revisions = [rev.revision for rev in _script_directory().walk_revisions()]
-    assert revisions == ["0001"]
+    assert revisions == ["0002", "0001"]

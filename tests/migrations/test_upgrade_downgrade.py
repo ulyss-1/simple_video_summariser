@@ -43,11 +43,13 @@ def _version_rows(dsn: str) -> list[tuple[str, ...]]:
 def test_upgrade_head_creates_alembic_version_at_0001(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Name kept from #7; head moved to 0002 once #8 added the core schema
+    # revision on top of the 0001 baseline.
     config = _config_for(postgres_dsn, monkeypatch)
 
     command.upgrade(config, "head")
 
-    assert _version_rows(postgres_dsn) == [("0001",)]
+    assert _version_rows(postgres_dsn) == [("0002",)]
 
 
 def test_downgrade_base_empties_alembic_version(
@@ -70,7 +72,7 @@ def test_upgrade_downgrade_upgrade_round_trip_succeeds(
     command.downgrade(config, "base")
     command.upgrade(config, "head")
 
-    assert _version_rows(postgres_dsn) == [("0001",)]
+    assert _version_rows(postgres_dsn) == [("0002",)]
 
 
 @pytest.mark.parametrize("scheme", ["postgresql://", "postgresql+psycopg://"])
@@ -84,4 +86,4 @@ def test_env_accepts_both_the_plain_and_psycopg_url_schemes(
 
     command.upgrade(config, "head")
 
-    assert _version_rows(postgres_dsn) == [("0001",)]
+    assert _version_rows(postgres_dsn) == [("0002",)]
