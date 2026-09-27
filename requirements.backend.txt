@@ -17,3 +17,7 @@ yt-dlp==2026.8.19
 # Typed, validated settings from environment variables (architecture.md 10,
 # common/config.py). Pydantic itself comes in transitively.
 pydantic-settings==2.15.0
+
+# Structured JSON logs to stdout, stdlib records included (architecture.md 2,
+# 12; common/logging.py).
+structlog==26.1.0
