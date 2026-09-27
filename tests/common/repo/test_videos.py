@@ -11,6 +11,8 @@ from common.models import VideoMeta
 from common.repo.channels import add_channel, list_active_channels
 from common.repo.videos import mark_unavailable, upsert_video
 
+pytestmark = pytest.mark.integration
+
 
 def make_meta(**overrides: object) -> VideoMeta:
     defaults: dict[str, object] = {

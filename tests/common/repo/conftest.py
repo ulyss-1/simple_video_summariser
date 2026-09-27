@@ -1,8 +1,11 @@
 """Shared fixtures for ``common/repo/`` tests (issue #14).
 
 Every test in this package needs a live Postgres migrated to head (#8, #9,
-#10), so the whole package is marked ``integration`` here rather than in
-each module.
+#10). pytest does not apply a conftest's module-level ``pytestmark`` to
+sibling test modules, so each test module under this package sets
+``pytestmark = pytest.mark.integration`` itself (matching
+``tests/migrations/test_upgrade_downgrade.py`` and
+``tests/test_compose_docker.py``).
 """
 
 from __future__ import annotations
@@ -17,8 +20,6 @@ from alembic import command
 from alembic.config import Config
 
 from common.config import get_settings
-
-pytestmark = pytest.mark.integration
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 

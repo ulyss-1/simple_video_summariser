@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import psycopg
+import pytest
 
 from common.repo.channels import add_channel, list_active_channels, record_poll
+
+pytestmark = pytest.mark.integration
 
 
 def test_add_channel_creates_an_active_channel_with_monitor_from_set(

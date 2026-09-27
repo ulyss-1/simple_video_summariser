@@ -13,6 +13,8 @@ from common.repo.transcripts import (
     save_transcript,
 )
 
+pytestmark = pytest.mark.integration
+
 
 def test_save_transcript_returns_an_id_and_builds_full_text(
     conn: psycopg.Connection, video_id: str

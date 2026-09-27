@@ -9,6 +9,8 @@ from common.models import Analysis, Claim, Quote, Topic
 from common.repo.analyses import latest_analysis, save_analysis
 from common.repo.transcripts import save_transcript
 
+pytestmark = pytest.mark.integration
+
 
 def make_analysis(video_id: str, transcript_id: int, **overrides: object) -> Analysis:
     defaults: dict[str, object] = {
