@@ -14,7 +14,10 @@ Per-layer approach is in architecture.md §13 — follow it. These rules apply o
   shorter than / equal to one chunk window, attempts == max, last page).
 - Invariants over many inputs: use Hypothesis property tests (chunker, VTT parser).
 - Untrusted input, at trust boundaries only:
-  - video IDs/URLs before they reach yt-dlp (reject leading `-`, non-ID chars)
+  - video IDs/URLs before they reach yt-dlp: accept only 11 chars of
+    `[A-Za-z0-9_-]`, reject anything else. A leading `-` is valid (e.g.
+    `-wNyEUrxzFU`), so never pass a bare ID - always pass the full watch URL
+    so yt-dlp cannot read the ID as an option
   - API query/path params (search `q`, pagination, backfill limit)
   - LLM output: invented speakers, malformed JSON, code fences, prompt text
     echoed from the transcript
