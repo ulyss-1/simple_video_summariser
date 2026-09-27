@@ -29,9 +29,14 @@ _TIMING = re.compile(rf"[ \t]*{_TIMESTAMP}[ \t]*-->[ \t]*{_TIMESTAMP}(?:[ \t].*)
 _TAG = re.compile(r"<([^>\n]*)>")
 _VOICE = re.compile(r"v(?:\.[^ \t]*)?(?:[ \t]+(.*))?")
 _SPACES = re.compile(r"[ \t\f\v]+")
-# Any decimal reference past U+10FFFF decodes to U+FFFD; replacing long ones
-# first stops html.unescape raising ValueError on 4300+ digit integers.
-_HUGE_DECIMAL_REF = re.compile(r"&#0*[1-9][0-9]{7,};?")
+# int()'s 4300-digit conversion limit counts leading zeros, so a decimal
+# reference can trip it while representing a tiny (or zero) value. Strip
+# leading zeros before decoding so int() only ever sees significant digits.
+_DECIMAL_REF = re.compile(r"&#([0-9]+)(;?)")
+# The highest codepoint (U+10FFFF) is 7 decimal digits, so 8+ significant
+# digits are always out of range; skip int() for those and go straight to
+# the replacement character html.unescape would produce anyway.
+_MAX_CODEPOINT_DIGITS = 7
 
 # A run of text and who says it; a cue line is a tuple of runs.
 type _Run = tuple[str | None, str]
@@ -45,10 +50,10 @@ def parse_vtt(text: str) -> list[Segment]:
     whitespace, does not start with the `WEBVTT` signature. Never raises
     anything else.
     """
+    if text == "":
+        return []
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = _LEADING_JUNK.sub("", text, count=1)
-    if not text:
-        return []
     if not _SIGNATURE.match(text):
         raise VttParseError("input does not start with a WEBVTT header")
 
@@ -148,7 +153,19 @@ def _clean_lines(payload: list[str]) -> list[_Line]:
 
 
 def _decode(chunk: str) -> str:
-    return html.unescape(_HUGE_DECIMAL_REF.sub("\ufffd", chunk))
+    return html.unescape(_DECIMAL_REF.sub(_shrink_decimal_ref, chunk))
+
+
+def _shrink_decimal_ref(match: re.Match[str]) -> str:
+    """Drop a decimal reference's leading zeros before html.unescape sees it.
+
+    A reference with 8+ significant digits is always past U+10FFFF, so it is
+    replaced directly instead of calling int() on a possibly huge string.
+    """
+    digits = match.group(1).lstrip("0") or "0"
+    if len(digits) > _MAX_CODEPOINT_DIGITS:
+        return "\ufffd"
+    return f"&#{digits}{match.group(2)}"
 
 
 def _append(runs: list[_Run], voice: str | None, chunk: str) -> None:

@@ -217,6 +217,27 @@ def test_out_of_range_numeric_references_decode_to_replacement_character() -> No
     assert parse_vtt(source) == [Segment(1.0, 2.0, "a\ufffdb \ufffd A", "\ufffd")]
 
 
+def test_leading_zero_padded_numeric_references_do_not_raise() -> None:
+    # int()'s digit-count limit (4300) counts leading zeros, so a reference
+    # can have a small value but still blow past the limit in raw digits.
+    # The old guard only counted significant digits and missed this.
+    trailing_one = "&#" + "0" * 4999 + "1;"  # decodes to U+0001, an HTML5
+    # "invalid codepoint" that html.unescape drops entirely.
+    all_zeros = "&#" + "0" * 5000 + ";"  # decodes to U+0000, which
+    # html.unescape maps to U+FFFD.
+    source = vtt(f"00:00:01.000 --> 00:00:02.000\na{trailing_one}b{all_zeros}c")
+
+    assert texts(parse_vtt(source)) == ["ab�c"]
+
+
+def test_leading_zero_padded_numeric_reference_in_voice_name_does_not_raise() -> None:
+    trailing_one = "&#" + "0" * 4999 + "1;"
+    source = vtt(f"00:00:01.000 --> 00:00:02.000\n<v {trailing_one}>hi</v>")
+
+    # U+0001 is dropped by html.unescape, so the name is empty -> no speaker.
+    assert parse_vtt(source) == [Segment(1.0, 2.0, "hi")]
+
+
 def test_escaped_tag_text_is_kept_as_text() -> None:
     source = vtt("00:00:01.000 --> 00:00:02.000\n&lt;c&gt;not a tag&lt;/c&gt;")
 
@@ -396,7 +417,7 @@ def test_file_cut_inside_cue_text_returns_complete_cues_first() -> None:
 
 @pytest.mark.parametrize(
     "source",
-    ["", "WEBVTT", "WEBVTT\n", "\ufeffWEBVTT\r\n\r\n", "   \n", "\ufeff"],
+    ["", "WEBVTT", "WEBVTT\n", "\ufeffWEBVTT\r\n\r\n"],
 )
 def test_empty_or_header_only_input_returns_empty_list(source: str) -> None:
     assert parse_vtt(source) == []
@@ -414,9 +435,15 @@ def test_header_only_fixture_returns_empty_list() -> None:
         "WEBVTTX\n",
         "X WEBVTT\n",
         "00:00:01.000 --> 00:00:02.000\nNo header.\n",
+        "   \n",
+        "\ufeff",
+        "\ufeff \n",
     ],
 )
 def test_input_without_webvtt_header_raises(source: str) -> None:
+    # Whitespace-only and BOM-only input are non-empty and do not start with
+    # WEBVTT after the BOM/whitespace is stripped, so they must raise too -
+    # only "" and header-only files return [].
     with pytest.raises(VttParseError):
         parse_vtt(source)
 
