@@ -1,0 +1,440 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.160 --> 00:00:02.270 align:start position:0%
+ 
+hi<00:00:00.320><c> everyone</c><00:00:01.280><c> so</c><00:00:01.480><c> recently</c><00:00:01.880><c> I</c><00:00:02.000><c> gave</c><00:00:02.159><c> a</c>
+
+00:00:02.270 --> 00:00:02.280 align:start position:0%
+hi everyone so recently I gave a
+ 
+
+00:00:02.280 --> 00:00:04.230 align:start position:0%
+hi everyone so recently I gave a
+30-minute<00:00:02.800><c> talk</c><00:00:03.000><c> on</c><00:00:03.159><c> large</c><00:00:03.439><c> language</c><00:00:03.760><c> models</c>
+
+00:00:04.230 --> 00:00:04.240 align:start position:0%
+30-minute talk on large language models
+ 
+
+00:00:04.240 --> 00:00:06.389 align:start position:0%
+30-minute talk on large language models
+just<00:00:04.400><c> kind</c><00:00:04.520><c> of</c><00:00:04.640><c> like</c><00:00:04.759><c> an</c><00:00:04.880><c> intro</c><00:00:05.319><c> talk</c><00:00:06.160><c> um</c>
+
+00:00:06.389 --> 00:00:06.399 align:start position:0%
+just kind of like an intro talk um
+ 
+
+00:00:06.399 --> 00:00:08.470 align:start position:0%
+just kind of like an intro talk um
+unfortunately<00:00:07.040><c> that</c><00:00:07.200><c> talk</c><00:00:07.399><c> was</c><00:00:07.560><c> not</c><00:00:07.759><c> recorded</c>
+
+00:00:08.470 --> 00:00:08.480 align:start position:0%
+unfortunately that talk was not recorded
+ 
+
+00:00:08.480 --> 00:00:10.070 align:start position:0%
+unfortunately that talk was not recorded
+but<00:00:08.639><c> a</c><00:00:08.719><c> lot</c><00:00:08.840><c> of</c><00:00:08.960><c> people</c><00:00:09.160><c> came</c><00:00:09.280><c> to</c><00:00:09.400><c> me</c><00:00:09.679><c> after</c><00:00:09.920><c> the</c>
+
+00:00:10.070 --> 00:00:10.080 align:start position:0%
+but a lot of people came to me after the
+ 
+
+00:00:10.080 --> 00:00:11.470 align:start position:0%
+but a lot of people came to me after the
+talk<00:00:10.280><c> and</c><00:00:10.400><c> they</c><00:00:10.480><c> told</c><00:00:10.679><c> me</c><00:00:10.880><c> that</c><00:00:11.200><c> uh</c><00:00:11.320><c> they</c>
+
+00:00:11.470 --> 00:00:11.480 align:start position:0%
+talk and they told me that uh they
+ 
+
+00:00:11.480 --> 00:00:13.669 align:start position:0%
+talk and they told me that uh they
+really<00:00:11.679><c> liked</c><00:00:12.080><c> the</c><00:00:12.240><c> talk</c><00:00:12.799><c> so</c><00:00:13.000><c> I</c><00:00:13.080><c> would</c><00:00:13.280><c> just</c><00:00:13.599><c> I</c>
+
+00:00:13.669 --> 00:00:13.679 align:start position:0%
+really liked the talk so I would just I
+ 
+
+00:00:13.679 --> 00:00:15.110 align:start position:0%
+really liked the talk so I would just I
+thought<00:00:13.839><c> I</c><00:00:13.920><c> would</c><00:00:14.120><c> just</c><00:00:14.280><c> re-record</c><00:00:14.799><c> it</c><00:00:15.000><c> and</c>
+
+00:00:15.110 --> 00:00:15.120 align:start position:0%
+thought I would just re-record it and
+ 
+
+00:00:15.120 --> 00:00:16.910 align:start position:0%
+thought I would just re-record it and
+basically<00:00:15.400><c> put</c><00:00:15.519><c> it</c><00:00:15.639><c> up</c><00:00:15.719><c> on</c><00:00:15.799><c> YouTube</c><00:00:16.600><c> so</c><00:00:16.800><c> here</c>
+
+00:00:16.910 --> 00:00:16.920 align:start position:0%
+basically put it up on YouTube so here
+ 
+
+00:00:16.920 --> 00:00:19.429 align:start position:0%
+basically put it up on YouTube so here
+we<00:00:17.080><c> go</c><00:00:17.640><c> the</c><00:00:17.800><c> busy</c><00:00:18.160><c> person's</c><00:00:18.560><c> intro</c><00:00:19.000><c> to</c><00:00:19.160><c> large</c>
+
+00:00:19.429 --> 00:00:19.439 align:start position:0%
+we go the busy person's intro to large
+ 
+
+00:00:19.439 --> 00:00:21.870 align:start position:0%
+we go the busy person's intro to large
+language<00:00:19.760><c> models</c><00:00:20.279><c> director</c><00:00:20.640><c> Scott</c><00:00:21.600><c> okay</c><00:00:21.720><c> so</c>
+
+00:00:21.870 --> 00:00:21.880 align:start position:0%
+language models director Scott okay so
+ 
+
+00:00:21.880 --> 00:00:24.589 align:start position:0%
+language models director Scott okay so
+let's<00:00:22.119><c> begin</c><00:00:23.119><c> first</c><00:00:23.320><c> of</c><00:00:23.439><c> all</c><00:00:23.800><c> what</c><00:00:24.039><c> is</c><00:00:24.199><c> a</c><00:00:24.320><c> large</c>
+
+00:00:24.589 --> 00:00:24.599 align:start position:0%
+let's begin first of all what is a large
+ 
+
+00:00:24.599 --> 00:00:26.550 align:start position:0%
+let's begin first of all what is a large
+language<00:00:24.880><c> model</c><00:00:25.240><c> really</c><00:00:26.000><c> well</c><00:00:26.199><c> a</c><00:00:26.320><c> large</c>
+
+00:00:26.550 --> 00:00:26.560 align:start position:0%
+language model really well a large
+ 
+
+00:00:26.560 --> 00:00:29.550 align:start position:0%
+language model really well a large
+language<00:00:26.840><c> model</c><00:00:27.119><c> is</c><00:00:27.279><c> just</c><00:00:27.640><c> two</c><00:00:27.920><c> files</c><00:00:28.560><c> right</c>
+
+00:00:29.550 --> 00:00:29.560 align:start position:0%
+language model is just two files right
+ 
+
+00:00:29.560 --> 00:00:31.269 align:start position:0%
+language model is just two files right
+um<00:00:29.759><c> there</c><00:00:30.000><c> will</c><00:00:30.119><c> be</c><00:00:30.240><c> two</c><00:00:30.439><c> files</c><00:00:30.800><c> in</c><00:00:31.000><c> this</c>
+
+00:00:31.269 --> 00:00:31.279 align:start position:0%
+um there will be two files in this
+ 
+
+00:00:31.279 --> 00:00:33.150 align:start position:0%
+um there will be two files in this
+hypothetical<00:00:31.800><c> directory</c><00:00:32.599><c> so</c><00:00:32.759><c> for</c><00:00:32.920><c> example</c>
+
+00:00:33.150 --> 00:00:33.160 align:start position:0%
+hypothetical directory so for example
+ 
+
+00:00:33.160 --> 00:00:34.830 align:start position:0%
+hypothetical directory so for example
+working<00:00:33.480><c> with</c><00:00:33.600><c> a</c><00:00:33.800><c> specific</c><00:00:34.200><c> example</c><00:00:34.559><c> of</c><00:00:34.680><c> the</c>
+
+00:00:34.830 --> 00:00:34.840 align:start position:0%
+working with a specific example of the
+ 
+
+00:00:34.840 --> 00:00:38.229 align:start position:0%
+working with a specific example of the
+Llama<00:00:35.280><c> 270b</c><00:00:36.280><c> model</c><00:00:37.079><c> this</c><00:00:37.200><c> is</c><00:00:37.600><c> a</c><00:00:37.960><c> large</c>
+
+00:00:38.229 --> 00:00:38.239 align:start position:0%
+Llama 270b model this is a large
+ 
+
+00:00:38.239 --> 00:00:41.389 align:start position:0%
+Llama 270b model this is a large
+language<00:00:38.520><c> model</c><00:00:38.800><c> released</c><00:00:39.360><c> by</c><00:00:39.559><c> meta</c><00:00:40.079><c> Ai</c><00:00:41.079><c> and</c>
+
+00:00:41.389 --> 00:00:41.399 align:start position:0%
+language model released by meta Ai and
+ 
+
+00:00:41.399 --> 00:00:43.190 align:start position:0%
+language model released by meta Ai and
+this<00:00:41.520><c> is</c><00:00:41.760><c> basically</c><00:00:42.160><c> the</c><00:00:42.320><c> Llama</c><00:00:42.719><c> series</c><00:00:43.039><c> of</c>
+
+00:00:43.190 --> 00:00:43.200 align:start position:0%
+this is basically the Llama series of
+ 
+
+00:00:43.200 --> 00:00:45.310 align:start position:0%
+this is basically the Llama series of
+language<00:00:43.520><c> models</c><00:00:44.239><c> the</c><00:00:44.440><c> second</c><00:00:44.760><c> iteration</c><00:00:45.200><c> of</c>
+
+00:00:45.310 --> 00:00:45.320 align:start position:0%
+language models the second iteration of
+ 
+
+00:00:45.320 --> 00:00:47.750 align:start position:0%
+language models the second iteration of
+it<00:00:45.800><c> and</c><00:00:46.000><c> this</c><00:00:46.120><c> is</c><00:00:46.239><c> the</c><00:00:46.360><c> 70</c><00:00:46.800><c> billion</c><00:00:47.320><c> parameter</c>
+
+00:00:47.750 --> 00:00:47.760 align:start position:0%
+it and this is the 70 billion parameter
+ 
+
+00:00:47.760 --> 00:00:51.950 align:start position:0%
+it and this is the 70 billion parameter
+model<00:00:48.680><c> of</c><00:00:49.320><c> uh</c><00:00:50.039><c> of</c><00:00:50.280><c> this</c><00:00:50.520><c> series</c><00:00:51.360><c> so</c><00:00:51.559><c> there's</c>
+
+00:00:51.950 --> 00:00:51.960 align:start position:0%
+model of uh of this series so there's
+ 
+
+00:00:51.960 --> 00:00:54.189 align:start position:0%
+model of uh of this series so there's
+multiple<00:00:52.399><c> models</c><00:00:53.399><c> uh</c><00:00:53.559><c> belonging</c><00:00:53.960><c> to</c><00:00:54.079><c> the</c>
+
+00:00:54.189 --> 00:00:54.199 align:start position:0%
+multiple models uh belonging to the
+ 
+
+00:00:54.199 --> 00:00:57.670 align:start position:0%
+multiple models uh belonging to the
+Llama<00:00:54.440><c> 2</c><00:00:54.680><c> Series</c><00:00:55.640><c> uh</c><00:00:55.800><c> 7</c><00:00:56.160><c> billion</c><00:00:57.000><c> um</c><00:00:57.280><c> 13</c>
+
+00:00:57.670 --> 00:00:57.680 align:start position:0%
+Llama 2 Series uh 7 billion um 13
+ 
+
+00:00:57.680 --> 00:01:00.029 align:start position:0%
+Llama 2 Series uh 7 billion um 13
+billion<00:00:58.000><c> 34</c><00:00:58.440><c> billion</c><00:00:58.879><c> and</c><00:00:59.079><c> 70</c><00:00:59.440><c> billion</c><00:00:59.680><c> is</c><00:00:59.760><c> the</c>
+
+00:01:00.029 --> 00:01:00.039 align:start position:0%
+billion 34 billion and 70 billion is the
+ 
+
+00:01:00.039 --> 00:01:02.270 align:start position:0%
+billion 34 billion and 70 billion is the
+biggest<00:01:00.359><c> one</c><00:01:01.239><c> now</c><00:01:01.399><c> many</c><00:01:01.640><c> people</c><00:01:01.879><c> like</c><00:01:02.120><c> this</c>
+
+00:01:02.270 --> 00:01:02.280 align:start position:0%
+biggest one now many people like this
+ 
+
+00:01:02.280 --> 00:01:04.189 align:start position:0%
+biggest one now many people like this
+model<00:01:02.600><c> specifically</c><00:01:03.600><c> because</c><00:01:03.840><c> it</c><00:01:03.960><c> is</c>
+
+00:01:04.189 --> 00:01:04.199 align:start position:0%
+model specifically because it is
+ 
+
+00:01:04.199 --> 00:01:06.310 align:start position:0%
+model specifically because it is
+probably<00:01:04.559><c> today</c><00:01:04.920><c> the</c><00:01:05.040><c> most</c><00:01:05.280><c> powerful</c><00:01:05.799><c> open</c>
+
+00:01:06.310 --> 00:01:06.320 align:start position:0%
+probably today the most powerful open
+ 
+
+00:01:06.320 --> 00:01:08.510 align:start position:0%
+probably today the most powerful open
+weights<00:01:06.840><c> model</c><00:01:07.439><c> so</c><00:01:07.600><c> basically</c><00:01:08.000><c> the</c><00:01:08.119><c> weights</c>
+
+00:01:08.510 --> 00:01:08.520 align:start position:0%
+weights model so basically the weights
+ 
+
+00:01:08.520 --> 00:01:10.550 align:start position:0%
+weights model so basically the weights
+and<00:01:08.640><c> the</c><00:01:08.759><c> architecture</c><00:01:09.280><c> and</c><00:01:09.400><c> a</c><00:01:09.600><c> paper</c><00:01:10.159><c> was</c><00:01:10.360><c> all</c>
+
+00:01:10.550 --> 00:01:10.560 align:start position:0%
+and the architecture and a paper was all
+ 
+
+00:01:10.560 --> 00:01:12.950 align:start position:0%
+and the architecture and a paper was all
+released<00:01:11.000><c> by</c><00:01:11.119><c> meta</c><00:01:11.520><c> so</c><00:01:11.720><c> anyone</c><00:01:12.240><c> can</c><00:01:12.439><c> work</c><00:01:12.799><c> with</c>
+
+00:01:12.950 --> 00:01:12.960 align:start position:0%
+released by meta so anyone can work with
+ 
+
+00:01:12.960 --> 00:01:15.749 align:start position:0%
+released by meta so anyone can work with
+this<00:01:13.080><c> model</c><00:01:13.400><c> very</c><00:01:13.640><c> easily</c><00:01:14.400><c> uh</c><00:01:14.520><c> by</c><00:01:14.799><c> themselves</c>
+
+00:01:15.749 --> 00:01:15.759 align:start position:0%
+this model very easily uh by themselves
+ 
+
+00:01:15.759 --> 00:01:17.190 align:start position:0%
+this model very easily uh by themselves
+uh<00:01:15.880><c> this</c><00:01:16.040><c> is</c><00:01:16.200><c> unlike</c><00:01:16.520><c> many</c><00:01:16.720><c> other</c><00:01:16.880><c> language</c>
+
+00:01:17.190 --> 00:01:17.200 align:start position:0%
+uh this is unlike many other language
+ 
+
+00:01:17.200 --> 00:01:18.670 align:start position:0%
+uh this is unlike many other language
+models<00:01:17.479><c> that</c><00:01:17.560><c> you</c><00:01:17.640><c> might</c><00:01:17.799><c> be</c><00:01:17.920><c> familiar</c><00:01:18.320><c> with</c>
+
+00:01:18.670 --> 00:01:18.680 align:start position:0%
+models that you might be familiar with
+ 
+
+00:01:18.680 --> 00:01:20.390 align:start position:0%
+models that you might be familiar with
+for<00:01:18.840><c> example</c><00:01:19.119><c> if</c><00:01:19.200><c> you're</c><00:01:19.360><c> using</c><00:01:19.640><c> chat</c><00:01:19.880><c> GPT</c><00:01:20.280><c> or</c>
+
+00:01:20.390 --> 00:01:20.400 align:start position:0%
+for example if you're using chat GPT or
+ 
+
+00:01:20.400 --> 00:01:22.149 align:start position:0%
+for example if you're using chat GPT or
+something<00:01:20.680><c> like</c><00:01:20.880><c> that</c><00:01:21.560><c> uh</c><00:01:21.680><c> the</c><00:01:21.799><c> model</c>
+
+00:01:22.149 --> 00:01:22.159 align:start position:0%
+something like that uh the model
+ 
+
+00:01:22.159 --> 00:01:24.270 align:start position:0%
+something like that uh the model
+architecture<00:01:23.000><c> was</c><00:01:23.200><c> never</c><00:01:23.439><c> released</c><00:01:24.079><c> it</c><00:01:24.159><c> is</c>
+
+00:01:24.270 --> 00:01:24.280 align:start position:0%
+architecture was never released it is
+ 
+
+00:01:24.280 --> 00:01:26.230 align:start position:0%
+architecture was never released it is
+owned<00:01:24.560><c> by</c><00:01:24.680><c> open</c><00:01:24.920><c> aai</c><00:01:25.560><c> and</c><00:01:25.680><c> you're</c><00:01:25.880><c> allowed</c><00:01:26.119><c> to</c>
+
+00:01:26.230 --> 00:01:26.240 align:start position:0%
+owned by open aai and you're allowed to
+ 
+
+00:01:26.240 --> 00:01:27.710 align:start position:0%
+owned by open aai and you're allowed to
+use<00:01:26.439><c> the</c><00:01:26.600><c> language</c><00:01:26.920><c> model</c><00:01:27.200><c> through</c><00:01:27.360><c> a</c><00:01:27.520><c> web</c>
+
+00:01:27.710 --> 00:01:27.720 align:start position:0%
+use the language model through a web
+ 
+
+00:01:27.720 --> 00:01:29.550 align:start position:0%
+use the language model through a web
+interface<00:01:28.400><c> but</c><00:01:28.520><c> you</c><00:01:28.640><c> don't</c><00:01:28.799><c> have</c><00:01:29.000><c> actually</c>
+
+00:01:29.550 --> 00:01:29.560 align:start position:0%
+interface but you don't have actually
+ 
+
+00:01:29.560 --> 00:01:32.389 align:start position:0%
+interface but you don't have actually
+access<00:01:29.960><c> to</c><00:01:30.159><c> that</c><00:01:30.720><c> model</c><00:01:31.720><c> so</c><00:01:31.840><c> in</c><00:01:32.000><c> this</c><00:01:32.119><c> case</c><00:01:32.280><c> the</c>
+
+00:01:32.389 --> 00:01:32.399 align:start position:0%
+access to that model so in this case the
+ 
+
+00:01:32.399 --> 00:01:35.270 align:start position:0%
+access to that model so in this case the
+Llama<00:01:33.079><c> 270b</c><00:01:34.079><c> model</c><00:01:34.439><c> is</c><00:01:34.640><c> really</c><00:01:34.840><c> just</c><00:01:35.000><c> two</c>
+
+00:01:35.270 --> 00:01:35.280 align:start position:0%
+Llama 270b model is really just two
+ 
+
+00:01:35.280 --> 00:01:37.590 align:start position:0%
+Llama 270b model is really just two
+files<00:01:35.680><c> on</c><00:01:35.799><c> your</c><00:01:35.960><c> file</c><00:01:36.200><c> system</c><00:01:36.960><c> the</c><00:01:37.119><c> parameters</c>
+
+00:01:37.590 --> 00:01:37.600 align:start position:0%
+files on your file system the parameters
+ 
+
+00:01:37.600 --> 00:01:40.109 align:start position:0%
+files on your file system the parameters
+file<00:01:38.040><c> and</c><00:01:38.200><c> the</c><00:01:38.360><c> Run</c><00:01:39.040><c> uh</c><00:01:39.159><c> some</c><00:01:39.360><c> kind</c><00:01:39.479><c> of</c><00:01:39.600><c> a</c><00:01:39.799><c> code</c>
+
+00:01:40.109 --> 00:01:40.119 align:start position:0%
+file and the Run uh some kind of a code
+ 
+
+00:01:40.119 --> 00:01:41.670 align:start position:0%
+file and the Run uh some kind of a code
+that<00:01:40.280><c> runs</c><00:01:40.720><c> those</c>
+
+00:01:41.670 --> 00:01:41.680 align:start position:0%
+that runs those
+ 
+
+00:01:41.680 --> 00:01:43.590 align:start position:0%
+that runs those
+parameters<00:01:42.680><c> so</c><00:01:42.880><c> the</c><00:01:43.000><c> parameters</c><00:01:43.439><c> are</c>
+
+00:01:43.590 --> 00:01:43.600 align:start position:0%
+parameters so the parameters are
+ 
+
+00:01:43.600 --> 00:01:45.590 align:start position:0%
+parameters so the parameters are
+basically<00:01:44.000><c> the</c><00:01:44.159><c> weights</c><00:01:44.600><c> or</c><00:01:44.759><c> the</c><00:01:44.880><c> parameters</c>
+
+00:01:45.590 --> 00:01:45.600 align:start position:0%
+basically the weights or the parameters
+ 
+
+00:01:45.600 --> 00:01:46.990 align:start position:0%
+basically the weights or the parameters
+of<00:01:45.719><c> this</c><00:01:45.920><c> neural</c><00:01:46.200><c> network</c><00:01:46.680><c> that</c><00:01:46.799><c> is</c><00:01:46.880><c> the</c>
+
+00:01:46.990 --> 00:01:47.000 align:start position:0%
+of this neural network that is the
+ 
+
+00:01:47.000 --> 00:01:48.510 align:start position:0%
+of this neural network that is the
+language<00:01:47.360><c> model</c><00:01:47.680><c> we'll</c><00:01:47.840><c> go</c><00:01:48.000><c> into</c><00:01:48.159><c> that</c><00:01:48.280><c> in</c><00:01:48.399><c> a</c>
+
+00:01:48.510 --> 00:01:48.520 align:start position:0%
+language model we'll go into that in a
+ 
+
+00:01:48.520 --> 00:01:51.069 align:start position:0%
+language model we'll go into that in a
+bit<00:01:49.439><c> because</c><00:01:49.759><c> this</c><00:01:49.880><c> is</c><00:01:50.040><c> a</c><00:01:50.240><c> 70</c><00:01:50.640><c> billion</c>
+
+00:01:51.069 --> 00:01:51.079 align:start position:0%
+bit because this is a 70 billion
+ 
+
+00:01:51.079 --> 00:01:53.510 align:start position:0%
+bit because this is a 70 billion
+parameter<00:01:51.600><c> model</c><00:01:52.600><c> uh</c><00:01:52.840><c> every</c><00:01:53.040><c> one</c><00:01:53.200><c> of</c><00:01:53.320><c> those</c>
+
+00:01:53.510 --> 00:01:53.520 align:start position:0%
+parameter model uh every one of those
+ 
+
+00:01:53.520 --> 00:01:56.310 align:start position:0%
+parameter model uh every one of those
+parameters<00:01:54.079><c> is</c><00:01:54.200><c> stored</c><00:01:54.640><c> as</c><00:01:54.799><c> 2</c><00:01:55.079><c> bytes</c><00:01:55.920><c> and</c><00:01:56.039><c> so</c>
+
+00:01:56.310 --> 00:01:56.320 align:start position:0%
+parameters is stored as 2 bytes and so
+ 
+
+00:01:56.320 --> 00:01:58.789 align:start position:0%
+parameters is stored as 2 bytes and so
+therefore<00:01:57.200><c> the</c><00:01:57.360><c> parameters</c><00:01:57.799><c> file</c><00:01:58.119><c> here</c><00:01:58.280><c> is</c>
+
+00:01:58.789 --> 00:01:58.799 align:start position:0%
+therefore the parameters file here is
+ 
+
+00:01:58.799 --> 00:02:01.230 align:start position:0%
+therefore the parameters file here is
+140<00:01:59.320><c> gigabytes</c><00:02:00.280><c> and</c><00:02:00.399><c> it's</c><00:02:00.560><c> two</c><00:02:00.759><c> bytes</c><00:02:01.039><c> because</c>
+

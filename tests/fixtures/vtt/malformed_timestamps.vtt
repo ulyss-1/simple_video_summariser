@@ -1,0 +1,19 @@
+WEBVTT
+
+00:00:01.000 --> 00:00:02.000
+First cue.
+
+00:00:03.000 -> 00:00:04.000
+Arrow is wrong, cue is skipped.
+
+00:00:05.000 --> 00:00:0x.000
+End time is not a number.
+
+00:00:61.000 --> 00:00:62.000
+Seconds out of range.
+
+00:00:07.000 --> 00:00:06.000
+End before start.
+
+00:00:08.000 --> 00:00:09.000
+Last cue.
