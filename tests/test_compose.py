@@ -91,6 +91,32 @@ def test_compose_override_publishes_db_on_loopback_only() -> None:
     assert '"127.0.0.1:5432:5432"' in block
 
 
+def test_compose_yml_db_service_is_only_on_the_internal_network() -> None:
+    # architecture.md 11.4: no route off the compose bridge except through
+    # explicitly attached networks. Production never adds a second one.
+    block = _service_block(COMPOSE_YML.read_text(), "db")
+    assert "networks: [internal]" in block
+
+
+def test_compose_override_attaches_db_to_a_second_non_internal_network() -> None:
+    # `internal: true` (compose.yml, 11.4) means Docker never forwards a
+    # published port for that container, on any machine, regardless of the
+    # port mapping (root cause of #7's QA FAIL). The dev-only fix: attach
+    # `db` to an additional, ordinary bridge network here so the
+    # `127.0.0.1:5432` publish above has a non-internal network to forward
+    # through. `internal` must stay listed too - this adds a network, it
+    # doesn't move `db` off the production one.
+    override_text = COMPOSE_OVERRIDE_YML.read_text()
+    block = _service_block(override_text, "db")
+    assert "networks: [internal, devhost]" in block
+
+    # The override's own top-level `networks:` section defines only the new
+    # network, and it must not be `internal: true` itself.
+    networks_text = _top_level_section(override_text, "networks")
+    assert "devhost:" in networks_text
+    assert "internal: true" not in networks_text
+
+
 def test_env_example_is_committed_with_a_postgres_password_placeholder() -> None:
     text = (REPO_ROOT / ".env.example").read_text()
     assert "POSTGRES_PASSWORD=" in text

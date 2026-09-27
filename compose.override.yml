@@ -5,8 +5,23 @@
 # `uvicorn --reload`, the Vite dev server). For now it only publishes
 # Postgres so the host venv's `alembic` and `psql` can reach it directly
 # (architecture.md 11.7; task #7).
+#
+# `db` lives on `internal` only in compose.yml (architecture.md 11.4 —
+# "no route off the compose bridge except through explicitly attached
+# networks"), and Docker never forwards a published port for a container
+# whose only network is `internal: true`, no matter what the port mapping
+# says. A fixed 127.0.0.1 publish on such a container is unreachable from
+# the host on any machine (QA on #7). So, dev-only: attach `db` to a
+# second, ordinary bridge network (`devhost`, defined below) alongside
+# `internal`, purely so the published port has a non-internal network to
+# forward through. `docker compose -f compose.yml config` — the production
+# path — never sees this network or the port publish.
 
 services:
   db:
+    networks: [internal, devhost]
     ports:
       - "127.0.0.1:5432:5432"
+
+networks:
+  devhost: {}

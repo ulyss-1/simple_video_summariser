@@ -51,3 +51,23 @@ def test_explicit_compose_yml_config_has_no_published_port(
 
     assert result.returncode == 0
     assert "ports" not in result.stdout
+    # The dev-only `devhost` network (compose.override.yml, #7 QA fix) must
+    # never reach the production resolution.
+    assert "devhost" not in result.stdout
+
+
+def test_default_config_attaches_db_to_the_dev_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Override merged in (the default, local behaviour): `db` picks up the
+    # non-internal `devhost` network alongside `internal`, which is what
+    # actually makes the `127.0.0.1:5432` publish reachable from the host -
+    # `internal: true` alone blocks port forwarding regardless of the
+    # `ports:` mapping (#7 QA FAIL root cause).
+    monkeypatch.setenv("POSTGRES_PASSWORD", "integration-test-password")
+
+    result = _run("config")
+
+    assert result.returncode == 0
+    assert "devhost" in result.stdout
+    assert "127.0.0.1" in result.stdout
