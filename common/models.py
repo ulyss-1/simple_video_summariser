@@ -37,6 +37,121 @@ class MetadataSource(Protocol):
     def fetch(self, video_id: str) -> VideoMeta: ...
 
 
+# Channel, Transcript, Chunk, Analysis, Topic, Claim and Quote, below,
+# belong to #14 (the repository layer, common/repo/). They mirror the
+# tables in architecture.md §6 one-for-one; common/repo/ functions build
+# and return these instead of ever returning a raw row or tuple.
+
+
+@dataclass(frozen=True, slots=True)
+class Channel:
+    """A monitored (or once-monitored) YouTube channel."""
+
+    channel_id: str
+    title: str | None
+    active: bool
+    monitor_from: datetime
+    last_polled: datetime | None
+    last_poll_err: str | None
+    added_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class Transcript:
+    """A saved transcript for one video, from one source (architecture.md §6)."""
+
+    id: int
+    video_id: str
+    source: str  # youtube_manual | youtube_auto | whisper
+    language: str | None
+    speaker_source: str  # subtitle_labels | none  (C3)
+    segments: tuple[Segment, ...]
+    full_text: str
+    engine_meta: dict[str, object] | None
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class Chunk:
+    """One window of a transcript under a given ``chunk_strategy`` (§7.3).
+
+    ``id``, ``transcript_id`` and ``chunk_strategy`` default to ``None``
+    because ``save_chunks`` (``common/repo/transcripts.py``) only needs
+    ``seq``/``start_sec``/``end_sec``/``text`` from its caller - the
+    transcript id and strategy are already that function's own arguments.
+    ``get_chunks`` always returns all three set.
+    """
+
+    seq: int
+    start_sec: float
+    end_sec: float
+    text: str
+    chunk_strategy: str | None = None
+    transcript_id: int | None = None
+    id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Topic:
+    """One topic under an analysis, ordered by ``seq``."""
+
+    seq: int
+    title: str
+    summary: str | None = None
+    start_sec: float | None = None
+    id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Claim:
+    """One claim under an analysis, ordered by ``start_sec``."""
+
+    text: str
+    speaker: str = "unknown"
+    start_sec: float | None = None
+    confidence: str | None = None  # high | medium | low
+    source_chunk_seq: int | None = None
+    id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Quote:
+    """One quote under an analysis."""
+
+    text: str
+    speaker: str = "unknown"
+    start_sec: float | None = None
+    source_chunk_seq: int | None = None
+    id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Analysis:
+    """One LLM analysis pass over a video's transcript, with its children.
+
+    ``id`` and ``created_at`` default to ``None``: they are unset until
+    ``save_analysis`` (``common/repo/analyses.py``) persists the row.
+    ``latest_analysis`` always returns both populated.
+    """
+
+    video_id: str
+    transcript_id: int
+    chunk_strategy: str
+    model: str
+    prompt_version: str
+    tldr: str
+    speaker_roster: dict[str, object] | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float | None = None
+    duration_ms: int | None = None
+    topics: tuple[Topic, ...] = ()
+    claims: tuple[Claim, ...] = ()
+    quotes: tuple[Quote, ...] = ()
+    id: int | None = None
+    created_at: datetime | None = None
+
+
 # AudioRef and AudioSource, below, belong to #19 (audio acquisition and
 # normalization). #19's own file list names only adapters/youtube/audio.py
 # and its tests, but the port and its return type live in common/models.py

@@ -1,0 +1,200 @@
+"""Transcript and chunk repository functions (issue #14, architecture.md §6, §7.3)."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from typing import Any
+
+import psycopg
+from psycopg.types.json import Jsonb
+
+from common.models import Chunk, Segment, Transcript
+from common.repo._hygiene import clean_json, clean_text
+
+_SOURCES = {"youtube_manual", "youtube_auto", "whisper"}
+_SPEAKER_SOURCES = {"subtitle_labels", "none"}
+
+
+def save_transcript(
+    conn: psycopg.Connection[Any],
+    video_id: str,
+    source: str,
+    language: str | None,
+    speaker_source: str,
+    segments: Sequence[Segment],
+    engine_meta: dict[str, Any] | None,
+) -> int:
+    """Persist a transcript for ``video_id`` from ``source``, returning its id.
+
+    ``full_text`` is built by joining the segments' text with a single
+    space. If ``(video_id, source)`` already has a transcript, the
+    **existing** row wins - nothing is changed and its id is returned, so
+    a retried job can never overwrite a transcript an analysis already
+    points at.
+
+    ``source`` must be ``youtube_manual``, ``youtube_auto`` or ``whisper``;
+    ``speaker_source`` must be ``subtitle_labels`` or ``none``. Anything
+    else raises ``ValueError``.
+    """
+    if source not in _SOURCES:
+        raise ValueError(f"source must be one of {sorted(_SOURCES)}, got {source!r}")
+    if speaker_source not in _SPEAKER_SOURCES:
+        raise ValueError(
+            f"speaker_source must be one of {sorted(_SPEAKER_SOURCES)}, got {speaker_source!r}"
+        )
+
+    full_text = clean_text(" ".join(seg.text for seg in segments)) or ""
+    segments_json = [clean_json(_segment_to_json(seg)) for seg in segments]
+
+    row = conn.execute(
+        """
+        INSERT INTO transcripts (video_id, source, language, speaker_source,
+                                  segments, full_text, engine_meta)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (video_id, source) DO NOTHING
+        RETURNING id
+        """,
+        (
+            video_id,
+            source,
+            language,
+            speaker_source,
+            Jsonb(segments_json),
+            full_text,
+            Jsonb(clean_json(engine_meta)) if engine_meta is not None else None,
+        ),
+    ).fetchone()
+    if row is not None:
+        return int(row[0])
+
+    # ON CONFLICT DO NOTHING skipped the insert only because the row
+    # already exists - first write wins (issue #14).
+    existing = conn.execute(
+        "SELECT id FROM transcripts WHERE video_id = %s AND source = %s",
+        (video_id, source),
+    ).fetchone()
+    assert existing is not None
+    return int(existing[0])
+
+
+def get_best_transcript(conn: psycopg.Connection[Any], video_id: str) -> Transcript | None:
+    """The transcript for ``video_id`` ranked best by ``transcript_rank()``.
+
+    Manual beats whisper beats auto-captions (D2). ``None`` if the video
+    has no transcript at all.
+    """
+    row = conn.execute(
+        """
+        SELECT id, video_id, source, language, speaker_source, segments,
+               full_text, engine_meta, created_at
+        FROM transcripts
+        WHERE video_id = %s
+        ORDER BY transcript_rank(source)
+        LIMIT 1
+        """,
+        (video_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return _transcript(row)
+
+
+def save_chunks(
+    conn: psycopg.Connection[Any],
+    transcript_id: int,
+    strategy: str,
+    chunks: Sequence[Chunk],
+) -> None:
+    """Insert ``chunks`` for ``transcript_id`` under ``strategy``.
+
+    Uses ``ON CONFLICT DO NOTHING`` (architecture.md §7.3), so saving the
+    same chunks twice never fails.
+    """
+    for chunk in chunks:
+        conn.execute(
+            """
+            INSERT INTO transcript_chunks
+                (transcript_id, seq, start_sec, end_sec, text, chunk_strategy)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (transcript_id, chunk_strategy, seq) DO NOTHING
+            """,
+            (
+                transcript_id,
+                chunk.seq,
+                chunk.start_sec,
+                chunk.end_sec,
+                clean_text(chunk.text),
+                strategy,
+            ),
+        )
+
+
+def get_chunks(conn: psycopg.Connection[Any], transcript_id: int, strategy: str) -> list[Chunk]:
+    """Chunks for ``transcript_id`` under ``strategy``, ordered by ``seq``.
+
+    An empty list when that strategy has none saved.
+    """
+    rows = conn.execute(
+        """
+        SELECT id, transcript_id, seq, start_sec, end_sec, text, chunk_strategy
+        FROM transcript_chunks
+        WHERE transcript_id = %s AND chunk_strategy = %s
+        ORDER BY seq
+        """,
+        (transcript_id, strategy),
+    ).fetchall()
+    return [_chunk(row) for row in rows]
+
+
+def _segment_to_json(seg: Segment) -> dict[str, Any]:
+    data: dict[str, Any] = {"start": seg.start, "end": seg.end, "text": seg.text}
+    if seg.speaker is not None:
+        data["speaker"] = seg.speaker
+    return data
+
+
+def _segment_from_json(data: dict[str, Any]) -> Segment:
+    return Segment(
+        start=float(data["start"]),
+        end=float(data["end"]),
+        text=data["text"],
+        speaker=data.get("speaker"),
+    )
+
+
+def _transcript(row: tuple[Any, ...]) -> Transcript:
+    (
+        transcript_id,
+        video_id,
+        source,
+        language,
+        speaker_source,
+        segments,
+        full_text,
+        engine_meta,
+        created_at,
+    ) = row
+    return Transcript(
+        id=int(transcript_id),
+        video_id=video_id,
+        source=source,
+        language=language,
+        speaker_source=speaker_source,
+        segments=tuple(_segment_from_json(item) for item in segments),
+        full_text=full_text,
+        engine_meta=engine_meta,
+        created_at=created_at,
+    )
+
+
+def _chunk(row: tuple[Any, ...]) -> Chunk:
+    chunk_id, transcript_id, seq, start_sec, end_sec, text, chunk_strategy = row
+    return Chunk(
+        seq=seq,
+        start_sec=float(start_sec),
+        end_sec=float(end_sec),
+        text=text,
+        chunk_strategy=chunk_strategy,
+        transcript_id=int(transcript_id),
+        id=int(chunk_id),
+    )
