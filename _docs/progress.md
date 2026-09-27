@@ -3,6 +3,32 @@
 Status of the groomed backlog (GitHub issues #1–#20), worked through per
 `_docs/process.md`. An issue is closed only after a QA PASS comment.
 
+## Checkpoint 2 — 2026-09-27, 17 of 20 closed
+
+Closed after QA PASS since checkpoint 1: #6 logging, #7 database bootstrap
+(2nd QA, after the dev-network fix), #8 core schema, #9 jobs, #10 media,
+#11 queue, #14 repository layer (2nd QA, after the test-marker fix),
+#16 metadata adapter, #17 VTT parser (2nd QA), #18 subtitles, #19 audio
+(2nd QA, after the real-ffmpeg ENOSPC fix), #20 faster-whisper adapter.
+Out-of-backlog bug #71 (Alembic disabling loggers) groomed, fixed, closed.
+
+Still open:
+
+- #3 bake-off harness: passes everything except the deploy-host run;
+  containerizing it is #76 (being groomed), deploy-host preparation is a
+  separate follow-up
+- #12 queue concurrency suite: committed (76df71e); blocked on #73
+  (enqueue race, fix in progress) and #74 (flaky testcontainers first
+  connect, fix in progress)
+- #13 worker runtime: committed (8c9e38a), in QA
+
+New follow-ups: #72 random test order, #73 enqueue race, #74 fixture
+readiness, #75 more enqueue races, #77 clear error when Docker is down.
+
+Dependencies added since checkpoint 1 (owner-approved): `alembic==1.20.0`,
+`psycopg[binary]==3.3.6`, `testcontainers[postgres]==4.15.0` (dev),
+`faster-whisper==1.2.1` (requirements.whisper.txt).
+
 ## Checkpoint 1 — 2026-09-27, 5 of 20 closed
 
 | Issue | Title | Commits | QA |

@@ -10,8 +10,7 @@ Roles
 
 Orchestrator
 
-The main session is the orchestrator. It launches the PM, the engineer
-and QA as subagents. It does not groom, implement or test itself.
+The main session is the orchestrator. Use Sonnet model with Medium effort for it, as it is just a controller that process goes smoothly. It launches the PM, the engineer and QA as subagents. It does not groom, implement or test itself.
 
 Lifecycle
 
