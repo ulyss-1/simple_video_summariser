@@ -1,0 +1,7 @@
+# Windows download markers left by copying from NTFS
+*:Zone.Identifier
+
+.venv/
+__pycache__/
+node_modules/
+.hypothesis/

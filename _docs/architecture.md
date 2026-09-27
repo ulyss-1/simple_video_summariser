@@ -1216,7 +1216,7 @@ subtitles-only until Phase 2.
 
 ---
 
-## 16. Technology currency review (September 2026)
+## 16. Technology current review (September 2026)
 
 Every choice in this document was re-verified against current releases. The
 table summarizes; the discussion below covers only where the answer changes

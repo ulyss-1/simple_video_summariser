@@ -29,7 +29,7 @@ are throwaway scripts, not production code, and should be done first.
 ---
 ## 1. Project skeleton with a passing test
 Goal: An empty but runnable project with tooling wired up and one test that passes.
-Description: Create the repository structure (`common/`, `adapters/`, `services/`, `migrations/`, `ops/`, `tests/`), a `pyproject.toml` targeting Python 3.14, and a virtualenv setup documented in the README. Add pytest, ruff, and mypy as dev dependencies with minimal configuration, plus a single trivial test (e.g. asserting a version constant) that passes via `pytest`. The exit criterion is that a fresh clone can run `pip install -e ".[dev]" && pytest && ruff check .` successfully.
+Description: Create the repository structure (`common/`, `adapters/`, `services/`, `migrations/`, `ops/`, `tests/`), a `pyproject.toml` targeting Python 3.14, and a virtualenv setup documented in the README. Add pytest, hypothesis, ruff, and mypy as dev dependencies with minimal configuration, plus a single trivial test (e.g. asserting a version constant) that passes via `pytest`. The exit criterion is that a fresh clone can run `pip install -e ".[dev]" && pytest && ruff check .` successfully.
 ---
 
 ---
