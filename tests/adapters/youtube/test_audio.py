@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import errno
 import json
+import os
 import re
 import subprocess
+import uuid
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -402,3 +404,41 @@ def test_enospc_during_conversion_raises_resource_error(tmp_path: Path) -> None:
         audio.fetch_normalized(VIDEO_ID, tmp_path)
 
     assert files_under(tmp_path) == []
+
+
+def test_a_real_ffmpeg_disk_full_failure_during_conversion_raises_resource_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QA's repro for issue #19: a full disk never makes the parent's
+    ``subprocess.run()`` raise ``OSError`` - ffmpeg is a subprocess, so it
+    writes "No space left on device" to its own stderr and exits non-zero
+    (228). The conversion temp path is symlinked to ``/dev/full`` so the
+    *real* ffmpeg binary hits that exact failure, not a simulated one.
+    """
+    if not Path("/dev/full").exists():
+        pytest.skip("/dev/full is not available on this host")
+
+    # fetch_normalized names its temp file with a random uuid4 token, so the
+    # token is pinned to pre-place the /dev/full symlink at the exact path
+    # ffmpeg will be told to write to.
+    token = "deadbeefdeadbeefdeadbeefdeadbeef"
+    monkeypatch.setattr(
+        "adapters.youtube.audio.uuid.uuid4", lambda: uuid.UUID(hex=token)
+    )
+
+    final_dir = tmp_path / VIDEO_ID[:2]
+    final_dir.mkdir(parents=True)
+    convert_tmp_path = final_dir / f".tmp-{token}.opus"
+    convert_tmp_path.symlink_to("/dev/full")
+
+    ytdlp_runner = FakeDownloader(duration_sec=1.0)
+    audio = YouTubeAudio(ytdlp_runner=ytdlp_runner)  # real ffmpeg/ffprobe
+
+    with pytest.raises(ResourceError):
+        audio.fetch_normalized(VIDEO_ID, tmp_path)
+
+    final_path = final_dir / f"{VIDEO_ID}.opus"
+    assert not final_path.exists()
+    assert not os.path.lexists(convert_tmp_path)
+    download_path = tmp_path / f".download-{token}"
+    assert not download_path.exists()

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import errno
 import os
+import re
 import subprocess
 import uuid
 from collections.abc import Sequence
@@ -55,6 +56,19 @@ FFMPEG_AUDIO_FLAGS = (
 _STDERR_TAIL_LINES = 20
 
 _RESOURCE_ERRNOS = frozenset({errno.ENOSPC, errno.EDQUOT})
+
+# ffmpeg/ffprobe are subprocesses: a full disk never makes subprocess.run()
+# raise OSError the way it would for a syscall in this process. Instead the
+# tool writes its own message to stderr and exits non-zero, the same class
+# of failure adapters/youtube/errors.py's from_ytdlp already matches for
+# yt-dlp.
+_RESOURCE_STDERR = re.compile(
+    r"No space left on device|Disk quota exceeded", re.IGNORECASE
+)
+
+
+def _is_resource_exhausted(stderr: str) -> bool:
+    return bool(_RESOURCE_STDERR.search(stderr))
 
 
 def run_tool(argv: Sequence[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
@@ -152,6 +166,8 @@ class YouTubeAudio:
 
         if result.returncode != 0:
             _remove_if_exists(dest_tmp)
+            if _is_resource_exhausted(result.stderr):
+                raise ResourceError(_ffmpeg_failure_message(result))
             raise ToolFailureError(_ffmpeg_failure_message(result))
 
         try:
@@ -179,9 +195,10 @@ def _probe_duration(path: Path, *, runner: ProcessRunner) -> float:
     ]
     result = runner(argv, timeout=_PROBE_TIMEOUT_SEC)
     if result.returncode != 0:
-        raise ToolFailureError(
-            f"ffprobe exited with {result.returncode}: {result.stderr.strip()}"
-        )
+        message = f"ffprobe exited with {result.returncode}: {result.stderr.strip()}"
+        if _is_resource_exhausted(result.stderr):
+            raise ResourceError(message)
+        raise ToolFailureError(message)
     try:
         return float(result.stdout.strip())
     except ValueError as exc:
