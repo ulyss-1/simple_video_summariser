@@ -159,14 +159,11 @@ class PostgresQueue:
             cur.execute(
                 """
                 INSERT INTO jobs (video_id, kind, dedupe_key, payload, priority, run_after)
-                SELECT %(video_id)s, %(kind)s, %(dedupe_key)s, %(payload)s,
-                       %(priority)s, COALESCE(%(run_after)s, now())
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM jobs
-                    WHERE video_id = %(video_id)s AND kind = %(kind)s
-                      AND dedupe_key = %(dedupe_key)s
-                      AND state IN ('pending', 'running')
-                )
+                VALUES (%(video_id)s, %(kind)s, %(dedupe_key)s, %(payload)s,
+                        %(priority)s, COALESCE(%(run_after)s, now()))
+                ON CONFLICT (video_id, kind, dedupe_key)
+                    WHERE state IN ('pending', 'running')
+                DO NOTHING
                 RETURNING id
                 """,
                 {

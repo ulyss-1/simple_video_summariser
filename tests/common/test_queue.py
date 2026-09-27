@@ -23,6 +23,7 @@ import psycopg
 import pytest
 from alembic import command
 from alembic.config import Config
+from psycopg import pq
 from psycopg.rows import dict_row
 
 from common.config import Settings, get_settings
@@ -70,6 +71,17 @@ def conn(head_dsn: str) -> Iterator[psycopg.Connection[Any]]:
     # ``conn.transaction()``, which psycopg supports on an autocommit
     # connection by suspending autocommit for the block.
     with psycopg.connect(head_dsn, autocommit=True) as connection:
+        yield connection
+
+
+@pytest.fixture
+def commit_conn(head_dsn: str) -> Iterator[psycopg.Connection[Any]]:
+    """A connection with default settings (``autocommit=False``) - the kind
+    ``common.db.connect()`` returns in production (issue #73). Unlike
+    ``conn`` above, nothing suspends autocommit here: ``enqueue`` must commit
+    its own work through ``self._conn.transaction()`` alone.
+    """
+    with psycopg.connect(head_dsn) as connection:
         yield connection
 
 
@@ -186,6 +198,77 @@ def test_enqueue_distinct_dedupe_keys_do_not_block_each_other(
     assert first_id is not None
     assert second_id is not None
     assert first_id != second_id
+
+
+# ---------------------------------------------------------------------------
+# enqueue: non-conflict errors still raise (issue #73)
+# ---------------------------------------------------------------------------
+
+
+def test_unique_violation_on_a_different_index_still_raises(
+    queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    first_id = queue.enqueue("ingest", "v1")
+    assert first_id is not None
+    # Move jobs_id_seq back so the next nextval() reproduces first_id,
+    # forcing the next insert to collide on jobs_pkey rather than on
+    # jobs_active_uniq. A bare `ON CONFLICT DO NOTHING` (no target) would
+    # swallow this and return None instead of raising.
+    with conn.cursor() as cur:
+        cur.execute("SELECT setval('jobs_id_seq', %s, false)", (first_id,))
+
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        queue.enqueue("ingest", "v2")
+
+    assert _count(conn) == 1
+
+    # The connection is usable again, and a normal enqueue succeeds (the
+    # failed nextval() call already advanced the sequence past first_id).
+    assert conn.info.transaction_status == pq.TransactionStatus.IDLE
+    second_id = queue.enqueue("ingest", "v3")
+    assert second_id is not None
+    assert second_id != first_id
+
+
+def test_not_null_violation_on_a_different_constraint_still_raises(
+    queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    with pytest.raises(psycopg.errors.NotNullViolation):
+        queue.enqueue("ingest", None)  # type: ignore[arg-type]
+
+    assert _count(conn) == 0
+
+    # The connection is usable again.
+    assert conn.info.transaction_status == pq.TransactionStatus.IDLE
+    job_id = queue.enqueue("ingest", "v1")
+    assert job_id is not None
+
+
+# ---------------------------------------------------------------------------
+# enqueue: commit behaviour on a non-autocommit connection (issue #73)
+# ---------------------------------------------------------------------------
+
+
+def test_enqueue_commits_an_insert_at_once_on_a_non_autocommit_connection(
+    commit_conn: psycopg.Connection[Any], head_dsn: str
+) -> None:
+    q = PostgresQueue(commit_conn, settings=_settings(), rng=random.Random(1))
+
+    job_id = q.enqueue("ingest", "v1")
+
+    assert job_id is not None
+    assert commit_conn.info.transaction_status == pq.TransactionStatus.IDLE
+    # A second, independent connection sees the row without commit_conn
+    # doing anything further - enqueue committed it on its own.
+    with psycopg.connect(head_dsn) as other, other.cursor() as cur:
+        cur.execute("SELECT count(*) FROM jobs WHERE id = %s", (job_id,))
+        row = cur.fetchone()
+    assert row == (1,)
+
+    duplicate_id = q.enqueue("ingest", "v1")
+
+    assert duplicate_id is None
+    assert commit_conn.info.transaction_status == pq.TransactionStatus.IDLE
 
 
 # ---------------------------------------------------------------------------

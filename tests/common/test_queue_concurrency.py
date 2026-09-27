@@ -288,12 +288,6 @@ def test_second_claim_returns_none_without_blocking_when_the_only_job_is_locked(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="https://github.com/ulyss-1/simple_video_summariser/issues/73 - "
-    "enqueue() raises UniqueViolation instead of returning None under "
-    "concurrent racing inserts for the same (video_id, kind, dedupe_key)",
-)
 def test_concurrent_enqueue_of_the_same_key_produces_exactly_one_row(
     head_dsn: str,
 ) -> None:
@@ -323,7 +317,7 @@ def test_concurrent_enqueue_of_the_same_key_produces_exactly_one_row(
     assert all(not t.is_alive() for t in threads)
 
     # The losing 7 calls must return None per the contract (architecture.md
-    # §0 C1) - not raise. See the xfail reason above.
+    # §0 C1) - not raise.
     assert not errors, f"enqueue() raised under the race: {errors!r}"
 
     non_none = [r for r in results if r is not None]
