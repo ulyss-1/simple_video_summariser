@@ -312,7 +312,10 @@ def test_downgrade_drops_the_table_and_its_indexes_and_upgrade_succeeds_again(
     config = _config_for(postgres_dsn, monkeypatch)
     command.upgrade(config, "head")
 
-    command.downgrade(config, "-1")
+    # Target 0003's own down_revision explicitly, not the relative "-1":
+    # "-1" from head only undoes whatever the *latest* migration is, which
+    # stopped being jobs once #10 (0004_media) landed on top of it.
+    command.downgrade(config, "0002")
 
     with psycopg.connect(postgres_dsn) as conn, conn.cursor() as cur:
         cur.execute(
