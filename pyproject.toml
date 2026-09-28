@@ -9,6 +9,9 @@ description = "Structured, queryable summaries of YouTube videos and channels."
 requires-python = ">=3.14,<3.15"
 readme = "README.md"
 
+[project.scripts]
+ytdigest = "services.cli.main:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest",
