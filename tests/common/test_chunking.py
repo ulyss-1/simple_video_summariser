@@ -105,6 +105,26 @@ def test_bad_segment_index_refers_to_the_callers_order_not_sorted_order() -> Non
         chunk(segments)
 
 
+@pytest.mark.parametrize("start", [1e20, 1e300, 1.7976931348623157e308, 2.0**53 * 2])
+@pytest.mark.parametrize("chunk_sec", [1, 900, 3600])
+def test_start_beyond_the_exact_bound_raises_naming_its_index(
+    start: float, chunk_sec: int
+) -> None:
+    segments = [seg(0, 1, "ok"), Segment(start=start, end=start, text="far")]
+    with pytest.raises(ValueError, match=r"\b1\b"):
+        chunk_segments(segments, chunk_sec=chunk_sec, overlap_sec=0)
+
+
+def test_start_at_the_exact_bound_is_chunked() -> None:
+    far = 2.0**53
+    chunks = chunk([Segment(start=far, end=far, text="far")], 900, 0)
+    assert [c.text for c in chunks] == ["far"]
+
+
+def test_blank_segment_with_huge_start_is_still_ignored() -> None:
+    assert chunk([Segment(start=1e20, end=1e20, text=" ")], 900, 0) == []
+
+
 # --- edge cases ---------------------------------------------------------
 
 
@@ -359,3 +379,37 @@ def test_property_determinism(segments: list[Segment], params: tuple[int, int]) 
     assert chunk(segments, chunk_sec, overlap_sec) == chunk(
         list(segments), chunk_sec, overlap_sec
     )
+
+
+@given(
+    st.lists(
+        st.floats(min_value=0, max_value=2.0**53, allow_nan=False),
+        min_size=1,
+        max_size=10,
+    ),
+    _params(),
+)
+def test_property_coverage_for_large_finite_starts(
+    starts: list[float], params: tuple[int, int]
+) -> None:
+    chunk_sec, overlap_sec = params
+    segments = [Segment(start=s, end=s, text=f"w{i}") for i, s in enumerate(starts)]
+    chunks = chunk(segments, chunk_sec, overlap_sec)
+    windows = _windows(segments, chunk_sec)
+    assert len(chunks) == len(windows)
+    for s in segments:
+        assert s.text in texts(chunks[windows.index(int(s.start // chunk_sec))])
+
+
+@given(
+    st.floats(
+        min_value=2.0**53, allow_nan=False, allow_infinity=False, exclude_min=True
+    ),
+    _params(),
+)
+def test_property_start_beyond_bound_raises_value_error(
+    start: float, params: tuple[int, int]
+) -> None:
+    chunk_sec, overlap_sec = params
+    with pytest.raises(ValueError, match="start"):
+        chunk([Segment(start=start, end=start, text="x")], chunk_sec, overlap_sec)

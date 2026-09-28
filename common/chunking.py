@@ -12,6 +12,10 @@ from collections.abc import Sequence
 
 from common.models import Chunk, Segment
 
+# Float ``//`` and ``k * chunk_sec`` lose exactness beyond 2**53, which would
+# make a window empty. A start past this (~285 million years) is rejected.
+MAX_START_SEC = 2.0**53
+
 
 def _validate_params(chunk_sec: int, overlap_sec: int) -> None:
     for name, value in (("chunk_sec", chunk_sec), ("overlap_sec", overlap_sec)):
@@ -42,6 +46,10 @@ def chunk_segments(
     ``[k*chunk_sec, (k+1)*chunk_sec)`` and additionally carries the segments
     starting up to ``overlap_sec`` before it. Segments are never split; a
     window with no core segment is skipped.
+
+    Raises ``ValueError`` for bad parameters and for a non-blank segment that
+    is non-finite, negative, ends before it starts, or starts after
+    ``MAX_START_SEC`` (2**53 s, where window arithmetic stops being exact).
     """
     label = chunk_strategy(chunk_sec, overlap_sec)
 
@@ -54,6 +62,7 @@ def chunk_segments(
             not (math.isfinite(start) and math.isfinite(end))
             or start < 0
             or end < start
+            or start > MAX_START_SEC
         ):
             raise ValueError(
                 f"segment {index} has an invalid span: start={start!r}, end={end!r}"
