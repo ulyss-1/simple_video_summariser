@@ -102,6 +102,10 @@ class FasterWhisperTranscriber:
             segments=tuple(segments), language=resolved_language, engine_meta=engine_meta
         )
 
+    def check_available(self) -> None:
+        """Raise ``ToolFailureError`` if faster-whisper is not installed; loads nothing."""
+        _import_faster_whisper()
+
     def _ensure_model(self) -> tuple[Any, str, float]:
         """Load the model on first use; reuse it after.
 
@@ -111,12 +115,7 @@ class FasterWhisperTranscriber:
         if self._loaded_model is not None:
             return self._loaded_model, self._engine_version, 0.0
 
-        try:
-            import faster_whisper  # type: ignore[import-not-found]
-        except ImportError as exc:
-            raise ToolFailureError(
-                f"faster-whisper is not installed; install {_REQUIREMENTS_FILE}"
-            ) from exc
+        faster_whisper = _import_faster_whisper()
 
         start = perf_counter()
         try:
@@ -140,6 +139,16 @@ class FasterWhisperTranscriber:
         self._loaded_model = model
         self._engine_version = _engine_version(faster_whisper)
         return self._loaded_model, self._engine_version, load_sec
+
+
+def _import_faster_whisper() -> Any:
+    try:
+        import faster_whisper  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise ToolFailureError(
+            f"faster-whisper is not installed; install {_REQUIREMENTS_FILE}"
+        ) from exc
+    return faster_whisper
 
 
 def _collect_segments(

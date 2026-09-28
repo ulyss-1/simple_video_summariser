@@ -134,6 +134,22 @@ def default_deps(settings: Settings) -> Deps:
     )
 
 
+def _check_transcriber_first(transcriber: Transcriber, handler: Handler) -> Handler:
+    """Fail the transcribe stage on a missing speech-to-text install before any audio work.
+
+    Otherwise the audio directory is touched first, and on a host whose ``AUDIO_DIR``
+    is not writable the clear "install requirements.whisper.txt" message is lost.
+    """
+    if not isinstance(transcriber, FasterWhisperTranscriber):
+        return handler
+
+    def checked(job: Job, ctx: JobContext) -> None:
+        transcriber.check_available()
+        handler(job, ctx)
+
+    return checked
+
+
 def build_inprocess_handlers(
     deps: Deps, queue: InProcessQueue, conn: psycopg.Connection[Any]
 ) -> dict[str, Handler]:
@@ -146,13 +162,16 @@ def build_inprocess_handlers(
             subtitles=deps.subtitles,
             settings=deps.settings,
         ),
-        "transcribe": make_transcribe_handler(
-            connect=deps.connect,
-            queue=queue,
-            audio_source=deps.audio,
-            transcriber=deps.transcriber,
-            chunker=chunk_segments,
-            settings=deps.settings,
+        "transcribe": _check_transcriber_first(
+            deps.transcriber,
+            make_transcribe_handler(
+                connect=deps.connect,
+                queue=queue,
+                audio_source=deps.audio,
+                transcriber=deps.transcriber,
+                chunker=chunk_segments,
+                settings=deps.settings,
+            ),
         ),
         "analyze": make_analyze_handler(
             connect=deps.connect, summarizer=deps.summarizer, settings=deps.settings

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from tests.services.cli.fakes import (
     MANUAL_ID,
     NO_CAPTIONS_ID,
     REL,
+    FakeAudio,
     FakeTranscriber,
     manual_rig,
     no_captions_rig,
@@ -179,6 +181,35 @@ def test_missing_whisper_dependency_surfaces_the_requirements_file_and_exits_1(
     assert line.startswith("[transcribe] failed")
     assert "TOOL_FAILURE" in line
     assert "requirements.whisper.txt" in line
+    assert rig.summarizer.calls == []
+
+
+def test_missing_whisper_fails_fast_before_any_audio_work_whatever_audio_dir_is(
+    head_dsn: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A None entry in sys.modules makes ``import faster_whisper`` raise
+    # ImportError, so the missing-dependency path runs even where it is installed.
+    monkeypatch.setitem(sys.modules, "faster_whisper", None)
+    audio = FakeAudio(exc=PermissionError(13, "Permission denied", "/data"))
+    rig = no_captions_rig(
+        head_dsn,
+        Path("/data/audio"),  # the default: not writable on a normal host
+        audio=audio,
+        transcriber=FasterWhisperTranscriber(model="tiny", compute_type="int8", threads=1),
+    )
+
+    code = main(["run", NO_CAPTIONS_ID], deps=rig.deps)
+
+    _out, err = capsys.readouterr()
+    assert code == 1
+    (line,) = failure_lines(err)
+    assert line.startswith("[transcribe] failed")
+    assert "TOOL_FAILURE" in line
+    assert "requirements.whisper.txt" in line
+    assert "PermissionError" not in err
+    assert audio.calls == []
     assert rig.summarizer.calls == []
 
 
