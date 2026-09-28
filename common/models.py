@@ -59,6 +59,32 @@ class ChannelFeed(Protocol):
 FeedSource = ChannelFeed
 
 
+# CatalogEntry, ChannelCatalog and CatalogSource belong to #27 (channel catalog
+# adapter, adapters/youtube/catalog.py). #41 (backfill) consumes the port.
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogEntry:
+    """One upload in a channel listing; no per-video metadata is fetched."""
+
+    video_id: str
+    title: str | None
+    duration_sec: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelCatalog:
+    """A channel's uploads, newest first; ``total_count`` is YouTube's own figure."""
+
+    channel_id: str
+    entries: tuple[CatalogEntry, ...]
+    total_count: int | None
+
+
+class CatalogSource(Protocol):
+    def list_uploads(self, channel_id: str, *, limit: int) -> ChannelCatalog: ...
+
+
 # Channel, Transcript, Chunk, Analysis, Topic, Claim and Quote, below,
 # belong to #14 (the repository layer, common/repo/). They mirror the
 # tables in architecture.md §6 one-for-one; common/repo/ functions build
@@ -276,3 +302,36 @@ class Transcriber(Protocol):
         language: str | None = None,
         on_progress: Callable[[float], None] | None = None,
     ) -> TranscriptResult: ...
+
+
+# Usage and Summarizer belong to #24 (Ollama adapter, adapters/summarize/).
+# It is built first, so it defines the port that #25 (Anthropic adapter) and
+# #30 (analyze handler) share. Departs from architecture.md 3 in two additive
+# ways: the ``model`` attribute and ``take_usage()``.
+
+
+@dataclass(frozen=True, slots=True)
+class Usage:
+    """LLM usage since the previous take_usage(); every field is a total."""
+
+    input_tokens: int = 0  # uncached input only
+    output_tokens: int = 0
+    cache_read_tokens: int = 0  # always 0 for Ollama
+    cache_write_tokens: int = 0  # always 0 for Ollama
+    calls: int = 0  # model requests that returned a response
+    cost_usd: float | None = None  # None when no price is known (always for Ollama)
+
+
+class Summarizer(Protocol):
+    name: str  # the SUMMARIZER value: "ollama" | "anthropic" (analyze dedupe_key, C1)
+    model: str  # the concrete model, recorded as analyses.model
+
+    def derive_roster(self, meta: VideoMeta, opening: str) -> Roster: ...
+
+    def analyze_chunk(
+        self, chunk: Chunk, roster: Roster, meta: VideoMeta
+    ) -> ChunkAnalysis: ...
+
+    def reduce(self, partials: list[ChunkAnalysis], meta: VideoMeta) -> str: ...
+
+    def take_usage(self) -> Usage: ...  # totals since the last call, then reset to zero

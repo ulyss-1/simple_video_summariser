@@ -109,6 +109,8 @@ def test_defaults_match_the_architecture_table() -> None:
     assert s.SUMMARIZER == "ollama"
     assert s.OLLAMA_MODEL == "qwen3.5:4b"
     assert s.OLLAMA_HOST == "http://host.docker.internal:11434"
+    assert s.OLLAMA_NUM_CTX == 8192
+    assert s.OLLAMA_TIMEOUT_SEC == 900
     assert s.ANTHROPIC_API_KEY is None
     assert s.ANTHROPIC_MODEL == "claude-haiku-4-5"
     assert s.ANTHROPIC_BATCH is True
@@ -138,6 +140,7 @@ def test_defaults_match_the_architecture_table() -> None:
 def test_every_architecture_variable_is_a_field_except_transcriber_cpus() -> None:
     expected = {
         "DATABASE_URL", "SUMMARIZER", "OLLAMA_MODEL", "OLLAMA_HOST",
+        "OLLAMA_NUM_CTX", "OLLAMA_TIMEOUT_SEC",
         "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "ANTHROPIC_BATCH",
         "PROMPT_VERSION", "CHUNK_SEC", "OVERLAP_SEC", "WHISPER_MODEL",
         "WHISPER_COMPUTE", "WHISPER_THREADS", "PREFER_WHISPER",
@@ -434,6 +437,75 @@ def test_non_numeric_value_error_names_the_variable(
         get_settings()
 
     assert _errors_for(exc_info.value, "HEARTBEAT_SEC")
+
+
+# --- Ollama -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["OLLAMA_NUM_CTX", "OLLAMA_TIMEOUT_SEC"])
+@pytest.mark.parametrize("value", ["0", "-1", "many"])
+def test_ollama_numeric_settings_must_be_positive_integers(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", DB_URL)
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValidationError) as exc_info:
+        get_settings()
+
+    assert _errors_for(exc_info.value, name)
+
+
+def test_ollama_numeric_settings_are_read_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", DB_URL)
+    monkeypatch.setenv("OLLAMA_NUM_CTX", "4096")
+    monkeypatch.setenv("OLLAMA_TIMEOUT_SEC", "1")
+
+    s = get_settings()
+
+    assert (s.OLLAMA_NUM_CTX, s.OLLAMA_TIMEOUT_SEC) == (4096, 1)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "localhost:11434",  # the form Ollama's own env var accepts
+        "host.docker.internal:11434",
+        "",
+        "   ",
+        "http://",
+        "http:///api",
+        "http://h:11434?x=1",
+        "http://h:11434/?x=1",
+        "ftp://h:11434",
+        "http://h:notaport",
+    ],
+)
+def test_invalid_ollama_host_is_rejected_naming_the_variable(value: str) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        build_settings(DATABASE_URL=DB_URL, OLLAMA_HOST=value)
+
+    messages = _errors_for(exc_info.value, "OLLAMA_HOST")
+    assert messages
+    assert all("OLLAMA_HOST" in m for m in messages)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "http://localhost:11434",
+        "http://h:11434/",
+        "https://ollama.example.com",
+        "http://127.0.0.1:11434",
+        "http://[::1]:11434",
+    ],
+)
+def test_valid_ollama_host_is_accepted_unchanged(value: str) -> None:
+    s = build_settings(DATABASE_URL=DB_URL, OLLAMA_HOST=value)
+
+    assert s.OLLAMA_HOST == value
 
 
 # --- paths --------------------------------------------------------------------

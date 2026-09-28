@@ -21,6 +21,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import (
     Field,
@@ -38,6 +39,23 @@ from pydantic_settings import (
 )
 
 type LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
+
+def _ollama_host_problem(value: str) -> str | None:
+    """Why ``value`` is not a usable Ollama base URL, or ``None`` if it is."""
+    try:
+        parts = urlsplit(value)
+        hostname = parts.hostname
+        _ = parts.port  # raises ValueError for a malformed port
+    except ValueError:
+        return "not a valid URL"
+    if parts.scheme not in ("http", "https"):
+        return "missing http:// or https:// scheme"
+    if not hostname:
+        return "no host"
+    if parts.query:
+        return "has a query string"
+    return None
 
 
 class Settings(BaseSettings):
@@ -62,6 +80,9 @@ class Settings(BaseSettings):
     SUMMARIZER: Literal["ollama", "anthropic"] = "ollama"
     OLLAMA_MODEL: str = "qwen3.5:4b"
     OLLAMA_HOST: str = "http://host.docker.internal:11434"
+    OLLAMA_NUM_CTX: PositiveInt = 8192
+    # CPU inference on a 4B model is slow (architecture.md 16.7).
+    OLLAMA_TIMEOUT_SEC: PositiveInt = 900
     ANTHROPIC_API_KEY: SecretStr | None = None
     ANTHROPIC_MODEL: str = "claude-haiku-4-5"
     ANTHROPIC_BATCH: bool = True
@@ -117,6 +138,18 @@ class Settings(BaseSettings):
     def _empty_means_unset(cls, value: Any) -> Any:
         # Compose passes `${VAR:-}` through as an empty string.
         return None if value == "" else value
+
+    @field_validator("OLLAMA_HOST")
+    @classmethod
+    def _ollama_host_is_http_url(cls, value: str) -> str:
+        # Ollama's own OLLAMA_HOST accepts "localhost:11434"; we need a scheme.
+        problem = _ollama_host_problem(value)
+        if problem:
+            raise ValueError(
+                f"OLLAMA_HOST must be an http:// or https:// URL with a host "
+                f"and no query string ({problem})"
+            )
+        return value
 
     @field_validator("LOG_LEVEL", mode="before")
     @classmethod

@@ -1,0 +1,16 @@
+{
+  "model": "qwen3.5:4b",
+  "created_at": "2026-09-28T10:16:02.654321Z",
+  "message": {
+    "role": "assistant",
+    "content": "{\"topics\": [{\"title\": \"Intro\", \"summary\": \"The host greets the guest.\", \"start_sec\": 100}], \"claims\": [{\"text\": \"The guest founded the company.\", \"speaker\": \"Guest One\", \"start_sec\": 130, \"confidence\": \"high\"}], \"quotes\": [{\"text\": \"It started in a garage.\", \"speaker\": \"Guest One\", \"start_sec\": 140}]}"
+  },
+  "done": true,
+  "done_reason": "stop",
+  "total_duration": 41589157167,
+  "load_duration": 13701500,
+  "prompt_eval_count": 1204,
+  "prompt_eval_duration": 11602820000,
+  "eval_count": 96,
+  "eval_duration": 29259480000
+}
