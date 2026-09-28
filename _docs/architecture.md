@@ -830,13 +830,17 @@ layer, not the dependency install — the difference between a 5-second and a
 ```dockerfile
 FROM ytdigest-backend:latest
 USER root
-COPY requirements.whisper.txt .
+WORKDIR /tmp
 # --only-binary: ctranslate2 ships no sdist, so a missing wheel must fail
 # loudly here rather than as an opaque resolver error. See 16.2.
-RUN /opt/venv/bin/pip install --no-cache-dir --only-binary=:all: \
+RUN --mount=type=bind,source=requirements.whisper.txt,target=requirements.whisper.txt \
+    /opt/venv/bin/pip install --no-cache-dir --only-binary=:all: \
         -r requirements.whisper.txt \
-    || (echo "ERROR: no ctranslate2 wheel for this Python minor - see 16.2" \
+    || (echo "ERROR: no binary wheel for a requirements.whisper.txt package for this Python minor, or the pin is wrong - see architecture.md 16.2" \
         && exit 1)
+# /models is the whisper-models volume; a fresh volume copies its ownership.
+RUN mkdir -p /models && chown app:app /models
+WORKDIR /app
 USER app
 ENV OMP_NUM_THREADS=4 \
     HF_HOME=/models \

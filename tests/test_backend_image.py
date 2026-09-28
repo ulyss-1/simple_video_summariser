@@ -22,11 +22,14 @@ COMPOSE_YML = REPO_ROOT / "compose.yml"
 _APP_DIRS = ("common/", "adapters/", "services/", "migrations/")
 
 
-def _instructions() -> list[tuple[str, str]]:
-    """(INSTRUCTION, arguments) pairs, comments dropped, continuations joined."""
+def _instructions(dockerfile: Path = DOCKERFILE) -> list[tuple[str, str]]:
+    """(INSTRUCTION, arguments) pairs, comments dropped, continuations joined.
+
+    Defaults to the backend Dockerfile; the whisper image tests (#56) pass theirs.
+    """
     logical: list[str] = []
     pending = ""
-    for raw in DOCKERFILE.read_text().splitlines():
+    for raw in dockerfile.read_text().splitlines():
         stripped = raw.strip()
         if not pending and (not stripped or stripped.startswith("#")):
             continue

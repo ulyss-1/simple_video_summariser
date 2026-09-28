@@ -1,0 +1,39 @@
+# Speech-to-text image (architecture.md 11.3, 16.2): the backend image plus
+# faster-whisper, for the transcriber service only. Build the backend image
+# first, from the repo root:
+#   docker build -f ops/Dockerfile.backend -t ytdigest-backend:latest .
+#   docker build -f ops/Dockerfile.whisper -t ytdigest-whisper:latest .
+FROM ytdigest-backend:latest
+USER root
+# The requirements file is bind-mounted at build time, next to /tmp, so it is
+# never written into a layer and /app stays exactly the backend's /app.
+WORKDIR /tmp
+# --only-binary: ctranslate2 ships no sdist, so a missing wheel must fail
+# loudly here rather than as an opaque resolver error (architecture.md 16.2).
+# pip's own output is left visible, so the failing package can be read above
+# the ERROR line. The message cannot tell a missing wheel from a bad pin.
+RUN --mount=type=bind,source=requirements.whisper.txt,target=requirements.whisper.txt \
+    /opt/venv/bin/pip install --no-cache-dir --only-binary=:all: \
+        -r requirements.whisper.txt \
+    || (echo "ERROR: no binary wheel for a requirements.whisper.txt package for this Python minor, or the pin is wrong - see architecture.md 16.2" \
+        && exit 1)
+# /models is the whisper-models volume (HF_HOME): a fresh named volume copies
+# the ownership of the image directory it is mounted on, so it must belong to
+# app or the first model download fails with a permission error.
+RUN mkdir -p /models && chown app:app /models
+WORKDIR /app
+USER app
+# Thread settings: ctranslate2 sizes its OpenMP pool from the host's cores and
+# ignores the container's CPU limit, so OMP_NUM_THREADS caps it explicitly. It
+# applies when WHISPER_THREADS is 0 (the common/config.py default, "auto"). A
+# non-zero WHISPER_THREADS is passed to faster-whisper as cpu_threads and takes
+# precedence. Neither should exceed the container's CPU limit (set in compose).
+# CT2_VERBOSE=0 keeps ctranslate2's own logging quiet. HF_HOME=/models puts the
+# Hugging Face cache (hub/) on the volume so the model downloads only once.
+# Verified (#56): a container recreated on the same /models volume loads the
+# cached model with `--network none` and without HF_HUB_OFFLINE, so it is not
+# set here; the first large-v3 download needs the network.
+# No ENTRYPOINT, CMD or HEALTHCHECK: compose supplies them.
+ENV OMP_NUM_THREADS=4 \
+    HF_HOME=/models \
+    CT2_VERBOSE=0
