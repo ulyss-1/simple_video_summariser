@@ -336,34 +336,63 @@ class PostgresQueue:
         threshold = (
             self._settings.REAP_AFTER_SEC if older_than_sec is None else older_than_sec
         )
-        with self._conn.transaction():
-            with self._conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(
-                    """
-                    SELECT id, kind, attempts FROM jobs
+        if threshold <= 0:
+            # A zero threshold would reap every running job.
+            raise ValueError(f"older_than_sec must be positive, got {threshold}")
+        # One statement, so one transaction. Candidates are locked with
+        # SKIP LOCKED: a row an in-flight heartbeat or outcome write holds is
+        # left for the next pass, and a row whose heartbeat committed before
+        # we got its lock is re-checked against the WHERE by Postgres. The
+        # outer WHERE repeats the staleness test for the same reason.
+        with (
+            self._conn.transaction(),
+            self._conn.cursor(row_factory=dict_row) as cur,
+        ):
+            cur.execute(
+                """
+                WITH stale AS (
+                    SELECT id, video_id, kind, attempts, locked_by FROM jobs
                     WHERE state = 'running'
-                      AND heartbeat_at < now() - (%(threshold)s * interval '1 second')
-                    """,
-                    {"threshold": threshold},
-                )
-                stale = cur.fetchall()
-            for row in stale:
-                self._reap_one(row["id"], row["kind"], row["attempts"])
-        return len(stale)
-
-    def _reap_one(self, job_id: int, kind: str, attempts: int) -> None:
-        if attempts >= self._kind_max_attempts(kind):
-            sql = """
-                UPDATE jobs SET state='dead', finished_at=now(),
-                       locked_by=NULL, locked_at=NULL, last_error=%(last_error)s
-                WHERE id=%(id)s AND state='running'
-            """
-            params: dict[str, Any] = {"id": job_id, "last_error": _REAP_LAST_ERROR}
-        else:
-            sql = """
-                UPDATE jobs SET state='pending', locked_by=NULL, locked_at=NULL
-                WHERE id=%(id)s AND state='running'
-            """
-            params = {"id": job_id}
-        with self._conn.cursor() as cur:
-            cur.execute(sql, params)
+                      AND (heartbeat_at IS NULL
+                           OR heartbeat_at < now() - (%(threshold)s * interval '1 second'))
+                    ORDER BY id
+                    FOR UPDATE SKIP LOCKED)
+                UPDATE jobs j SET
+                    state = CASE WHEN j.attempts >= CASE j.kind
+                                          WHEN 'transcribe' THEN %(max_transcribe)s
+                                          ELSE %(max_default)s END
+                                 THEN 'dead' ELSE 'pending' END,
+                    finished_at = CASE WHEN j.attempts >= CASE j.kind
+                                          WHEN 'transcribe' THEN %(max_transcribe)s
+                                          ELSE %(max_default)s END
+                                 THEN now() ELSE j.finished_at END,
+                    locked_by = NULL, locked_at = NULL,
+                    last_error = %(last_error)s
+                FROM stale
+                WHERE j.id = stale.id AND j.state = 'running'
+                  AND (j.heartbeat_at IS NULL
+                       OR j.heartbeat_at < now() - (%(threshold)s * interval '1 second'))
+                RETURNING j.id, stale.video_id, stale.kind, stale.attempts,
+                          stale.locked_by AS lost_worker, j.state AS outcome
+                """,
+                {
+                    "threshold": threshold,
+                    "max_transcribe": self._kind_max_attempts("transcribe"),
+                    "max_default": self._kind_max_attempts("ingest"),
+                    "last_error": _REAP_LAST_ERROR,
+                },
+            )
+            reaped = cur.fetchall()
+        for row in reaped:
+            _logger.warning(
+                "queue.job_reaped",
+                extra={
+                    "job_id": row["id"],
+                    "video_id": row["video_id"],
+                    "kind": row["kind"],
+                    "locked_by": row["lost_worker"],
+                    "attempts": row["attempts"],
+                    "outcome": row["outcome"],
+                },
+            )
+        return len(reaped)

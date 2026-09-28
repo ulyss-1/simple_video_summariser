@@ -281,6 +281,30 @@ def test_valid_chunk_window_edges_are_accepted(chunk: int, overlap: int) -> None
     assert (s.CHUNK_SEC, s.OVERLAP_SEC) == (chunk, overlap)
 
 
+# --- REAP_AFTER_SEC vs HEARTBEAT_SEC -------------------------------------------
+
+
+def test_reap_after_below_twice_the_heartbeat_is_rejected_naming_both() -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        build_settings(DATABASE_URL=DB_URL, HEARTBEAT_SEC=60, REAP_AFTER_SEC=119)
+
+    message = str(exc_info.value)
+    assert "REAP_AFTER_SEC" in message
+    assert "HEARTBEAT_SEC" in message
+
+
+def test_reap_after_of_exactly_twice_the_heartbeat_is_accepted() -> None:
+    s = build_settings(DATABASE_URL=DB_URL, HEARTBEAT_SEC=60, REAP_AFTER_SEC=120)
+
+    assert (s.HEARTBEAT_SEC, s.REAP_AFTER_SEC) == (60, 120)
+
+
+def test_default_reap_and_heartbeat_pass_the_rule() -> None:
+    s = build_settings(DATABASE_URL=DB_URL)
+
+    assert (s.HEARTBEAT_SEC, s.REAP_AFTER_SEC) == (60, 300)
+
+
 # --- PROMPT_VERSION -----------------------------------------------------------
 
 

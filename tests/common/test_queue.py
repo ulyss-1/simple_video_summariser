@@ -13,6 +13,7 @@ database's own ``now()``, not the test process's clock.
 
 from __future__ import annotations
 
+import logging
 import random
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -765,3 +766,260 @@ def test_reap_stale_uses_settings_reap_after_sec_when_older_than_sec_omitted(
 
     assert count == 1
     assert _row(conn, job_id)["state"] == "pending"
+
+
+# ---------------------------------------------------------------------------
+# reap_stale hardening (issue #35)
+# ---------------------------------------------------------------------------
+
+
+def _make_running(
+    queue: PostgresQueue,
+    conn: psycopg.Connection[Any],
+    *,
+    video_id: str = "v1",
+    kind: str = "ingest",
+    heartbeat_age_sec: int | None = 600,
+    attempts: int = 1,
+    locked_by: str = "w1",
+) -> int:
+    """A ``running`` job with the given heartbeat age, written directly."""
+    job_id = queue.enqueue(kind, video_id)
+    assert job_id is not None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE jobs SET state='running', locked_by=%(worker)s, locked_at=now(),
+                   attempts=%(attempts)s,
+                   heartbeat_at = CASE WHEN %(age)s::int IS NULL THEN NULL
+                       ELSE now() - (%(age)s::int * interval '1 second') END
+            WHERE id = %(id)s
+            """,
+            {
+                "worker": locked_by,
+                "attempts": attempts,
+                "age": heartbeat_age_sec,
+                "id": job_id,
+            },
+        )
+    return job_id
+
+
+def test_reap_stale_leaves_a_heartbeat_299s_old_alone_and_reaps_301s(
+    queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    fresh = _make_running(queue, conn, video_id="fresh", heartbeat_age_sec=299)
+    stale = _make_running(queue, conn, video_id="stale", heartbeat_age_sec=301)
+
+    count = queue.reap_stale(older_than_sec=300)
+
+    assert count == 1
+    assert _row(conn, fresh)["state"] == "running"
+    assert _row(conn, stale)["state"] == "pending"
+
+
+def test_reap_stale_treats_a_null_heartbeat_as_stale(
+    queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    job_id = _make_running(queue, conn, heartbeat_age_sec=None)
+
+    count = queue.reap_stale(older_than_sec=300)
+
+    assert count == 1
+    assert _row(conn, job_id)["state"] == "pending"
+
+
+@pytest.mark.parametrize("state", ["pending", "done", "dead"])
+def test_reap_stale_never_touches_rows_that_are_not_running(
+    queue: PostgresQueue, conn: psycopg.Connection[Any], state: str
+) -> None:
+    job_id = queue.enqueue("ingest", "v1")
+    assert job_id is not None
+    _set(
+        conn,
+        job_id,
+        state=state,
+        heartbeat_at=datetime.now(UTC) - timedelta(hours=2),
+        attempts=1,
+    )
+    before = _row(conn, job_id)
+
+    count = queue.reap_stale(older_than_sec=300)
+
+    assert count == 0
+    assert _row(conn, job_id) == before
+
+
+def test_reap_stale_requeue_keeps_attempts_and_records_why(
+    queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    job_id = _make_running(queue, conn, attempts=3)  # ingest max is 4
+
+    queue.reap_stale(older_than_sec=300)
+
+    row = _row(conn, job_id)
+    assert row["state"] == "pending"
+    assert row["attempts"] == 3
+    assert row["locked_by"] is None
+    assert row["locked_at"] is None
+    assert row["last_error"] == "worker lost: heartbeat stale"
+    assert row["finished_at"] is None
+
+
+@pytest.mark.parametrize(
+    ("attempts", "expected"),
+    [(3, "pending"), (4, "dead"), (5, "dead")],
+)
+def test_reap_stale_dead_letters_at_and_beyond_max_attempts(
+    queue: PostgresQueue, conn: psycopg.Connection[Any], attempts: int, expected: str
+) -> None:
+    job_id = _make_running(queue, conn, attempts=attempts)
+
+    queue.reap_stale(older_than_sec=300)
+
+    row = _row(conn, job_id)
+    assert row["state"] == expected
+    assert row["last_error"] == "worker lost: heartbeat stale"
+    assert row["locked_by"] is None
+    assert (row["finished_at"] is not None) == (expected == "dead")
+
+
+@pytest.mark.parametrize(
+    ("attempts", "expected"),
+    [(1, "pending"), (2, "dead")],
+)
+def test_reap_stale_transcribe_uses_max_attempts_transcribe_setting(
+    conn: psycopg.Connection[Any], attempts: int, expected: str
+) -> None:
+    q = PostgresQueue(
+        conn, settings=_settings(MAX_ATTEMPTS_TRANSCRIBE=2), rng=random.Random(1)
+    )
+    job_id = _make_running(q, conn, kind="transcribe", attempts=attempts)
+
+    q.reap_stale(older_than_sec=300)
+
+    assert _row(conn, job_id)["state"] == expected
+
+
+def test_reap_stale_logs_one_warning_per_reaped_job(
+    queue: PostgresQueue,
+    conn: psycopg.Connection[Any],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    requeued = _make_running(
+        queue, conn, video_id="a", attempts=1, locked_by="worker-a"
+    )
+    dead = _make_running(
+        queue, conn, video_id="b", kind="analyze", attempts=4, locked_by="worker-b"
+    )
+    _make_running(queue, conn, video_id="c", heartbeat_age_sec=1)
+
+    with caplog.at_level(logging.DEBUG, logger="common.queue"):
+        queue.reap_stale(older_than_sec=300)
+
+    records = [r for r in caplog.records if r.getMessage() == "queue.job_reaped"]
+    assert len(records) == 2
+    assert all(r.levelno == logging.WARNING for r in records)
+    by_id = {r.__dict__["job_id"]: r.__dict__ for r in records}
+    assert by_id[requeued]["video_id"] == "a"
+    assert by_id[requeued]["kind"] == "ingest"
+    assert by_id[requeued]["locked_by"] == "worker-a"
+    assert by_id[requeued]["attempts"] == 1
+    assert by_id[requeued]["outcome"] == "pending"
+    assert by_id[dead]["video_id"] == "b"
+    assert by_id[dead]["kind"] == "analyze"
+    assert by_id[dead]["locked_by"] == "worker-b"
+    assert by_id[dead]["attempts"] == 4
+    assert by_id[dead]["outcome"] == "dead"
+
+
+def test_reap_stale_is_idempotent(
+    queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    job_id = _make_running(queue, conn)
+    assert queue.reap_stale(older_than_sec=300) == 1
+    after_first = _row(conn, job_id)
+
+    assert queue.reap_stale(older_than_sec=300) == 0
+    assert _row(conn, job_id) == after_first
+
+
+@pytest.mark.parametrize("threshold", [0, -1, -300])
+def test_reap_stale_rejects_a_non_positive_threshold_and_reaps_nothing(
+    queue: PostgresQueue, conn: psycopg.Connection[Any], threshold: int
+) -> None:
+    job_id = _make_running(queue, conn, heartbeat_age_sec=1)
+
+    with pytest.raises(ValueError, match="older_than_sec"):
+        queue.reap_stale(older_than_sec=threshold)
+
+    assert _row(conn, job_id)["state"] == "running"
+
+
+def test_reap_stale_skips_a_row_another_connection_has_locked(
+    queue: PostgresQueue, conn: psycopg.Connection[Any], head_dsn: str
+) -> None:
+    locked = _make_running(queue, conn, video_id="locked")
+    free = _make_running(queue, conn, video_id="free")
+    # A hang would fail as a lock timeout error instead of blocking the suite.
+    conn.execute("SET lock_timeout = '3s'")
+
+    with psycopg.connect(head_dsn) as other:
+        other.execute("SELECT id FROM jobs WHERE id = %s FOR UPDATE", (locked,))
+
+        count = queue.reap_stale(older_than_sec=300)
+
+        assert count == 1
+        assert _row(conn, free)["state"] == "pending"
+        other.rollback()
+
+    assert _row(conn, locked)["state"] == "running"
+
+
+def test_reap_stale_does_not_reap_a_job_whose_heartbeat_commits_mid_pass(
+    queue: PostgresQueue, conn: psycopg.Connection[Any], head_dsn: str
+) -> None:
+    job_id = _make_running(queue, conn, heartbeat_age_sec=600)
+    conn.execute("SET lock_timeout = '3s'")
+
+    with psycopg.connect(head_dsn) as other:
+        # The heartbeat is in flight: its row lock is held, not yet committed.
+        other.execute(
+            "UPDATE jobs SET heartbeat_at = now() WHERE id = %s", (job_id,)
+        )
+        assert queue.reap_stale(older_than_sec=300) == 0
+        other.commit()
+
+    assert queue.reap_stale(older_than_sec=300) == 0
+    row = _row(conn, job_id)
+    assert row["state"] == "running"
+    assert row["locked_by"] == "w1"
+
+
+def test_reap_stale_is_one_transaction_and_a_failure_commits_nothing(
+    queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    good = _make_running(queue, conn, video_id="good")
+    bad = _make_running(queue, conn, video_id="bad")
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE FUNCTION fail_reap() RETURNS trigger AS $$
+            BEGIN
+                IF NEW.state <> 'running' AND NEW.video_id = 'bad' THEN
+                    RAISE EXCEPTION 'boom';
+                END IF;
+                RETURN NEW;
+            END $$ LANGUAGE plpgsql
+            """
+        )
+        cur.execute(
+            "CREATE TRIGGER fail_reap BEFORE UPDATE ON jobs "
+            "FOR EACH ROW EXECUTE FUNCTION fail_reap()"
+        )
+
+    with pytest.raises(psycopg.Error):
+        queue.reap_stale(older_than_sec=300)
+
+    assert _row(conn, good)["state"] == "running"
+    assert _row(conn, bad)["state"] == "running"

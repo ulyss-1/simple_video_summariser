@@ -132,6 +132,16 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _reap_after_covers_two_heartbeats(self) -> Settings:
+        # A healthy job that misses a single heartbeat must not be reaped.
+        if self.REAP_AFTER_SEC < 2 * self.HEARTBEAT_SEC:
+            raise ValueError(
+                f"REAP_AFTER_SEC ({self.REAP_AFTER_SEC}) must be at least "
+                f"2 * HEARTBEAT_SEC ({2 * self.HEARTBEAT_SEC})"
+            )
+        return self
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
