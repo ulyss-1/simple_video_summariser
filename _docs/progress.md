@@ -3,6 +3,25 @@
 Status of the groomed backlog (GitHub issues #1–#20), worked through per
 `_docs/process.md`. An issue is closed only after a QA PASS comment.
 
+## Checkpoint 3 — 2026-09-28, batch 2 (#21-#40): 5 closed
+
+All 20 issues of batch 2 (#21-#40) were groomed first; follow-ups #80-#105
+were filed by the PMs. Closed after QA PASS:
+
+| Issue | Title | Commits | QA |
+|---|---|---|---|
+| #13 | Worker runtime (carried over) | f924c12 | PASS (2nd run, after reconnect / liveness / file-scope fixes) |
+| #21 | Transcript chunker | a0fc4e4, f4c20a9 | PASS (2nd run, after the 1e20 start fix; criterion wording amended by PM) |
+| #22 | LLM output schema and validation | 6afffc7 | PASS |
+| #23 | Prompt templates v1 | a5be577 | PASS |
+| #36 | Planner: audio retention | f5ef376 | PASS |
+
+In flight: #26 feed adapter, #35 reaper, #28 ingest handler (engineers);
+Summarizer port shape being reconciled across #24/#25/#30 before #24 starts.
+New: #106 heartbeat connection re-creation (ungroomed).
+
+Held for the owner: #39/#40 need `fastapi`, `uvicorn`, `httpx` approved.
+
 ## Checkpoint 2 — 2026-09-27, 17 of 20 closed
 
 Closed after QA PASS since checkpoint 1: #6 logging, #7 database bootstrap
