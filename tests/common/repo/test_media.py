@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import psycopg
 import pytest
 
 from common.repo.media import (
     LockOutcome,
+    delete_media,
     delete_row,
     list_expired,
     list_oldest_first,
     list_referenced_paths,
     lock_for_deletion,
+    register_media,
     total_bytes,
 )
 
@@ -172,3 +175,76 @@ def test_delete_row_removes_only_that_row_and_does_not_commit(
     assert seen == {keep, gone}  # uncommitted
     conn.rollback()
     assert list_referenced_paths(conn) == {"a", "b"}
+
+
+# --- register_media / delete_media (issue #29) --------------------------------------
+
+
+def media_rows(conn: psycopg.Connection, vid: str) -> list[tuple[Any, ...]]:
+    return conn.execute(
+        "SELECT path, bytes, format, created_at, expires_at FROM media WHERE video_id = %s",
+        (vid,),
+    ).fetchall()
+
+
+def test_register_media_expiry_is_exactly_ttl_days_after_created_at(
+    conn: psycopg.Connection,
+) -> None:
+    vid = new_video(conn, "v1")
+
+    register_media(conn, vid, "ab/v1.opus", 123, 30)
+
+    ((path, size, fmt, created_at, expires_at),) = media_rows(conn, vid)
+    assert (path, size, fmt) == ("ab/v1.opus", 123, "opus16k")
+    assert expires_at - created_at == timedelta(days=30)
+
+
+def test_register_media_twice_updates_the_row_instead_of_raising(
+    conn: psycopg.Connection,
+) -> None:
+    vid = new_video(conn, "v1")
+    conn.execute(
+        "INSERT INTO media (video_id, path, bytes, created_at, expires_at) "
+        "VALUES (%s, 'old', 1, %s, %s)",
+        (vid, T0, T0 + timedelta(days=1)),
+    )
+
+    register_media(conn, vid, "new/v1.opus", 999, 7)
+    register_media(conn, vid, "newer/v1.opus", 1000, 7)
+
+    ((path, size, _fmt, created_at, expires_at),) = media_rows(conn, vid)
+    assert (path, size) == ("newer/v1.opus", 1000)
+    assert created_at > T0
+    assert expires_at - created_at == timedelta(days=7)
+
+
+def test_register_media_for_an_unknown_video_violates_the_foreign_key(
+    conn: psycopg.Connection,
+) -> None:
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        register_media(conn, "nosuchvideo", "a", 1, 30)
+
+
+def test_register_media_does_not_commit(conn: psycopg.Connection, head_dsn: str) -> None:
+    vid = new_video(conn, "v1")
+    conn.commit()
+
+    register_media(conn, vid, "a", 1, 30)
+
+    with psycopg.connect(head_dsn) as other:
+        assert media_rows(other, vid) == []
+    conn.rollback()
+
+
+def test_delete_media_removes_only_that_videos_row_and_tolerates_none(
+    conn: psycopg.Connection,
+) -> None:
+    gone = new_video(conn, "v1")
+    keep = new_video(conn, "v2")
+    register_media(conn, gone, "a", 1, 30)
+    register_media(conn, keep, "b", 1, 30)
+
+    delete_media(conn, gone)
+    delete_media(conn, gone)
+
+    assert list_referenced_paths(conn) == {"b"}

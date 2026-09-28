@@ -198,3 +198,21 @@ def _chunk(row: tuple[Any, ...]) -> Chunk:
         transcript_id=int(transcript_id),
         id=int(chunk_id),
     )
+
+
+def get_transcript(conn: psycopg.Connection[Any], video_id: str, source: str) -> Transcript | None:
+    """The transcript of ``video_id`` from exactly ``source``, or ``None`` (issue #29).
+
+    Unlike ``get_best_transcript`` this does not rank: a ``whisper`` transcript is
+    found even when a better (manual) one exists.
+    """
+    row = conn.execute(
+        """
+        SELECT id, video_id, source, language, speaker_source, segments,
+               full_text, engine_meta, created_at
+        FROM transcripts
+        WHERE video_id = %s AND source = %s
+        """,
+        (video_id, source),
+    ).fetchone()
+    return None if row is None else _transcript(row)

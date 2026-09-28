@@ -15,6 +15,7 @@ from common.repo.videos import (
     mark_unavailable,
     record_unavailable,
     upsert_video,
+    video_exists,
 )
 
 pytestmark = pytest.mark.integration
@@ -297,3 +298,10 @@ def test_insert_discovered_video_strips_nul_bytes_from_the_title(
     assert conn.execute(
         "SELECT title FROM videos WHERE video_id = %s", ("feed1234567",)
     ).fetchone() == ("ab",)
+
+
+def test_video_exists_is_true_only_for_a_stored_video(conn: psycopg.Connection) -> None:
+    conn.execute("INSERT INTO videos (video_id) VALUES ('abc12345678')")
+
+    assert video_exists(conn, "abc12345678") is True
+    assert video_exists(conn, "zzz12345678") is False

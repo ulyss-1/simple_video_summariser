@@ -9,6 +9,7 @@ from common.models import Chunk, Segment
 from common.repo.transcripts import (
     get_best_transcript,
     get_chunks,
+    get_transcript,
     save_chunks,
     save_transcript,
 )
@@ -172,3 +173,24 @@ def test_save_chunks_strips_nul_from_text(conn: psycopg.Connection, video_id: st
 
     [chunk] = get_chunks(conn, transcript_id, "s")
     assert chunk.text == "badtext"
+
+
+def test_get_transcript_returns_the_row_of_exactly_that_source(
+    conn: psycopg.Connection, video_id: str
+) -> None:
+    save_transcript(conn, video_id, "whisper", "en", "none", (Segment(0, 1, "w"),), {"rtf": 0.1})
+    save_transcript(conn, video_id, "youtube_manual", "en", "none", (Segment(0, 1, "m"),), None)
+
+    found = get_transcript(conn, video_id, "whisper")
+
+    assert found is not None
+    assert (found.source, found.full_text, found.engine_meta) == ("whisper", "w", {"rtf": 0.1})
+    assert found.segments == (Segment(0.0, 1.0, "w"),)
+
+
+def test_get_transcript_is_none_when_that_source_is_missing(
+    conn: psycopg.Connection, video_id: str
+) -> None:
+    save_transcript(conn, video_id, "youtube_auto", "en", "none", (Segment(0, 1, "a"),), None)
+
+    assert get_transcript(conn, video_id, "whisper") is None

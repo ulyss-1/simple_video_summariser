@@ -3,15 +3,23 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Protocol
 
 import psycopg
 
 from common.chunking import chunk_segments, chunk_strategy
 from common.config import Settings
-from common.models import Segment
+from common.models import Chunk, Segment
 from common.queue import JobQueue, analyze_dedupe_key
 from common.repo.transcripts import save_chunks, save_transcript
+
+
+class Chunker(Protocol):
+    """The chunker port: ``common.chunking.chunk_segments`` (#21) or a test double."""
+
+    def __call__(
+        self, segments: Sequence[Segment], *, chunk_sec: int, overlap_sec: int
+    ) -> list[Chunk]: ...
 
 
 def save_transcript_with_chunks(
@@ -24,6 +32,7 @@ def save_transcript_with_chunks(
     speaker_source: str,
     segments: Sequence[Segment],
     engine_meta: dict[str, Any] | None,
+    chunker: Chunker | None = None,
 ) -> int:
     """Save a transcript and its chunks in one transaction, returning the transcript id.
 
@@ -31,7 +40,7 @@ def save_transcript_with_chunks(
     below is a real transaction: a failure while saving chunks rolls the
     transcript back too, and a transcript is never left without its chunks.
     """
-    chunks = chunk_segments(
+    chunks = (chunker or chunk_segments)(
         segments, chunk_sec=settings.CHUNK_SEC, overlap_sec=settings.OVERLAP_SEC
     )
     conn.commit()

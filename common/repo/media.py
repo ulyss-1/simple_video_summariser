@@ -4,8 +4,8 @@
 the planner's audio retention needs: what is expired, what is oldest, how many
 bytes are recorded, which paths are referenced, and the lock-recheck-delete
 step that lets retention delete one row safely while a transcriber may be
-working on the same video. #29 adds ``register_media`` / ``delete_media``
-to this module separately.
+working on the same video. ``register_media`` / ``delete_media`` (#29) are the
+transcribe handler's own writes.
 
 Like every ``common/repo/`` function these take a psycopg connection first,
 use parameterized SQL and never commit or roll back.
@@ -133,3 +133,34 @@ def lock_for_deletion(
 def delete_row(conn: psycopg.Connection[Any], media_id: int) -> None:
     """Delete one ``media`` row by id. Does not commit."""
     conn.execute("DELETE FROM media WHERE id = %s", (media_id,))
+
+
+def register_media(
+    conn: psycopg.Connection[Any], video_id: str, rel_path: str, bytes: int, ttl_days: int
+) -> None:
+    """Upsert the ``(video_id, 'opus16k')`` row (issue #29). Does not commit.
+
+    ``created_at`` and ``expires_at`` both come from the database's ``now()``
+    (one transaction, one instant), so ``expires_at - created_at`` is exactly
+    ``ttl_days`` days of 24 hours. A retry for the same video overwrites
+    ``path``, ``bytes``, ``created_at`` and ``expires_at`` instead of raising a
+    unique violation. ``rel_path`` is relative to ``AUDIO_DIR``.
+    """
+    conn.execute(
+        """
+        INSERT INTO media (video_id, path, bytes, format, created_at, expires_at)
+        VALUES (%(video_id)s, %(path)s, %(bytes)s, 'opus16k', now(),
+                now() + make_interval(hours => %(hours)s))
+        ON CONFLICT (video_id, format) DO UPDATE
+            SET path = EXCLUDED.path,
+                bytes = EXCLUDED.bytes,
+                created_at = EXCLUDED.created_at,
+                expires_at = EXCLUDED.expires_at
+        """,
+        {"video_id": video_id, "path": rel_path, "bytes": bytes, "hours": ttl_days * 24},
+    )
+
+
+def delete_media(conn: psycopg.Connection[Any], video_id: str) -> None:
+    """Delete the ``opus16k`` row of ``video_id``, if any (issue #29). Does not commit."""
+    conn.execute("DELETE FROM media WHERE video_id = %s AND format = 'opus16k'", (video_id,))

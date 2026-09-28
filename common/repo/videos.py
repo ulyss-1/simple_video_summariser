@@ -134,3 +134,12 @@ def insert_discovered_video(conn: psycopg.Connection[Any], entry: FeedEntry, ori
         (entry.video_id, entry.channel_id, clean_text(entry.title), entry.published_at, origin),
     )
     return cur.rowcount == 1
+
+
+def video_exists(conn: psycopg.Connection[Any], video_id: str) -> bool:
+    """Whether ``videos`` has a row for ``video_id`` (issue #29)."""
+    row = conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM videos WHERE video_id = %s)", (video_id,)
+    ).fetchone()
+    assert row is not None
+    return bool(row[0])
