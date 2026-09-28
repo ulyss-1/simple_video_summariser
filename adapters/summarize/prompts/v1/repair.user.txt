@@ -1,0 +1,7 @@
+Your previous reply failed validation. The validation error is:
+
+<error>
+$error
+</error>
+
+Answer again with only the corrected JSON object, in exactly the same shape as requested before: a single JSON object, no code fences, no text before or after it.

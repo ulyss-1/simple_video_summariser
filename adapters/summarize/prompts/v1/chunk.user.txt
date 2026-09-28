@@ -1,0 +1,15 @@
+<title>
+$title
+</title>
+
+<roster>
+$roster
+</roster>
+
+Analyse the transcript excerpt below. It covers seconds $chunk_start to $chunk_end of the video; every start_sec must lie within that range.
+
+<transcript>
+$transcript
+</transcript>
+
+Answer with the single JSON object only.

@@ -1,0 +1,9 @@
+<title>
+$title
+</title>
+
+<partials>
+$partials
+</partials>
+
+Write the episode summary now: plain text, 4 to 6 sentences.

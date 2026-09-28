@@ -1,0 +1,15 @@
+Identify the participants of this episode.
+
+<title>
+$title
+</title>
+
+<description>
+$description
+</description>
+
+<opening>
+$opening
+</opening>
+
+Answer with the single JSON object only.
