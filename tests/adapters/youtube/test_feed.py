@@ -370,37 +370,64 @@ def test_error_messages_carry_at_most_200_bytes_of_the_body() -> None:
 # --- parsing: fixtures -----------------------------------------------------
 
 
-def test_fixture_with_a_short_maps_every_field_in_document_order() -> None:
-    entries = parse_feed(fixture("nasa_with_short.xml"), "UCLA_DiR1FfKNvjuUpBHmylQ")
-    assert entries == [
-        FeedEntry(
-            "VV_JW4iCni0",
-            "UCLA_DiR1FfKNvjuUpBHmylQ",
-            "NASA Moon Base Update (Aug. 4, 2026)",
-            datetime(2026, 8, 4, 17, 0, 11, tzinfo=UTC),
-        ),
-        FeedEntry(
-            "aBcD3fGh1Jk",
-            "UCLA_DiR1FfKNvjuUpBHmylQ",
-            "Artemis Crew Press Conference & Q&A",
-            datetime(2026, 8, 3, 14, 30, tzinfo=UTC),
-        ),
-        FeedEntry(
-            "mN0pQrStUvW",
-            "UCLA_DiR1FfKNvjuUpBHmylQ",
-            "Live: Station Spacewalk Preview",
-            datetime(2026, 8, 1, 9, 5, 42, tzinfo=UTC),
-        ),
-    ]
+NASA = "UCLA_DiR1FfKNvjuUpBHmylQ"
+VERGE = "UCddiUEpeqJcYeBxX1IVBKvQ"
 
 
-def test_fixture_with_dash_and_underscore_ids_and_unicode_titles() -> None:
-    entries = parse_feed(
-        fixture("dash_and_underscore_ids.xml"), "UCFhiqk0Hh-xJvGQLyTc-giw"
+def test_real_nasa_feed_maps_every_entry_in_document_order() -> None:
+    entries = parse_feed(fixture("nasa.xml"), NASA)
+    assert [e.video_id for e in entries] == [
+        "j9epFget1W8", "v03RjDNwG1o", "aujP8wuMTMI", "cCpf0BOjlLE", "IwZVXmQdX1E",
+        "90Kgw_SvK4w", "jHKf1eHp3eQ", "MVt2139voxk", "_oXt3-YDih4", "-HQOp1-LpU0",
+        "6o3m9Bw67Os", "8NOLpgadWXc", "dnAJJwgpHs4", "9wq3VHsL_bE", "l5OJk1FuEKg",
+    ]  # fmt: skip
+    assert {e.channel_id for e in entries} == {NASA}
+    assert entries[0] == FeedEntry(
+        "j9epFget1W8",
+        NASA,
+        "Space Station Operations Update (Sept. 28, 2026)",
+        datetime(2026, 9, 25, 22, 24, 7, tzinfo=UTC),
     )
-    assert [e.video_id for e in entries] == ["-wNyEUrxzFU", "_x9Yz-AbCd_", "BZiu46G4ukc"]
-    assert entries[1].title == "Облака · 雲 · ☁️"
-    assert entries[0].published_at == datetime(2026, 9, 20, 15, 0, tzinfo=UTC)
+    assert entries[-1].published_at == datetime(2026, 8, 29, 16, 34, 47, tzinfo=UTC)
+    assert entries[2].title == (
+        "NASA\u2019s SpaceX Crew-12 Pre-Departure News Conference (Sept. 16, 2026)"
+    )
+    assert all(e.published_at.tzinfo is UTC for e in entries)
+
+
+def test_real_nasa_feed_has_ids_starting_with_underscore_and_dash() -> None:
+    ids = {e.video_id for e in parse_feed(fixture("nasa.xml"), NASA)}
+    assert {"_oXt3-YDih4", "-HQOp1-LpU0"} <= ids
+
+
+def test_real_nasa_feed_keeps_a_typographic_apostrophe_in_titles() -> None:
+    titles = [e.title for e in parse_feed(fixture("nasa.xml"), NASA)]
+    assert any("NASA\u2019s SpaceX Crew-12" in t for t in titles)
+
+
+def test_real_verge_feed_has_shorts_and_decodes_entities_in_titles() -> None:
+    entries = parse_feed(fixture("the_verge.xml"), VERGE)
+    assert len(entries) == 15
+    assert entries[0] == FeedEntry(
+        "9Y5BpmB8R8I",
+        VERGE,
+        "Would you want to know if Ghostface is at your door?",
+        datetime(2026, 9, 26, 14, 0, 6, tzinfo=UTC),
+    )
+    by_id = {e.video_id: e for e in entries}
+    assert by_id["ol9e_269eu4"].title == 'Mark Zuckerberg shows off "Muse Charm"'
+    # Shorts are not filtered out: the feed marks them only by their link.
+    assert b"/shorts/9Y5BpmB8R8I" in fixture("the_verge.xml")
+    assert "9Y5BpmB8R8I" in by_id
+
+
+def test_real_feed_is_rejected_for_a_different_requested_channel() -> None:
+    assert parse_feed(fixture("nasa.xml"), VERGE) == []
+
+
+def test_real_feed_via_fetch_with_a_fake_opener() -> None:
+    feed = YouTubeFeed(opener=FakeOpener(ok(fixture("nasa.xml"))))
+    assert len(feed.fetch(NASA)) == 15
 
 
 # --- parsing: fields -------------------------------------------------------
@@ -507,9 +534,10 @@ def test_a_video_id_starting_with_dash_is_valid() -> None:
     assert e.video_id == "-wNyEUrxzFU"
 
 
-def test_channel_id_without_the_uc_prefix_matches_the_requested_channel() -> None:
-    (e,) = parse(feed_xml(entry_xml(channel=CHANNEL).replace(CHANNEL, CHANNEL[2:], 1)))
-    assert e.channel_id == CHANNEL
+def test_entry_channel_id_without_the_uc_prefix_is_a_mismatch() -> None:
+    # The real feed writes "UC..." on entries (only the feed-level element is
+    # bare), so a bare entry ID is not accepted as the requested channel.
+    assert parse(feed_xml(entry_xml(channel=CHANNEL[2:]))) == []
 
 
 # --- parsing: whole-feed problems ------------------------------------------

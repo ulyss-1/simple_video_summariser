@@ -188,10 +188,9 @@ def _parse_entry(
     if video_id is None or not is_video_id(video_id):
         return None, f"invalid video ID {_shown(video_id)}"
 
-    # Feeds have been seen to write the ID with and without its "UC" prefix.
+    # Entries carry the full "UC..." ID (only the feed-level element drops the
+    # prefix, and that one is not read), as in the recorded feeds.
     entry_channel = (element.findtext(f"{_YT}channelId") or "").strip()
-    if entry_channel and not entry_channel.startswith("UC"):
-        entry_channel = "UC" + entry_channel
     if entry_channel != channel_id:
         return None, (
             f"video {video_id}: channelId mismatch "

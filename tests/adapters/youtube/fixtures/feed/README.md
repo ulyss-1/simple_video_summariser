@@ -2,19 +2,29 @@
 
 Used by `tests/adapters/youtube/test_feed.py` (issue #26).
 
-**These files are NOT recordings.** When they were written (2026-09-28) the
-endpoint `https://www.youtube.com/feeds/videos.xml?channel_id=<ID>` answered
-HTTP 404 (an HTML "Error 404" page) for every channel tried (NASA, TED, HYBE
-LABELS, LuxDalet, Karpathy, ...) from the dev machine, including on repeated
-tries, so no real feed could be recorded. The files reproduce the structure of
-a real feed: Atom root with the `yt` and `media` namespaces, feed-level
-`link`/`id`/`yt:channelId`/`title`/`author`/`published`, then one `<entry>` per
-video with `id`, `yt:videoId`, `yt:channelId`, `title`, `link`, `author`,
-`published`, `updated` and `media:group`. Replace them with real recordings
-(`curl -A "<user agent>" "<url>"`, fixture names kept) as soon as the endpoint
-answers; the tests read only the fields the adapter maps.
+## Recorded from the real endpoint
 
-| File | Case | Channel |
+Recorded on 2026-09-28 from the dev machine, unmodified (byte for byte):
+
+    curl -A "Mozilla/5.0" "https://www.youtube.com/feeds/videos.xml?channel_id=<ID>"
+
+| File | Source URL | Notes |
 |---|---|---|
-| `nasa_with_short.xml` | first entry is a Short (`/shorts/` link); a title with `&amp;`; entries newest first | `UCLA_DiR1FfKNvjuUpBHmylQ` (NASA). `VV_JW4iCni0` and its title are the real Short from `fixtures/metadata/short.json`; the other two entries are invented |
-| `dash_and_underscore_ids.xml` | video ID starting with `-` (`-wNyEUrxzFU`) and one starting with `_`; a `-07:00` offset; Cyrillic/CJK/emoji title | `UCFhiqk0Hh-xJvGQLyTc-giw` (LuxDalet). All three entries are hand-edited: the `-` and `_` IDs, the `-07:00` offset and titles are made up; `BZiu46G4ukc` is real |
+| `nasa.xml` | `https://www.youtube.com/feeds/videos.xml?channel_id=UCLA_DiR1FfKNvjuUpBHmylQ` | NASA, 15 entries; video IDs starting with `_` and `-`; typographic apostrophe in titles |
+| `the_verge.xml` | `https://www.youtube.com/feeds/videos.xml?channel_id=UCddiUEpeqJcYeBxX1IVBKvQ` | The Verge, 15 entries, most are Shorts (`/shorts/` link, not filtered); a title with `&quot;` |
+
+What the real data shows, and the adapter relies on: the feed-level
+`yt:channelId` has NO `UC` prefix, but every entry's `yt:channelId` has it;
+all `published` timestamps use the `+00:00` offset. The endpoint also answers
+404 intermittently for valid channels (hence `FeedNotFoundError`).
+
+The feed for other channels tried (MrBeast, PewDiePie, Kurzgesagt, Marques
+Brownlee) also used `+00:00` only, so no real feed with another offset was
+found.
+
+## Synthetic (not recordings)
+
+Cases real data cannot give are built in memory in `test_feed.py`
+(`entry_xml`/`feed_xml`): a `-07:00`/`+02:30` offset, missing or unparseable
+`published`, wrong or bare entry channel ID, malformed XML, DOCTYPE/ENTITY,
+oversize body, invalid video IDs, duplicates. These are all synthetic.
