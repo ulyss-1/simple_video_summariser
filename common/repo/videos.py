@@ -6,7 +6,7 @@ from typing import Any
 
 import psycopg
 
-from common.models import VideoMeta
+from common.models import FeedEntry, VideoMeta
 from common.repo._hygiene import clean_text
 
 _UNAVAILABLE_REASONS = {"removed", "private", "geoblocked", "agegated"}
@@ -105,3 +105,32 @@ def record_unavailable(
         """,
         (video_id, origin, reason),
     )
+
+
+def insert_discovered_video(conn: psycopg.Connection[Any], entry: FeedEntry, origin: str) -> bool:
+    """Insert the video ``entry`` lists, unless it already has a row.
+
+    Returns whether a row was inserted. An existing row is left exactly as it is
+    (``origin``, ``title``, ``description``, ``discovered_at`` and the rest), which is
+    what makes polling the same feed twice harmless. ``upsert_video`` is the wrong tool
+    here: it needs full metadata and overwrites ``title`` and ``description``.
+
+    A missing ``channels`` row is created inactive, as ``upsert_video`` does.
+    """
+    conn.execute(
+        """
+        INSERT INTO channels (channel_id, active)
+        VALUES (%s, false)
+        ON CONFLICT (channel_id) DO NOTHING
+        """,
+        (entry.channel_id,),
+    )
+    cur = conn.execute(
+        """
+        INSERT INTO videos (video_id, channel_id, title, published_at, origin)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (video_id) DO NOTHING
+        """,
+        (entry.video_id, entry.channel_id, clean_text(entry.title), entry.published_at, origin),
+    )
+    return cur.rowcount == 1

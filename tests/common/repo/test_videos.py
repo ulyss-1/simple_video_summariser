@@ -7,10 +7,11 @@ from datetime import UTC, datetime
 import psycopg
 import pytest
 
-from common.models import VideoMeta
+from common.models import FeedEntry, VideoMeta
 from common.repo.channels import add_channel, list_active_channels
 from common.repo.videos import (
     clear_unavailable,
+    insert_discovered_video,
     mark_unavailable,
     record_unavailable,
     upsert_video,
@@ -209,3 +210,90 @@ def test_upsert_video_fills_a_missing_channel_on_a_stub_row(conn: psycopg.Connec
 
     row = conn.execute("SELECT channel_id FROM videos WHERE video_id = 'abc12345678'").fetchone()
     assert row == ("UCreal",)
+
+
+def make_entry(**overrides: object) -> FeedEntry:
+    defaults: dict[str, object] = {
+        "video_id": "feed1234567",
+        "channel_id": "UCfeed",
+        "title": "Feed title",
+        "published_at": datetime(2026, 3, 1, 12, 0, tzinfo=UTC),
+    }
+    defaults.update(overrides)
+    return FeedEntry(**defaults)  # type: ignore[arg-type]
+
+
+def test_insert_discovered_video_inserts_a_new_row(conn: psycopg.Connection) -> None:
+    inserted = insert_discovered_video(conn, make_entry(), origin="rss")
+
+    assert inserted is True
+    row = conn.execute(
+        """
+        SELECT channel_id, title, published_at, origin, description, duration_sec
+        FROM videos WHERE video_id = %s
+        """,
+        ("feed1234567",),
+    ).fetchone()
+    assert row == (
+        "UCfeed",
+        "Feed title",
+        datetime(2026, 3, 1, 12, 0, tzinfo=UTC),
+        "rss",
+        None,
+        None,
+    )
+
+
+def test_insert_discovered_video_leaves_an_existing_row_untouched(
+    conn: psycopg.Connection,
+) -> None:
+    upsert_video(
+        conn,
+        make_meta(video_id="feed1234567", channel_id="UCfeed", title="Full title"),
+        origin="adhoc",
+    )
+    before = conn.execute(
+        "SELECT * FROM videos WHERE video_id = %s", ("feed1234567",)
+    ).fetchone()
+
+    inserted = insert_discovered_video(
+        conn, make_entry(title="Other title"), origin="rss"
+    )
+
+    assert inserted is False
+    after = conn.execute(
+        "SELECT * FROM videos WHERE video_id = %s", ("feed1234567",)
+    ).fetchone()
+    assert after == before
+
+
+def test_insert_discovered_video_creates_a_missing_channel_inactive(
+    conn: psycopg.Connection,
+) -> None:
+    insert_discovered_video(conn, make_entry(channel_id="UCnew"), origin="rss")
+
+    assert conn.execute(
+        "SELECT active FROM channels WHERE channel_id = %s", ("UCnew",)
+    ).fetchone() == (False,)
+
+
+def test_insert_discovered_video_keeps_an_existing_channel_row(
+    conn: psycopg.Connection,
+) -> None:
+    add_channel(conn, "UCfeed", "Kept title")
+
+    insert_discovered_video(conn, make_entry(), origin="rss")
+
+    assert conn.execute(
+        "SELECT active, title FROM channels WHERE channel_id = %s", ("UCfeed",)
+    ).fetchone() == (True, "Kept title")
+
+
+def test_insert_discovered_video_strips_nul_bytes_from_the_title(
+    conn: psycopg.Connection,
+) -> None:
+    insert_discovered_video(conn, make_entry(title="a\x00b"), origin="rss")
+
+    assert conn.execute(
+        "SELECT title FROM videos WHERE video_id = %s", ("feed1234567",)
+    ).fetchone() == ("ab",)
