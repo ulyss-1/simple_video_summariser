@@ -3,6 +3,25 @@
 Status of the groomed backlog (GitHub issues #1–#20), worked through per
 `_docs/process.md`. An issue is closed only after a QA PASS comment.
 
+## Checkpoint 4 — 2026-09-28, batch 2 (#21-#40) done except #39/#40; #41-#60 groomed
+
+Closed after QA PASS since checkpoint 3: #24 Ollama adapter (defines the
+shared `Summarizer` port), #25 Anthropic adapter, #26 RSS feed, #27 catalog,
+#28 ingest handler, #29 transcribe handler, #30 analyze handler, #31 CLI,
+#32 transcriber entrypoint, #33 analyzer entrypoint, #34 polling, #35 reaper,
+#37 re-analysis sweep, #38 planner entrypoint, #55 backend image, #56
+speech-to-text image. Several needed a second QA round (#26, #27, #31: real
+recordings instead of hand-written fixtures; #31: whisper check before audio
+work).
+
+Batch 2 remainder: #39 API skeleton and #40 submission endpoints are groomed
+but held for the owner's approval of `fastapi`, `uvicorn`, `httpx`.
+
+Batch 3 (#41-#60) is groomed (`groomed` label, follow-ups #109-#142 filed).
+Only #55 and #56 could be built now. Blocked on the owner: the API
+dependencies (#39-#46, #60), npm dependencies and a router/visual-direction
+decision for the frontend (#47-#54), #57-#59 (need #47/#39/#56).
+
 ## Checkpoint 3 — 2026-09-28, batch 2 (#21-#40): 5 closed
 
 All 20 issues of batch 2 (#21-#40) were groomed first; follow-ups #80-#105
