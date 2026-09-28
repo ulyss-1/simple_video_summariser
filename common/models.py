@@ -37,6 +37,28 @@ class MetadataSource(Protocol):
     def fetch(self, video_id: str) -> VideoMeta: ...
 
 
+# FeedEntry and ChannelFeed belong to #26 (channel RSS adapter,
+# adapters/youtube/feed.py). #34 (the planner) consumes the port; its
+# grooming note calls the Protocol FeedSource, kept below as an alias.
+
+
+@dataclass(frozen=True, slots=True)
+class FeedEntry:
+    """One video listed in a channel's RSS feed; ``published_at`` is aware UTC."""
+
+    video_id: str
+    channel_id: str
+    title: str
+    published_at: datetime
+
+
+class ChannelFeed(Protocol):
+    def fetch(self, channel_id: str) -> list[FeedEntry]: ...
+
+
+FeedSource = ChannelFeed
+
+
 # Channel, Transcript, Chunk, Analysis, Topic, Claim and Quote, below,
 # belong to #14 (the repository layer, common/repo/). They mirror the
 # tables in architecture.md §6 one-for-one; common/repo/ functions build
