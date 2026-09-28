@@ -98,6 +98,29 @@ def save_analysis(conn: psycopg.Connection[Any], analysis: Analysis) -> int:
     return analysis_id
 
 
+def analysis_exists(
+    conn: psycopg.Connection[Any],
+    video_id: str,
+    transcript_id: int,
+    chunk_strategy: str,
+    model: str,
+    prompt_version: str,
+) -> bool:
+    """Whether an analysis with exactly this five-part key is already stored."""
+    row = conn.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM analyses
+            WHERE video_id = %s AND transcript_id = %s AND chunk_strategy = %s
+              AND model = %s AND prompt_version = %s
+        )
+        """,
+        (video_id, transcript_id, chunk_strategy, model, prompt_version),
+    ).fetchone()
+    assert row is not None
+    return bool(row[0])
+
+
 def latest_analysis(conn: psycopg.Connection[Any], video_id: str) -> Analysis | None:
     """The newest analysis for ``video_id``, with its children populated.
 

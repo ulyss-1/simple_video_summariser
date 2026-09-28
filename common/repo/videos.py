@@ -143,3 +143,35 @@ def video_exists(conn: psycopg.Connection[Any], video_id: str) -> bool:
     ).fetchone()
     assert row is not None
     return bool(row[0])
+
+
+def get_video_meta(conn: psycopg.Connection[Any], video_id: str) -> VideoMeta | None:
+    """The stored fields of ``video_id`` as a ``VideoMeta``, or ``None`` without a row.
+
+    Fields the ``videos`` table does not store (``language``, ``live_status``, the
+    subtitle language lists) are ``None`` or ``()``. NULL text columns (a stub row
+    from ``record_unavailable``) come back as empty strings.
+    """
+    row = conn.execute(
+        """
+        SELECT video_id, channel_id, title, description, duration_sec, published_at
+        FROM videos
+        WHERE video_id = %s
+        """,
+        (video_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    found_id, channel_id, title, description, duration_sec, published_at = row
+    return VideoMeta(
+        video_id=found_id,
+        channel_id=channel_id or "",
+        title=title or "",
+        description=description or "",
+        duration_sec=duration_sec,
+        published_at=published_at,
+        language=None,
+        live_status=None,
+        manual_subtitle_langs=(),
+        auto_caption_langs=(),
+    )
