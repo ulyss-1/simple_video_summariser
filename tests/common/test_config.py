@@ -153,7 +153,7 @@ def test_every_architecture_variable_is_a_field_except_transcriber_cpus() -> Non
         "AUDIO_MAX_GB", "POLL_INTERVAL_SEC", "HEARTBEAT_SEC",
         "REAP_AFTER_SEC", "MAX_ATTEMPTS_TRANSCRIBE", "LOG_LEVEL",
         "LOG_FORMAT", "AUDIO_DIR", "YTDLP_COOKIE_FILE",
-        "WORKER_SHUTDOWN_GRACE_SEC",
+        "WORKER_SHUTDOWN_GRACE_SEC", "REAP_INTERVAL_SEC",
     }  # fmt: skip
 
     assert set(Settings.model_fields) == expected
@@ -430,6 +430,25 @@ def test_worker_shutdown_grace_of_one_second_is_accepted() -> None:
     s = build_settings(DATABASE_URL=DB_URL, WORKER_SHUTDOWN_GRACE_SEC=1)
 
     assert s.WORKER_SHUTDOWN_GRACE_SEC == 1
+
+
+def test_reap_interval_defaults_to_one_minute() -> None:
+    assert build_settings(DATABASE_URL=DB_URL).REAP_INTERVAL_SEC == 60
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "abc", "1.5"])
+def test_reap_interval_must_be_a_positive_int(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    monkeypatch.setenv("DATABASE_URL", DB_URL)
+    monkeypatch.setenv("REAP_INTERVAL_SEC", value)
+
+    with pytest.raises(ValidationError) as exc_info:
+        get_settings()
+
+    assert _errors_for(exc_info.value, "REAP_INTERVAL_SEC")
+
+
+def test_reap_interval_of_one_second_is_accepted() -> None:
+    assert build_settings(DATABASE_URL=DB_URL, REAP_INTERVAL_SEC=1).REAP_INTERVAL_SEC == 1
 
 
 def test_non_numeric_value_error_names_the_variable(

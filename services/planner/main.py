@@ -1,0 +1,198 @@
+"""Planner service entrypoint (issue #38; architecture.md §1, §11.1).
+
+``python -m services.planner.main`` runs the four periodic maintenance tasks
+in one long-lived process, each on its own interval:
+
+============================  =====================  =============================
+task                          interval               what it does
+============================  =====================  =============================
+``reap``                      ``REAP_INTERVAL_SEC``  hand back jobs of dead workers
+``audio_retention``           ``POLL_INTERVAL_SEC``  expire / cap / clean audio
+``reanalysis_sweep``          ``POLL_INTERVAL_SEC``  enqueue analyses for a new prompt
+``poll_channels``             ``POLL_INTERVAL_SEC``  discover new videos from RSS
+============================  =====================  =============================
+
+Every task runs once at startup, in that order (``PROMPT_VERSION`` changes
+only through a restart, so the sweep must fire on start). Scheduling lives in
+``services.planner.scheduler``; this module wires the tasks, owns the lock
+keys and the CLI.
+
+**Exactly one replica.** The planner must run as exactly one replica
+(architecture §1, §11.1): the tasks are idempotent, but two planners would
+poll every feed and sweep twice for no gain. Each task therefore runs under a
+session-level PostgreSQL advisory lock on a dedicated connection, and a second
+planner skips a locked task with a WARNING instead of doing it twice. The
+locks are defence in depth that make an accidental second replica harmless and
+visible; they are not permission to scale the service out. If the process
+dies Postgres releases the locks with its connection, so nothing needs cleanup.
+
+``--once`` runs every task once and exits 0 (all ``ok`` or ``skipped_locked``)
+or 1 (any task raised), so an operator can trigger a sweep by hand::
+
+    docker compose run --rm planner python -m services.planner.main --once
+
+The planner never runs migrations (AGENTS.md).
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
+from typing import Any
+
+import psycopg
+import structlog
+from pydantic import ValidationError
+
+from adapters.youtube.feed import YouTubeFeed
+from common.config import Settings, get_settings
+from common.db import connect
+from common.logging import configure_logging
+from common.queue import PostgresQueue
+from services.planner.poll import poll_channels
+from services.planner.reaper import reap_stale_jobs
+from services.planner.retention import enforce_audio_retention, max_bytes_from_gb
+from services.planner.scheduler import Scheduler, Task
+from services.planner.sweep import run_reanalysis_sweep
+
+_log = structlog.get_logger(__name__)
+
+#: ``pg_try_advisory_lock(namespace, task_id)`` keys. Fixed constants, never
+#: derived from ``hash()``, which differs per process and would give two
+#: replicas different keys. The namespace spells "YTPD" in ASCII.
+LOCK_NAMESPACE = 0x59545044
+LOCK_KEYS: dict[str, tuple[int, int]] = {
+    "reap": (LOCK_NAMESPACE, 1),
+    "audio_retention": (LOCK_NAMESPACE, 2),
+    "reanalysis_sweep": (LOCK_NAMESPACE, 3),
+    "poll_channels": (LOCK_NAMESPACE, 4),
+}
+
+Connect = Callable[[], psycopg.Connection[Any]]
+
+
+class PostgresAdvisoryLocks:
+    """Session-level advisory locks on one dedicated, lazily opened connection.
+
+    The connection is autocommit, so no transaction lingers between calls.
+    ``reset()`` and ``close()`` drop it; Postgres then frees every lock the
+    session held.
+    """
+
+    def __init__(self, connect: Connect) -> None:
+        self._connect = connect
+        self._conn: psycopg.Connection[Any] | None = None
+
+    def try_lock(self, name: str) -> bool:
+        conn = self._ensure_connection()
+        row = conn.execute("SELECT pg_try_advisory_lock(%s, %s)", LOCK_KEYS[name]).fetchone()
+        return bool(row is not None and row[0])
+
+    def release(self, name: str) -> None:
+        conn = self._ensure_connection()
+        row = conn.execute("SELECT pg_advisory_unlock(%s, %s)", LOCK_KEYS[name]).fetchone()
+        if row is None or not row[0]:
+            _log.warning("planner lock was not held at release", task=name)
+
+    def reset(self) -> None:
+        self.close()
+
+    def close(self) -> None:
+        conn, self._conn = self._conn, None
+        if conn is not None:
+            try:
+                conn.close()
+            except psycopg.Error:
+                pass
+
+    def _ensure_connection(self) -> psycopg.Connection[Any]:
+        if self._conn is None:
+            conn = self._connect()
+            conn.autocommit = True
+            self._conn = conn
+        return self._conn
+
+
+def build_registry(settings: Settings, connect: Connect) -> list[Task]:
+    """The ordered task registry. Opens no connection; each run opens its own."""
+
+    def with_conn(work: Callable[[psycopg.Connection[Any]], int | None]) -> Callable[[], int | None]:
+        def run() -> int | None:
+            conn = connect()
+            try:
+                return work(conn)
+            finally:
+                conn.close()
+
+        return run
+
+    def reap(conn: psycopg.Connection[Any]) -> int:
+        return reap_stale_jobs(PostgresQueue(conn, settings=settings), settings)
+
+    def audio_retention(conn: psycopg.Connection[Any]) -> int:
+        report = enforce_audio_retention(
+            conn,
+            settings.AUDIO_DIR,
+            max_bytes=max_bytes_from_gb(settings.AUDIO_MAX_GB),
+            now=datetime.now(UTC),
+        )
+        return report.expired_deleted + report.evicted + report.orphans_deleted
+
+    def reanalysis_sweep(conn: psycopg.Connection[Any]) -> int:
+        return run_reanalysis_sweep(
+            conn,
+            PostgresQueue(conn, settings=settings),
+            prompt_version=settings.PROMPT_VERSION,
+            summarizer_name=settings.SUMMARIZER,
+        )
+
+    def poll(conn: psycopg.Connection[Any]) -> int:
+        result = poll_channels(conn, YouTubeFeed(), PostgresQueue(conn, settings=settings))
+        return result.jobs_enqueued
+
+    return [
+        Task("reap", settings.REAP_INTERVAL_SEC, with_conn(reap)),
+        Task("audio_retention", settings.POLL_INTERVAL_SEC, with_conn(audio_retention)),
+        Task("reanalysis_sweep", settings.POLL_INTERVAL_SEC, with_conn(reanalysis_sweep)),
+        Task("poll_channels", settings.POLL_INTERVAL_SEC, with_conn(poll)),
+    ]
+
+
+def build_scheduler(settings: Settings) -> Scheduler:
+    return Scheduler(build_registry(settings, connect), PostgresAdvisoryLocks(connect))
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    scheduler_factory: Callable[[Settings], Scheduler] = build_scheduler,
+) -> int:
+    parser = argparse.ArgumentParser(
+        prog="python -m services.planner.main",
+        description="Run the planner's periodic tasks (exactly one replica).",
+    )
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="run every task once in registry order and exit (1 if any task raised)",
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        settings = get_settings()
+    except ValidationError as exc:
+        print(f"planner: invalid settings:\n{exc}", file=sys.stderr)
+        return 1
+    configure_logging(settings)
+
+    scheduler = scheduler_factory(settings)
+    if args.once:
+        return 0 if scheduler.run_once() else 1
+    scheduler.run()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

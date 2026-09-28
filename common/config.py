@@ -112,6 +112,9 @@ class Settings(BaseSettings):
     POLL_INTERVAL_SEC: PositiveInt = 3600
     HEARTBEAT_SEC: PositiveInt = 60
     REAP_AFTER_SEC: PositiveInt = 300
+    # How often the planner looks for stale jobs (#38); much shorter than
+    # POLL_INTERVAL_SEC so a crashed worker's job is not stranded for an hour.
+    REAP_INTERVAL_SEC: PositiveInt = 60
     MAX_ATTEMPTS_TRANSCRIBE: PositiveInt = 2
     WORKER_SHUTDOWN_GRACE_SEC: PositiveInt = 20
 
