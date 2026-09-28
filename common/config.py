@@ -86,6 +86,10 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: SecretStr | None = None
     ANTHROPIC_MODEL: str = "claude-haiku-4-5"
     ANTHROPIC_BATCH: bool = True
+    ANTHROPIC_MAX_TOKENS: PositiveInt = 4096
+    ANTHROPIC_BATCH_POLL_SEC: PositiveInt = 30
+    # A batch usually ends within minutes; give up (and cancel) after an hour.
+    ANTHROPIC_BATCH_MAX_WAIT_SEC: PositiveInt = 3600
 
     # Becomes a directory name under prompts/, so it must be a plain slug.
     PROMPT_VERSION: str = Field(default="v1", pattern=r"^[a-z0-9_-]+$")

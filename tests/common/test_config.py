@@ -114,6 +114,9 @@ def test_defaults_match_the_architecture_table() -> None:
     assert s.ANTHROPIC_API_KEY is None
     assert s.ANTHROPIC_MODEL == "claude-haiku-4-5"
     assert s.ANTHROPIC_BATCH is True
+    assert s.ANTHROPIC_MAX_TOKENS == 4096
+    assert s.ANTHROPIC_BATCH_POLL_SEC == 30
+    assert s.ANTHROPIC_BATCH_MAX_WAIT_SEC == 3600
     assert s.PROMPT_VERSION == "v1"
     assert s.CHUNK_SEC == 900
     assert s.OVERLAP_SEC == 60
@@ -142,6 +145,8 @@ def test_every_architecture_variable_is_a_field_except_transcriber_cpus() -> Non
         "DATABASE_URL", "SUMMARIZER", "OLLAMA_MODEL", "OLLAMA_HOST",
         "OLLAMA_NUM_CTX", "OLLAMA_TIMEOUT_SEC",
         "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "ANTHROPIC_BATCH",
+        "ANTHROPIC_MAX_TOKENS", "ANTHROPIC_BATCH_POLL_SEC",
+        "ANTHROPIC_BATCH_MAX_WAIT_SEC",
         "PROMPT_VERSION", "CHUNK_SEC", "OVERLAP_SEC", "WHISPER_MODEL",
         "WHISPER_COMPUTE", "WHISPER_THREADS", "PREFER_WHISPER",
         "AUTO_CAPTION_FALLBACK", "AUDIO_KEEP", "AUDIO_TTL_DAYS",
@@ -437,6 +442,46 @@ def test_non_numeric_value_error_names_the_variable(
         get_settings()
 
     assert _errors_for(exc_info.value, "HEARTBEAT_SEC")
+
+
+# --- Anthropic ----------------------------------------------------------------
+
+ANTHROPIC_NUMERIC = [
+    "ANTHROPIC_MAX_TOKENS",
+    "ANTHROPIC_BATCH_POLL_SEC",
+    "ANTHROPIC_BATCH_MAX_WAIT_SEC",
+]
+
+
+@pytest.mark.parametrize("name", ANTHROPIC_NUMERIC)
+@pytest.mark.parametrize("value", ["0", "-1", "many"])
+def test_anthropic_numeric_settings_must_be_positive_integers(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", DB_URL)
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValidationError) as exc_info:
+        get_settings()
+
+    assert _errors_for(exc_info.value, name)
+
+
+def test_anthropic_numeric_settings_are_read_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", DB_URL)
+    monkeypatch.setenv("ANTHROPIC_MAX_TOKENS", "1000")
+    monkeypatch.setenv("ANTHROPIC_BATCH_POLL_SEC", "5")
+    monkeypatch.setenv("ANTHROPIC_BATCH_MAX_WAIT_SEC", "60")
+
+    s = get_settings()
+
+    assert (s.ANTHROPIC_MAX_TOKENS, s.ANTHROPIC_BATCH_POLL_SEC, s.ANTHROPIC_BATCH_MAX_WAIT_SEC) == (
+        1000,
+        5,
+        60,
+    )
 
 
 # --- Ollama -------------------------------------------------------------------
