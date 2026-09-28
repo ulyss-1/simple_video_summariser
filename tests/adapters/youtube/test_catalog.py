@@ -474,13 +474,24 @@ def _cases() -> list[str]:
 
 
 def test_the_recorded_missing_playlist_cases_exist() -> None:
-    assert len(_cases()) >= 2
+    assert len(_cases()) >= 3
 
 
 @pytest.mark.parametrize("stderr", _cases())
 def test_a_missing_or_upload_less_channel_is_permanently_removed(stderr: str) -> None:
     with pytest.raises(PermanentSourceError) as excinfo:
         failing(stderr).list_uploads(CHANNEL, limit=5)
+    assert excinfo.value.reason == UnavailableReason.REMOVED
+
+
+def test_a_terminated_channel_is_permanently_removed() -> None:
+    # Recorded live (cases.toml): the uploads playlist of the terminated channel
+    # UCx7T6qYK4VaP2-OhorrFS3Q says "The playlist does not exist", exactly like a
+    # missing channel.
+    recorded = [c for c in _cases() if "UUx7T6qYK4VaP2-OhorrFS3Q" in c]
+    assert len(recorded) == 1
+    with pytest.raises(PermanentSourceError) as excinfo:
+        failing(recorded[0]).list_uploads("UCx7T6qYK4VaP2-OhorrFS3Q", limit=5)
     assert excinfo.value.reason == UnavailableReason.REMOVED
 
 

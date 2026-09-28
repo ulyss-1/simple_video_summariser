@@ -7,10 +7,13 @@ without its ``UC``). It never fetches per-video metadata, and it lists at most
 dropped, not trusted.
 
 A channel that has no uploads playlist gets no special treatment here: yt-dlp
-reports "The playlist does not exist" both for a channel ID that does not exist
-and for a real channel with no uploads (checked live on YouTube's own "Sports"
-channel with yt-dlp 2026.08.19). Both raise ``PermanentSourceError(REMOVED)``;
-an existing but empty playlist returns a catalog with no entries.
+reports "The playlist does not exist" for a channel ID that does not exist, for a
+terminated channel, and for real channels with no uploads (checked live with
+yt-dlp 2026.08.19 on the terminated channel UCx7T6qYK4VaP2-OhorrFS3Q and on
+YouTube's own "Sports", "Music" and "Gaming" channels). All raise
+``PermanentSourceError(REMOVED)``. No real channel was found whose uploads
+playlist exists with zero entries; if yt-dlp returns one, the catalog has no
+entries.
 """
 
 from __future__ import annotations

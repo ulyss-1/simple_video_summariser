@@ -313,3 +313,16 @@ ERROR: [youtube:tab] UUEgdi0XIXXZ-qJOFPf4JSKw: YouTube said: The playlist does n
 returncode = 1
 error_class = "PERMANENT_SOURCE"
 reason = "removed"
+
+[[case]]
+# live run on 2026-09-28, yt-dlp 2026.08.19, https://www.youtube.com/playlist?list=UUx7T6qYK4VaP2-OhorrFS3Q with the same
+# flags. UCx7T6qYK4VaP2-OhorrFS3Q is the terminated channel "phaumann" (named in yt-dlp issue #9367). Its uploads playlist
+# gives the same line as a missing channel, so a terminated channel is REMOVED by the same pattern. (The channel URL
+# https://www.youtube.com/channel/UCx7T6qYK4VaP2-OhorrFS3Q says "This channel was removed because it violated our Community
+# Guidelines." instead; the catalog never asks for that URL, so that line is not a case.)
+stderr = '''
+ERROR: [youtube:tab] UUx7T6qYK4VaP2-OhorrFS3Q: YouTube said: The playlist does not exist.
+'''
+returncode = 1
+error_class = "PERMANENT_SOURCE"
+reason = "removed"
