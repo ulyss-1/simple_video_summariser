@@ -9,7 +9,12 @@ import pytest
 
 from common.models import VideoMeta
 from common.repo.channels import add_channel, list_active_channels
-from common.repo.videos import mark_unavailable, upsert_video
+from common.repo.videos import (
+    clear_unavailable,
+    mark_unavailable,
+    record_unavailable,
+    upsert_video,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -147,3 +152,60 @@ def test_mark_unavailable_rejects_any_other_value(conn: psycopg.Connection) -> N
 
     with pytest.raises(ValueError):
         mark_unavailable(conn, "abc12345678", "banned")
+
+
+# --- clear_unavailable / record_unavailable (issue #28) -------------------------
+
+
+def test_clear_unavailable_resets_the_marker_to_null(conn: psycopg.Connection) -> None:
+    upsert_video(conn, make_meta(), origin="adhoc")
+    mark_unavailable(conn, "abc12345678", "private")
+
+    clear_unavailable(conn, "abc12345678")
+
+    row = conn.execute("SELECT unavailable FROM videos WHERE video_id = 'abc12345678'").fetchone()
+    assert row == (None,)
+
+
+def test_clear_unavailable_on_an_unknown_video_changes_nothing(conn: psycopg.Connection) -> None:
+    clear_unavailable(conn, "abc12345678")
+
+    assert conn.execute("SELECT count(*) FROM videos").fetchone() == (0,)
+
+
+def test_record_unavailable_creates_a_stub_row_without_a_channel(
+    conn: psycopg.Connection,
+) -> None:
+    record_unavailable(conn, "abc12345678", "removed", origin="rss")
+
+    row = conn.execute(
+        "SELECT channel_id, origin, unavailable, title FROM videos WHERE video_id = 'abc12345678'"
+    ).fetchone()
+    assert row == (None, "rss", "removed", None)
+
+
+def test_record_unavailable_updates_an_existing_row_and_keeps_its_origin(
+    conn: psycopg.Connection,
+) -> None:
+    upsert_video(conn, make_meta(), origin="backfill")
+
+    record_unavailable(conn, "abc12345678", "geoblocked", origin="adhoc")
+
+    row = conn.execute(
+        "SELECT origin, unavailable, title FROM videos WHERE video_id = 'abc12345678'"
+    ).fetchone()
+    assert row == ("backfill", "geoblocked", "Title")
+
+
+def test_record_unavailable_rejects_an_unknown_reason(conn: psycopg.Connection) -> None:
+    with pytest.raises(ValueError, match="unavailable reason"):
+        record_unavailable(conn, "abc12345678", "sad", origin="adhoc")
+
+
+def test_upsert_video_fills_a_missing_channel_on_a_stub_row(conn: psycopg.Connection) -> None:
+    record_unavailable(conn, "abc12345678", "private", origin="adhoc")
+
+    upsert_video(conn, make_meta(channel_id="UCreal"), origin="adhoc")
+
+    row = conn.execute("SELECT channel_id FROM videos WHERE video_id = 'abc12345678'").fetchone()
+    assert row == ("UCreal",)

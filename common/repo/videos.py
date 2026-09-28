@@ -16,7 +16,8 @@ def upsert_video(conn: psycopg.Connection[Any], meta: VideoMeta, origin: str) ->
     """Insert ``meta`` as a video, or update its mutable fields on a later call.
 
     ``title``, ``duration_sec``, ``published_at`` and ``description`` are
-    refreshed on every call. ``origin`` and ``discovered_at`` are set only
+    refreshed on every call, and a missing ``channel_id`` (a stub row from
+    ``record_unavailable``) is filled in. ``origin`` and ``discovered_at`` are set only
     on the first insert - they record the video's *first* discovery, so a
     later call, even with a different ``origin``, never changes them.
 
@@ -39,6 +40,7 @@ def upsert_video(conn: psycopg.Connection[Any], meta: VideoMeta, origin: str) ->
                              published_at, description, origin)
         VALUES (%s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (video_id) DO UPDATE SET
+            channel_id   = COALESCE(videos.channel_id, EXCLUDED.channel_id),
             title        = EXCLUDED.title,
             duration_sec = EXCLUDED.duration_sec,
             published_at = EXCLUDED.published_at,
@@ -56,17 +58,50 @@ def upsert_video(conn: psycopg.Connection[Any], meta: VideoMeta, origin: str) ->
     )
 
 
+def _check_reason(reason: str) -> None:
+    if reason not in _UNAVAILABLE_REASONS:
+        raise ValueError(
+            f"unavailable reason must be one of {sorted(_UNAVAILABLE_REASONS)}, got {reason!r}"
+        )
+
+
 def mark_unavailable(conn: psycopg.Connection[Any], video_id: str, reason: str) -> None:
     """Record why ``video_id`` can no longer be fetched.
 
     ``reason`` must be one of ``removed``, ``private``, ``geoblocked`` or
     ``agegated``; anything else raises ``ValueError``.
     """
-    if reason not in _UNAVAILABLE_REASONS:
-        raise ValueError(
-            f"unavailable reason must be one of {sorted(_UNAVAILABLE_REASONS)}, got {reason!r}"
-        )
+    _check_reason(reason)
     conn.execute(
         "UPDATE videos SET unavailable = %s WHERE video_id = %s",
         (reason, video_id),
+    )
+
+
+def clear_unavailable(conn: psycopg.Connection[Any], video_id: str) -> None:
+    """Reset ``videos.unavailable`` to NULL, e.g. a private video went public.
+
+    A no-op when ``video_id`` has no row.
+    """
+    conn.execute("UPDATE videos SET unavailable = NULL WHERE video_id = %s", (video_id,))
+
+
+def record_unavailable(
+    conn: psycopg.Connection[Any], video_id: str, reason: str, *, origin: str
+) -> None:
+    """Mark ``video_id`` unavailable, creating a stub row if it has none.
+
+    The stub has a NULL ``channel_id`` and the given ``origin`` (first
+    ingest of an already-removed video). An existing row keeps its
+    ``origin`` and metadata; only ``unavailable`` changes. ``reason`` is
+    validated like ``mark_unavailable``.
+    """
+    _check_reason(reason)
+    conn.execute(
+        """
+        INSERT INTO videos (video_id, origin, unavailable)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (video_id) DO UPDATE SET unavailable = EXCLUDED.unavailable
+        """,
+        (video_id, origin, reason),
     )

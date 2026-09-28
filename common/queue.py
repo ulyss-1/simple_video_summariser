@@ -48,6 +48,14 @@ _logger = logging.getLogger(__name__)
 #: excluded here.
 _VALID_KINDS = frozenset({"ingest", "transcribe", "analyze"})
 
+
+def analyze_dedupe_key(prompt_version: str, summarizer: str) -> str:
+    """The ``analyze`` job dedupe key, ``"<prompt_version>:<summarizer>"`` (C1).
+
+    The one place it is built; ingest, transcribe and the re-analysis sweep all use it.
+    """
+    return f"{prompt_version}:{summarizer}"
+
 #: Max attempts per kind, before the error class's own max is applied
 #: (architecture.md §5, Backoff). ``transcribe``'s comes from settings
 #: instead, since it is operator-tunable (MAX_ATTEMPTS_TRANSCRIBE).
