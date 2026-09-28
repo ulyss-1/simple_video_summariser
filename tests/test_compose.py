@@ -44,14 +44,17 @@ def _top_level_section(compose_text: str, key: str) -> str:
     return "\n".join(lines[start:end])
 
 
-def test_compose_yml_defines_only_the_db_service() -> None:
+def test_compose_yml_defines_only_the_db_and_migrate_services() -> None:
     services_text = _top_level_section(COMPOSE_YML.read_text(), "services")
     service_headers = [
         line
         for line in services_text.splitlines()
-        if line.startswith("  ") and not line.startswith("    ")
+        if line.startswith("  ")
+        and not line.startswith("    ")
+        and not line.lstrip().startswith("#")
     ]
-    assert service_headers == ["  db:"]
+    assert set(service_headers) == {"  db:", "  migrate:"}
+    assert len(service_headers) == 2
 
 
 def test_db_service_uses_postgres_18_alpine_at_least_18_6() -> None:

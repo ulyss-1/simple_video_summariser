@@ -1,0 +1,33 @@
+# Load-bearing, not hygiene (architecture.md 11.5, issue #55): keeps secrets,
+# history, tests and caches out of the build context and out of every layer.
+.git
+**/node_modules
+**/__pycache__
+**/.venv
+*.md
+**/*.md
+tests/
+data/
+
+# Secrets: never inside an image layer (.env.example included).
+.env
+.env*
+**/.env*
+
+# Tool caches and build metadata
+*.egg-info
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.hypothesis
+
+# Local tooling, docs and scripts
+.claude
+.remember
+.vscode
+_docs/
+scripts/
+
+# Windows download markers left by copying from NTFS
+*:Zone.Identifier
+**/*:Zone.Identifier

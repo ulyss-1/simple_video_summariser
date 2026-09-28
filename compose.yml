@@ -1,8 +1,9 @@
 name: ytdigest
 
-# This file defines only the `db` service (task #7). The `migrate` service
-# needs the backend image and moves to #55/#58; `api`, `planner`, `analyzer`,
-# `transcriber` and `web` are added by their own tasks (architecture.md 11.4).
+# This file defines the `db` (task #7) and `migrate` (task #55) services;
+# `migrate` builds and tags the backend image that the other Python services
+# reuse. `api`, `planner`, `analyzer`, `transcriber` and `web` are added by
+# their own tasks (architecture.md 11.4; #58 extends `migrate`).
 # Production deploys use `docker compose -f compose.yml up -d` explicitly, so
 # `compose.override.yml` (dev-only) is never applied by accident.
 
@@ -31,6 +32,20 @@ services:
     networks: [internal]
     logging: *logging
     restart: unless-stopped
+
+  # One-shot: runs `alembic upgrade head` and exits. Migrations never run on
+  # service startup (AGENTS.md -> Rules).
+  migrate:
+    build: {context: ., dockerfile: ops/Dockerfile.backend}
+    image: ytdigest-backend:latest
+    command: alembic upgrade head
+    environment:
+      DATABASE_URL: postgresql://ytdigest:${POSTGRES_PASSWORD}@db:5432/ytdigest
+      LOG_FORMAT: json
+    depends_on: {db: {condition: service_healthy}}
+    networks: [internal]
+    restart: "no"
+    logging: *logging
 
 volumes:
   pgdata:

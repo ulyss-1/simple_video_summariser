@@ -54,3 +54,23 @@ def postgres_dsn(postgres_container: PostgresContainer) -> Iterator[str]:
 def _with_dbname(dsn: str, db_name: str) -> str:
     parts = urlsplit(dsn)
     return urlunsplit(parts._replace(path=f"/{db_name}"))
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Deselect ``@pytest.mark.image`` tests unless ``-m`` names ``image``.
+
+    An image build downloads packages from PyPI and Debian and takes minutes,
+    so it is opt-in (issue #55). Same pattern as the ``whisper`` marker in
+    ``tests/adapters/transcription/conftest.py``: a hook rather than
+    ``addopts``, because ``-m`` is single-valued and a caller's own
+    ``-m "not integration"`` would silently replace an ``addopts`` one.
+    """
+    markexpr = config.getoption("markexpr") or ""
+    if "image" in markexpr:
+        return
+
+    keep = [item for item in items if "image" not in item.keywords]
+    deselected = [item for item in items if "image" in item.keywords]
+    if deselected:
+        items[:] = keep
+        config.hook.pytest_deselected(items=deselected)
