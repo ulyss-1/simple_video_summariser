@@ -1,0 +1,32 @@
+{
+ "_fixture": "Recorded with yt-dlp 2026.08.19 on 2026-09-28: --flat-playlist --dump-single-json --playlist-end 5 https://www.youtube.com/playlist?list=UUXUPKJO5MZQN11PqgIvyuvQ . Trimmed to the keys the parser reads.",
+ "id": "UUXUPKJO5MZQN11PqgIvyuvQ",
+ "playlist_count": 17,
+ "entries": [
+  {
+   "id": "EWvNQjAaOHw",
+   "title": "How I use LLMs",
+   "duration": 7872
+  },
+  {
+   "id": "7xTGNNLPyMI",
+   "title": "Deep Dive into LLMs like ChatGPT",
+   "duration": 12684
+  },
+  {
+   "id": "l8pRSuU81PU",
+   "title": "Let's reproduce GPT-2 (124M)",
+   "duration": 14486
+  },
+  {
+   "id": "zduSFxRajkE",
+   "title": "Let's build the GPT Tokenizer",
+   "duration": 8015
+  },
+  {
+   "id": "zjkBMFhNj_g",
+   "title": "[1hr Talk] Intro to Large Language Models",
+   "duration": 3588
+  }
+ ]
+}

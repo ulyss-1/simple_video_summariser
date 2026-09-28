@@ -1,0 +1,92 @@
+{
+ "_fixture": "Recorded with yt-dlp 2026.08.19 on 2026-09-28: --flat-playlist --dump-single-json (no --playlist-end) https://www.youtube.com/playlist?list=UUXUPKJO5MZQN11PqgIvyuvQ . Trimmed to the keys the parser reads.",
+ "id": "UUXUPKJO5MZQN11PqgIvyuvQ",
+ "playlist_count": 17,
+ "entries": [
+  {
+   "id": "EWvNQjAaOHw",
+   "title": "How I use LLMs",
+   "duration": 7872
+  },
+  {
+   "id": "7xTGNNLPyMI",
+   "title": "Deep Dive into LLMs like ChatGPT",
+   "duration": 12684
+  },
+  {
+   "id": "l8pRSuU81PU",
+   "title": "Let's reproduce GPT-2 (124M)",
+   "duration": 14486
+  },
+  {
+   "id": "zduSFxRajkE",
+   "title": "Let's build the GPT Tokenizer",
+   "duration": 8015
+  },
+  {
+   "id": "zjkBMFhNj_g",
+   "title": "[1hr Talk] Intro to Large Language Models",
+   "duration": 3588
+  },
+  {
+   "id": "kCc8FmEb1nY",
+   "title": "Let's build GPT: from scratch, in code, spelled out.",
+   "duration": 6980
+  },
+  {
+   "id": "t3YJ5hKiMQ0",
+   "title": "Building makemore Part 5: Building a WaveNet",
+   "duration": 3382
+  },
+  {
+   "id": "q8SA3rM6ckI",
+   "title": "Building makemore Part 4: Becoming a Backprop Ninja",
+   "duration": 6924
+  },
+  {
+   "id": "P6sfmUTpUmc",
+   "title": "Building makemore Part 3: Activations & Gradients, BatchNorm",
+   "duration": 6958
+  },
+  {
+   "id": "TCH_1BHY58I",
+   "title": "Building makemore Part 2: MLP",
+   "duration": 4540
+  },
+  {
+   "id": "PaCmpygFfXo",
+   "title": "The spelled-out intro to language modeling: building makemore",
+   "duration": 7065
+  },
+  {
+   "id": "kVpDARqZdrQ",
+   "title": "Stable diffusion dreams of psychedelic faces",
+   "duration": 242
+  },
+  {
+   "id": "2oKjtvYslMY",
+   "title": "Stable diffusion dreams of steampunk brains",
+   "duration": 1166
+  },
+  {
+   "id": "sM9bozW295Q",
+   "title": "Stable diffusion dreams of tattoos",
+   "duration": 106
+  },
+  {
+   "id": "VMj-3S1tku0",
+   "title": "The spelled-out intro to neural networks and backpropagation: building micrograd",
+   "duration": 8752
+  },
+  {
+   "id": "vEnetcj_728",
+   "title": "Stable diffusion dreams of \"blueberry spaghetti\" for one night",
+   "duration": 303
+  },
+  {
+   "id": "Jv1ayv-04H4",
+   "title": "Stable diffusion dreams of steam punk neural networks",
+   "duration": 155
+  }
+ ]
+}

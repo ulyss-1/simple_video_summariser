@@ -292,3 +292,24 @@ ERROR: [Errno 28] No space left on device
 '''
 returncode = 1
 error_class = "RESOURCE"
+
+[[case]]
+# live run on 2026-09-28, yt-dlp 2026.08.19, https://www.youtube.com/playlist?list=UUaaaaaaaaaaaaaaaaaaaaaa with
+# --flat-playlist --dump-single-json --playlist-end 5 --no-warnings (well-formed channel ID, no such channel)
+stderr = '''
+ERROR: [youtube:tab] UUaaaaaaaaaaaaaaaaaaaaaa: YouTube said: The playlist does not exist.
+'''
+returncode = 1
+error_class = "PERMANENT_SOURCE"
+reason = "removed"
+
+[[case]]
+# live run on 2026-09-28, yt-dlp 2026.08.19, https://www.youtube.com/playlist?list=UUEgdi0XIXXZ-qJOFPf4JSKw with the same
+# flags. UCEgdi0XIXXZ-qJOFPf4JSKw is YouTube's real "Sports" channel, which has no uploads: yt-dlp says the same as for a
+# missing channel
+stderr = '''
+ERROR: [youtube:tab] UUEgdi0XIXXZ-qJOFPf4JSKw: YouTube said: The playlist does not exist.
+'''
+returncode = 1
+error_class = "PERMANENT_SOURCE"
+reason = "removed"
