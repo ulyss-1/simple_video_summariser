@@ -1,0 +1,2 @@
+```json
+{"topics": [{"title": "Intro", "start_sec": 100}], "claims": [{"text": "A claim", "speaker": "Lex Fridman", "start_sec": 105}], "quotes": [

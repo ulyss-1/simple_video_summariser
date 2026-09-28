@@ -1,0 +1,12 @@
+{
+  "topics": [{"title": "t", "start_sec": -5}],
+  "claims": [
+    {"text": "before", "start_sec": 10},
+    {"text": "after", "start_sec": "9999.5"},
+    {"text": "inside", "start_sec": 150},
+    {"text": "lower bound", "start_sec": 100},
+    {"text": "upper bound", "start_sec": 200},
+    {"text": "missing"}
+  ],
+  "quotes": []
+}

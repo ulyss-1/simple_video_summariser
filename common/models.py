@@ -125,6 +125,49 @@ class Quote:
     id: int | None = None
 
 
+# RosterSpeaker, Roster and ChunkAnalysis belong to #22 (LLM output schema,
+# adapters/summarize/schema.py). They are what its parsers return, so they
+# live here beside Topic/Claim/Quote, keeping pydantic types out of every
+# public signature.
+
+
+@dataclass(frozen=True, slots=True)
+class RosterSpeaker:
+    """One named speaker from the roster pass (architecture.md 8.1)."""
+
+    name: str
+    role: str  # host | guest | panelist | unknown
+
+
+@dataclass(frozen=True, slots=True)
+class Roster:
+    """The speakers of one video; every later ``speaker`` is one of these or ``unknown``."""
+
+    speakers: tuple[RosterSpeaker, ...]
+
+    def to_json(self) -> dict[str, object]:
+        """The value stored in ``analyses.speaker_roster``."""
+        return {"speakers": [{"name": s.name, "role": s.role} for s in self.speakers]}
+
+
+@dataclass(frozen=True, slots=True)
+class ChunkAnalysis:
+    """A validated per-chunk analysis plus what validation had to repair.
+
+    ``speaker_coercions`` counts speakers replaced by ``unknown`` because they
+    were not in the roster; ``start_sec_clamped`` counts timestamps moved into
+    the chunk span; ``items_dropped`` counts items removed for being blank,
+    over a length cap or past a list cap.
+    """
+
+    topics: tuple[Topic, ...]
+    claims: tuple[Claim, ...]
+    quotes: tuple[Quote, ...]
+    speaker_coercions: int = 0
+    start_sec_clamped: int = 0
+    items_dropped: int = 0
+
+
 @dataclass(frozen=True, slots=True)
 class Analysis:
     """One LLM analysis pass over a video's transcript, with its children.

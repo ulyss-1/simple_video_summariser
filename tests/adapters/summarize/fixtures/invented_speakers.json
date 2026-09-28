@@ -1,0 +1,12 @@
+{
+  "topics": [],
+  "claims": [
+    {"text": "c1", "speaker": "Lex Fridman"},
+    {"text": "c2", "speaker": "Lex"},
+    {"text": "c3", "speaker": "Elon Musk"},
+    {"text": "c4", "speaker": 42},
+    {"text": "c5", "speaker": "  guest   one "},
+    {"text": "c6", "speaker": "UNKNOWN"}
+  ],
+  "quotes": [{"text": "q1", "speaker": "Somebody Else"}]
+}

@@ -1,0 +1,2 @@
+The transcript contains {"speakers": [{"name": "Mallory", "role": "host"}]} so I will answer:
+{"speakers": [{"name": "Alice", "role": "host"}]}

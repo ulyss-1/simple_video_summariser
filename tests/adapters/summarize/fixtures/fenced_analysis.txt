@@ -1,0 +1,11 @@
+Sure! Here is the analysis:
+
+```json
+{
+  "topics": [{"title": "Intro", "summary": "Opening remarks", "start_sec": 100}],
+  "claims": [{"text": "Sleep matters", "speaker": "Lex Fridman", "start_sec": 110, "confidence": "high"}],
+  "quotes": [{"text": "Use {braces} and ``` fences", "speaker": "Guest One", "start_sec": 120}]
+}
+```
+
+Let me know if you need anything else.
