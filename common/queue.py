@@ -49,12 +49,18 @@ _logger = logging.getLogger(__name__)
 _VALID_KINDS = frozenset({"ingest", "transcribe", "analyze"})
 
 
-def analyze_dedupe_key(prompt_version: str, summarizer: str) -> str:
-    """The ``analyze`` job dedupe key, ``"<prompt_version>:<summarizer>"`` (C1).
+def analyze_dedupe_key(prompt_version: str, summarizer_name: str) -> str:
+    """The ``analyze`` job dedupe key, ``"<prompt_version>:<summarizer_name>"`` (C1).
 
     The one place it is built; ingest, transcribe and the re-analysis sweep all use it.
+    Empty parts or parts containing ``:`` raise ``ValueError``, so two different
+    pairs can never produce the same key.
     """
-    return f"{prompt_version}:{summarizer}"
+    for label, part in (("prompt_version", prompt_version), ("summarizer_name", summarizer_name)):
+        if not part or ":" in part:
+            raise ValueError(f"{label} must be non-empty and contain no ':', got {part!r}")
+    return f"{prompt_version}:{summarizer_name}"
+
 
 #: Max attempts per kind, before the error class's own max is applied
 #: (architecture.md §5, Backoff). ``transcribe``'s comes from settings
