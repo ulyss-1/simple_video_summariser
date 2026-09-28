@@ -16,6 +16,13 @@ tests need no real waiting at all (`poll_sec` idle-wait tests inject a
 ``SIGTERM`` to a subprocess to prove the signal handler is really
 installed; a pipe (the child's stdout) makes that test wait on readiness,
 not on a sleep.
+
+The last section holds three ``integration`` tests against a real
+``PostgresQueue`` - the behaviours that depend on genuine Postgres semantics
+(a heartbeat on a second connection, ``Cancelled`` releasing a job without
+spending an attempt, ``heartbeat()`` returning ``False`` for a row another
+worker now owns). They live here, not in a separate file, because issue #13
+names ``tests/common/test_worker.py`` as its only test file.
 """
 
 from __future__ import annotations
@@ -30,10 +37,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import psycopg
+import pytest
 import structlog
+from alembic import command
+from alembic.config import Config
+from psycopg.rows import dict_row
 
+from common.config import Settings, get_settings
 from common.errors import Cancelled
-from common.queue import Job
+from common.queue import Job, PostgresQueue
 from common.worker import JobContext, Worker
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -169,6 +182,7 @@ def make_worker(
     sleep: Callable[[float], None] | None = None,
     rng: random.Random | None = None,
     timer_factory: FakeTimerFactory | None = None,
+    reconnect: Callable[[], FakeQueue] | None = None,
 ) -> Worker:
     return Worker(
         "w1",
@@ -183,6 +197,7 @@ def make_worker(
         sleep=sleep if sleep is not None else (lambda _s: None),
         rng=rng if rng is not None else random.Random(0),
         timer_factory=timer_factory if timer_factory is not None else FakeTimerFactory(),
+        reconnect=reconnect if reconnect is not None else (lambda: queue),
         install_signal_handlers=False,
     )
 
@@ -283,12 +298,75 @@ def test_database_backoff_is_capped_at_max_db_backoff_sec(tmp_path: Path) -> Non
         shutdown_grace_sec=20,
         sleep=sleeps.append,
         max_db_backoff_sec=8,
+        reconnect=lambda: queue,
         install_signal_handlers=False,
         heartbeat_queue_factory=lambda: queue,
     )
     worker.run(max_iterations=10)
 
     assert max(sleeps) <= 8
+
+
+def test_database_outage_reconnects_by_default_and_carries_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no ``reconnect=`` given, the worker opens a fresh connection itself
+    (as it already does for the heartbeat) instead of reusing the dead one."""
+    dead = FakeQueue([ConnectionError("db down"), ConnectionError("still down")])
+    fresh = FakeQueue([make_job(id=9)])
+    fake_conn = object()
+    opened: list[object] = []
+
+    def fake_connect() -> object:
+        opened.append(fake_conn)
+        return fake_conn
+
+    def fake_postgres_queue(conn: object) -> FakeQueue:
+        assert conn is fake_conn
+        return fresh
+
+    monkeypatch.setattr("common.db.connect", fake_connect)
+    monkeypatch.setattr("common.queue.PostgresQueue", fake_postgres_queue)
+    seen: list[int] = []
+
+    worker = Worker(
+        "w1",
+        ["ingest"],
+        lambda job, ctx: seen.append(job.id),
+        dead,
+        liveness_path=tmp_path / "hb",
+        heartbeat_sec=60,
+        shutdown_grace_sec=20,
+        heartbeat_queue_factory=lambda: fresh,
+        sleep=lambda _s: None,
+        timer_factory=FakeTimerFactory(),
+        install_signal_handlers=False,
+    )
+    worker.run(max_iterations=3)
+
+    assert seen == [9]
+    assert len(dead.claim_calls) == 1  # the first claim failed; the dead queue is never reused
+    assert opened  # a new connection was opened by default
+
+
+def test_failed_reconnect_is_retried_on_the_next_iteration(tmp_path: Path) -> None:
+    dead = FakeQueue([ConnectionError("db down"), ConnectionError("still down")])
+    fresh = FakeQueue([make_job(id=3)])
+    reconnect_calls = 0
+
+    def reconnect() -> FakeQueue:
+        nonlocal reconnect_calls
+        reconnect_calls += 1
+        if reconnect_calls == 1:
+            raise ConnectionError("still refusing connections")
+        return fresh
+
+    seen: list[int] = []
+    worker = make_worker(dead, lambda job, ctx: seen.append(job.id), liveness_path=tmp_path / "hb", reconnect=reconnect)
+    worker.run(max_iterations=3)
+
+    assert reconnect_calls == 2
+    assert seen == [3]
 
 
 def test_liveness_file_touched_on_every_loop_iteration(tmp_path: Path) -> None:
@@ -406,15 +484,55 @@ def test_liveness_file_touched_on_heartbeat_tick(tmp_path: Path) -> None:
     job = make_job()
     queue = FakeQueue([job])
     timer_factory = FakeTimerFactory()
+    exists_after_tick: list[bool] = []
 
     def handler(job: Job, ctx: JobContext) -> None:
         liveness.unlink()  # prove the *tick*, not job start, recreates it
-        assert not liveness.exists()
         timer_factory.last.fire()
-        assert liveness.exists()
+        exists_after_tick.append(liveness.exists())
 
     worker = make_worker(queue, handler, liveness_path=liveness, timer_factory=timer_factory)
     worker.run(max_iterations=1)
+
+    assert exists_after_tick == [True]
+
+
+def test_liveness_file_touched_even_when_the_heartbeat_call_raises(tmp_path: Path) -> None:
+    """A run of failed ticks (DB outage during a long handler) must not leave
+    the liveness file stale while the process and handler are alive."""
+    liveness = tmp_path / "hb"
+    queue = FakeQueue([make_job()])
+    timer_factory = FakeTimerFactory()
+    exists_after_tick: list[bool] = []
+
+    def handler(job: Job, ctx: JobContext) -> None:
+        liveness.unlink()
+        queue.heartbeat_result = ConnectionError("db down")
+        timer_factory.last.fire()
+        exists_after_tick.append(liveness.exists())
+
+    worker = make_worker(queue, handler, liveness_path=liveness, timer_factory=timer_factory)
+    worker.run(max_iterations=1)
+
+    assert exists_after_tick == [True]
+
+
+def test_liveness_file_touched_when_the_heartbeat_reports_the_job_reaped(tmp_path: Path) -> None:
+    liveness = tmp_path / "hb"
+    queue = FakeQueue([make_job()])
+    timer_factory = FakeTimerFactory()
+    exists_after_tick: list[bool] = []
+
+    def handler(job: Job, ctx: JobContext) -> None:
+        liveness.unlink()
+        queue.heartbeat_result = False
+        timer_factory.last.fire()
+        exists_after_tick.append(liveness.exists())
+
+    worker = make_worker(queue, handler, liveness_path=liveness, timer_factory=timer_factory)
+    worker.run(max_iterations=1)
+
+    assert exists_after_tick == [True]
 
 
 # ---------------------------------------------------------------------------
@@ -583,3 +701,164 @@ def test_real_sigterm_stops_an_idle_worker(tmp_path: Path) -> None:
 
     assert returncode == 0, remaining_output
     assert "DONE" in remaining_output
+
+
+# ---------------------------------------------------------------------------
+# Against a real PostgresQueue (integration)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def head_dsn(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch) -> str:
+    monkeypatch.setenv("DATABASE_URL", postgres_dsn)
+    get_settings.cache_clear()
+    config = Config(str(REPO_ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(REPO_ROOT / "migrations"))
+    command.upgrade(config, "head")
+    return postgres_dsn
+
+
+@pytest.fixture
+def claim_conn(head_dsn: str) -> Iterator[psycopg.Connection[Any]]:
+    with psycopg.connect(head_dsn, autocommit=True) as connection:
+        yield connection
+
+
+@pytest.fixture
+def heartbeat_conn(head_dsn: str) -> Iterator[psycopg.Connection[Any]]:
+    with psycopg.connect(head_dsn, autocommit=True) as connection:
+        yield connection
+
+
+def _pg_settings() -> Settings:
+    return Settings(DATABASE_URL="postgresql://u:p@h/db")  # type: ignore[arg-type]
+
+
+@pytest.fixture
+def claim_queue(claim_conn: psycopg.Connection[Any]) -> PostgresQueue:
+    return PostgresQueue(claim_conn, settings=_pg_settings())
+
+
+@pytest.fixture
+def heartbeat_queue(heartbeat_conn: psycopg.Connection[Any]) -> PostgresQueue:
+    return PostgresQueue(heartbeat_conn, settings=_pg_settings())
+
+
+def _row(conn: psycopg.Connection[Any], job_id: int) -> dict[str, Any]:
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute("SELECT * FROM jobs WHERE id = %s", (job_id,))
+        row = cur.fetchone()
+    assert row is not None
+    return row
+
+
+def make_pg_worker(
+    claim_queue: PostgresQueue,
+    heartbeat_queue: PostgresQueue,
+    handler: Callable[[Job, JobContext], None],
+    *,
+    liveness_path: Path,
+    timer_factory: FakeTimerFactory,
+) -> Worker:
+    return Worker(
+        "w1",
+        ["ingest"],
+        handler,
+        claim_queue,
+        liveness_path=liveness_path,
+        heartbeat_sec=60,
+        shutdown_grace_sec=20,
+        heartbeat_queue_factory=lambda: heartbeat_queue,
+        timer_factory=timer_factory,
+        sleep=lambda _s: None,
+        install_signal_handlers=False,
+    )
+
+
+@pytest.mark.integration
+def test_heartbeat_updates_heartbeat_at_via_a_connection_distinct_from_claim(
+    claim_queue: PostgresQueue,
+    heartbeat_queue: PostgresQueue,
+    claim_conn: psycopg.Connection[Any],
+    tmp_path: Path,
+) -> None:
+    job_id = claim_queue.enqueue("ingest", "v1")
+    assert job_id is not None
+    timer_factory = FakeTimerFactory()
+    at_claim: dict[str, Any] = {}
+
+    def handler(job: Job, ctx: JobContext) -> None:
+        at_claim["heartbeat_at"] = _row(claim_conn, job_id)["heartbeat_at"]
+        timer_factory.last.fire()
+
+    worker = make_pg_worker(
+        claim_queue, heartbeat_queue, handler, liveness_path=tmp_path / "hb", timer_factory=timer_factory
+    )
+    worker.run(max_iterations=1)
+
+    # The claim connection is autocommit, so a fresh SELECT sees whatever the
+    # heartbeat connection committed, even though claim_queue itself never
+    # issued the UPDATE.
+    after = _row(claim_conn, job_id)["heartbeat_at"]
+    assert at_claim["heartbeat_at"] is not None
+    assert after is not None
+    assert after >= at_claim["heartbeat_at"]
+
+
+@pytest.mark.integration
+def test_grace_expiry_releases_the_job_to_pending_without_spending_an_attempt(
+    claim_queue: PostgresQueue,
+    heartbeat_queue: PostgresQueue,
+    claim_conn: psycopg.Connection[Any],
+    tmp_path: Path,
+) -> None:
+    job_id = claim_queue.enqueue("ingest", "v1")
+    assert job_id is not None
+    timer_factory = FakeTimerFactory()
+
+    def handler(job: Job, ctx: JobContext) -> None:
+        worker.request_shutdown()
+        timer_factory.last.fire()  # grace period expires
+        ctx.check_cancelled()  # raises Cancelled
+
+    worker = make_pg_worker(
+        claim_queue, heartbeat_queue, handler, liveness_path=tmp_path / "hb", timer_factory=timer_factory
+    )
+    attempts_before_claim = _row(claim_conn, job_id)["attempts"]
+    worker.run()  # returns normally: process exit 0
+
+    row = _row(claim_conn, job_id)
+    assert row["state"] == "pending"
+    # claim() itself increments attempts (architecture.md §5); Cancelled must
+    # undo exactly that, leaving it where it started rather than "spent".
+    assert row["attempts"] == attempts_before_claim
+    assert row["locked_by"] is None
+
+
+@pytest.mark.integration
+def test_heartbeat_returns_false_once_the_job_is_genuinely_reaped(
+    claim_queue: PostgresQueue,
+    heartbeat_queue: PostgresQueue,
+    claim_conn: psycopg.Connection[Any],
+    tmp_path: Path,
+) -> None:
+    job_id = claim_queue.enqueue("ingest", "v1")
+    assert job_id is not None
+    timer_factory = FakeTimerFactory()
+    cancelled_seen: list[bool] = []
+
+    def handler(job: Job, ctx: JobContext) -> None:
+        # Simulate the reaper (architecture.md §5) having handed this row to
+        # another worker while this one's heartbeat connection stalled.
+        with claim_conn.cursor() as cur:
+            cur.execute("UPDATE jobs SET locked_by = 'other-worker' WHERE id = %s", (job_id,))
+
+        timer_factory.last.fire()  # this worker's heartbeat tick, now stale
+        cancelled_seen.append(ctx.cancelled)
+
+    worker = make_pg_worker(
+        claim_queue, heartbeat_queue, handler, liveness_path=tmp_path / "hb", timer_factory=timer_factory
+    )
+    worker.run(max_iterations=1)
+
+    assert cancelled_seen == [True]

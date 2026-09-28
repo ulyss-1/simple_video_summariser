@@ -86,6 +86,19 @@ def _default_timer_factory(interval: float, function: Callable[[], None]) -> Tim
     return timer
 
 
+def _default_reconnect() -> JobQueue:
+    """Open a fresh connection and wrap it in a ``PostgresQueue``.
+
+    Used after a claim failure when the caller gave no ``reconnect=``: the
+    connection that just failed is not trusted again. Imported locally for
+    the same reason as the heartbeat's default (see ``_get_heartbeat_queue``).
+    """
+    from common.db import connect
+    from common.queue import PostgresQueue
+
+    return PostgresQueue(connect())
+
+
 class JobContext:
     """Passed to every handler call. Deliberately narrow (issue #13):
 
@@ -314,6 +327,11 @@ class Worker:
             with tick_lock:
                 if stop_flag.is_set():
                     return
+                # The process and handler are alive whatever the database
+                # says, so the §11.5 liveness file is touched on every tick,
+                # including ones whose heartbeat call fails or reports the
+                # job reaped (a long DB outage must not look wedged).
+                self._touch_liveness()
                 try:
                     ok = hb_queue.heartbeat(job.id, self._name)
                 except Exception as exc:  # noqa: BLE001 - retried on the next tick
@@ -333,7 +351,6 @@ class Worker:
                         )
                         stop_flag.set()
                         return
-                    self._touch_liveness()
                 if not stop_flag.is_set():
                     handle_box["handle"] = self._timer_factory(self._heartbeat_sec, _tick_in_context)
 
@@ -389,10 +406,9 @@ class Worker:
     # -- database reconnect -------------------------------------------------
 
     def _reconnect_queue(self) -> None:
-        if self._reconnect is None:
-            return
+        reconnect = self._reconnect if self._reconnect is not None else _default_reconnect
         try:
-            self._queue = self._reconnect()
+            self._queue = reconnect()
         except Exception as exc:  # noqa: BLE001 - stay up, retry next iteration
             _log.error("worker.reconnect_failed", worker=self._name, error=str(exc))
 
