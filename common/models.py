@@ -82,7 +82,19 @@ class ChannelCatalog:
 
 
 class CatalogSource(Protocol):
-    def list_uploads(self, channel_id: str, *, limit: int) -> ChannelCatalog: ...
+    def list_uploads(self, channel_id: str, *, limit: int) -> ChannelCatalog:
+        """List a channel's uploads, newest first, or raise on failure.
+
+        ``PermanentSourceError(REMOVED)`` means "nothing listable": the
+        channel ID may never have existed, the channel may have been
+        terminated, or it may simply have no uploads — including a channel
+        whose uploads are all private, members-only, or Shorts, which is
+        unrecorded but presumed to land here too. It is never proof that the
+        channel was removed. Callers must treat it as an empty listing and
+        must not persist it as channel or video state (architecture.md
+        §8.3.1, #107).
+        """
+        ...
 
 
 # Channel, Transcript, Chunk, Analysis, Topic, Claim and Quote, below,

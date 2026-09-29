@@ -655,6 +655,58 @@ separated per D13.
 Every route passes through `deps.require_auth` — a no-op returning `None` in
 v1, one implementation change away from enforcing a bearer token (D13).
 
+#### 8.3.1 `POST /channels/{id}/backfill` and the catalog's `REMOVED` ambiguity
+
+**Known limitation, recorded and not worked around (#107, follow-up to #27).**
+A catalog `PermanentSourceError(REMOVED)` — the error `CatalogSource.list_uploads`
+raises from yt-dlp's "The playlist does not exist" — means only "this channel
+has nothing listable". It does not mean "the channel was removed". The catalog
+adapter cannot, and does not try to, tell apart:
+
+- a channel ID that was never real,
+- a channel YouTube terminated, and
+- a real, existing channel that simply has no uploads (including one whose
+  uploads are all private, members-only, or Shorts — see below).
+
+Every caller, including this backfill route, treats `REMOVED` as an empty
+listing (`200`, `listed: 0`, an INFO log, no retry) and never as proof that the
+channel is gone. It is never persisted as channel or video state: not
+`channels.active`, `channels.last_poll_err`, `videos.unavailable`, nor
+`videos.unavailable_reason`. Whether a registered channel still exists is
+judged only through RSS poll health (§8.4, #34, #90), not through the catalog.
+
+**The evidence.** `tests/fixtures/ytdlp_errors/cases.toml` and
+`tests/adapters/youtube/fixtures/catalog/README.md` (yt-dlp 2026.08.19,
+recorded 2026-09-28) show a made-up channel ID (`UCaaaaaaaaaaaaaaaaaaaaaa`), a
+terminated channel (`UCx7T6qYK4VaP2-OhorrFS3Q`), and several real channels with
+no uploads (YouTube's own "Sports", "Music", "Gaming" and others) all printing
+the identical line, "The playlist does not exist.". `adapters/youtube/errors.py`
+maps that line to `REMOVED` for all of them; `tests/adapters/youtube/test_catalog.py`
+pins all three cases to the same outcome. No real channel was ever observed
+returning an empty-JSON playlist (`entries: []`) — the
+`empty_channel.json` fixture is synthetic, kept only to exercise that shape in
+the parser.
+
+**Rejected workarounds:**
+
+- **An RSS cross-check.** Rejected: `adapters/youtube/feed.py` documents that
+  the RSS feed answers 404 even for valid channels (`FeedNotFoundError` is
+  treated as transient), and nobody has recorded what the feed of a genuinely
+  empty channel looks like. That makes it a noisy signal, not a way to
+  distinguish the cases.
+- **A second yt-dlp call to the channel page.** Rejected: only the terminated
+  case has a recorded page line ("This channel was removed because it violated
+  our Community Guidelines."). The page output for a made-up ID and for an
+  empty channel was never recorded. Matching on that wording would also be
+  fragile (YouTube can change it without notice) and would add a network round
+  trip inside #41's 90 s backfill request budget.
+
+**What was not recorded**, and so must not be assumed to behave like the cases
+above: the channel-page wording for a made-up channel ID and for an empty
+channel, and the uploads-playlist behaviour for a channel whose uploads are all
+private, members-only, or Shorts-only. These are presumed to fall into the same
+`REMOVED`/"nothing listable" bucket, but that has not been checked live.
+
 ### 8.4 Error taxonomy
 
 `plan.md` §8 flags this as "worth designing explicitly". It is the difference
