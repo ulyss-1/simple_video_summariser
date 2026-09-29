@@ -142,6 +142,39 @@ returncode = 1
 error_class = "RATE_LIMITED"
 
 [[case]]
+# yt-dlp 2026.08.19 SOURCE, not a live run: current wording as quoted in issue #69,
+# which itself quotes yt-dlp issue #14921 (the log's own trailing "..." is the
+# source's truncation, not ours). _video.py:4069 prepends "Video unavailable. "
+# and appends "The current session has been rate-limited by YouTube for up to
+# an hour." before the extractor's "[youtube] <id>: " prefix (issue #69)
+stderr = '''
+ERROR: [youtube] aaaaaaaaaaa: Video unavailable. This content isn't available, try again later. The current session has been rate-limited by YouTube for up to an hour. It is recommended to use ...
+'''
+returncode = 1
+error_class = "RATE_LIMITED"
+
+[[case]]
+# yt-dlp stable@2024.10.22, copied from the log in https://github.com/yt-dlp/yt-dlp/issues/11426
+# (older wording, without the "Video unavailable." prefix or the "rate-limited by
+# YouTube" suffix that current yt-dlp adds)
+stderr = '''
+ERROR: [youtube] H64QQZuw-aA: This content isn't available, try again later.
+'''
+returncode = 1
+error_class = "RATE_LIMITED"
+
+[[case]]
+# yt-dlp 2026.08.19 SOURCE, not a live run: a download-side EDQUOT, following the
+# existing live "[Errno 28] No space left on device" case further down this file.
+# Python's OSError string for EDQUOT is "Disk quota exceeded" (errno.py), which
+# yt-dlp prints the same way it prints ENOSPC (from #19 QA, folded into #69)
+stderr = '''
+ERROR: [Errno 122] Disk quota exceeded
+'''
+returncode = 1
+error_class = "RESOURCE"
+
+[[case]]
 # live run on 2026-09-27, yt-dlp 2026.08.19, against a local HTTP server answering 429 (generic extractor)
 stderr = '''
 ERROR: [generic] 429: Unable to download webpage: HTTP Error 429: Too Many Requests (caused by <HTTPError 429: Too Many Requests>)

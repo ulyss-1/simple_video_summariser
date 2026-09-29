@@ -12,6 +12,8 @@ from common.errors import (
     ErrorClass,
     JobError,
     PermanentSourceError,
+    RateLimitedError,
+    ResourceError,
     ToolFailureError,
     classify,
 )
@@ -76,6 +78,51 @@ def test_only_the_error_part_of_stderr_decides_the_class() -> None:
 def test_warnings_alone_are_still_classified() -> None:
     exc = from_ytdlp("WARNING: [youtube] timed out. Retrying (1/3)...\n", 1)
     assert classify(exc) is ErrorClass.TRANSIENT_NETWORK
+
+
+# --- rate limit (#69) -----------------------------------------------------
+
+
+def test_a_warning_mentioning_the_rate_limit_does_not_override_the_error_part() -> (
+    None
+):
+    # Hand-built, not a fixture: only the ERROR: part should decide the class,
+    # even though the WARNING: part contains the rate-limit trigger phrase.
+    stderr = (
+        "WARNING: [youtube] The current session has been rate-limited by "
+        "YouTube for up to an hour.\n"
+        "ERROR: [youtube] yZIXLfi8CZQ: Private video\n"
+    )
+    exc = from_ytdlp(stderr, 1)
+    assert isinstance(exc, PermanentSourceError)
+    assert exc.reason == "private"
+
+
+def test_try_again_later_without_a_rate_limit_trigger_phrase_is_tool_failure() -> None:
+    exc = from_ytdlp(
+        "ERROR: [youtube] x: Something went wrong, try again later\n", 1
+    )
+    assert not isinstance(exc, (PermanentSourceError, RateLimitedError))
+    assert classify(exc) is ErrorClass.TOOL_FAILURE
+
+
+def test_rate_limited_from_ytdlp_has_no_retry_after_hint() -> None:
+    exc = from_ytdlp(
+        "ERROR: [youtube] Oud-fcGs7CY: Sign in to confirm you’re not a bot.\n", 1
+    )
+    assert isinstance(exc, RateLimitedError)
+    assert exc.retry_after_sec is None
+
+
+def test_disk_quota_wins_over_a_rate_limit_message_in_the_same_run() -> None:
+    stderr = (
+        "ERROR: [Errno 122] Disk quota exceeded\n"
+        "ERROR: [youtube] x: Video unavailable. This content isn't available, "
+        "try again later. The current session has been rate-limited by "
+        "YouTube for up to an hour.\n"
+    )
+    exc = from_ytdlp(stderr, 1)
+    assert isinstance(exc, ResourceError)
 
 
 @pytest.mark.parametrize("stderr", ["", "\n", "   \n\t"])

@@ -36,7 +36,12 @@ def _rx(*alternatives: str) -> re.Pattern[str]:
     return re.compile("|".join(alternatives), re.IGNORECASE)
 
 
-# Order matters: the first match wins.
+# Order matters: the first match wins, checked in from_ytdlp in this order:
+# _RESOURCE (a full disk/quota beats everything, even a rate-limit or removal
+# message logged in the same run), _UPCOMING, _RATE_LIMITED (checked before
+# _PERMANENT: current yt-dlp prefixes the rate-limit message with "Video
+# unavailable.", which would otherwise match _PERMANENT's REMOVED pattern -
+# issue #69), _PERMANENT, _FORBIDDEN, _TRANSIENT, then TOOL_FAILURE.
 _UPCOMING = _rx(r"This live event will begin in", r"Premieres in")
 _PERMANENT: list[tuple[re.Pattern[str], UnavailableReason]] = [
     (_rx(r"This video has been removed"), UnavailableReason.REMOVED),
@@ -60,14 +65,23 @@ _PERMANENT: list[tuple[re.Pattern[str], UnavailableReason]] = [
         UnavailableReason.REMOVED,
     ),
 ]
-# YouTube writes the bot check with a typographic apostrophe.
-_RATE_LIMITED = _rx(r"HTTP Error 429", r"Sign in to confirm you['’]re not a bot")
+# YouTube writes both the bot check and the rate-limit apostrophe as typographic
+# ('). "rate-limited by YouTube" is yt-dlp's own suffix, appended for both the
+# "The current session" and "Your account" variants (issue #69).
+_RATE_LIMITED = _rx(
+    r"HTTP Error 429",
+    r"Sign in to confirm you['’]re not a bot",
+    r"This content isn['’]t available, try again later",
+    r"rate-limited by YouTube",
+)
 # 403 storms mean the extractor is broken (architecture.md 16.11), not the network.
 _FORBIDDEN = _rx(r"HTTP Error 403")
 _TRANSIENT = _rx(
     r"HTTP Error 5\d\d", r"timed out", r"Temporary failure in name resolution"
 )
-_RESOURCE = _rx(r"No space left on device")
+# Lines up with common.errors._RESOURCE_ERRNOS (ENOSPC, EDQUOT) and with
+# adapters/youtube/audio.py's _RESOURCE_STDERR.
+_RESOURCE = _rx(r"No space left on device", r"Disk quota exceeded")
 
 
 def _error_part(stderr: str) -> str:
@@ -94,11 +108,11 @@ def from_ytdlp(stderr: str, returncode: int) -> JobError:
         return ResourceError(message)
     if _UPCOMING.search(text):
         return UpcomingVideoError(message)
+    if _RATE_LIMITED.search(text):
+        return RateLimitedError(message)
     for pattern, reason in _PERMANENT:
         if pattern.search(text):
             return PermanentSourceError(reason, message)
-    if _RATE_LIMITED.search(text):
-        return RateLimitedError(message)
     if _FORBIDDEN.search(text):
         return ToolFailureError(message)
     if _TRANSIENT.search(text):

@@ -193,7 +193,12 @@ def _probe_duration(path: Path, *, runner: ProcessRunner) -> float:
         "default=noprint_wrappers=1:nokey=1",
         str(path),
     ]
-    result = runner(argv, timeout=_PROBE_TIMEOUT_SEC)
+    try:
+        result = runner(argv, timeout=_PROBE_TIMEOUT_SEC)
+    except subprocess.TimeoutExpired as exc:
+        raise ToolFailureError(
+            f"ffprobe timed out after {_PROBE_TIMEOUT_SEC}s"
+        ) from exc
     if result.returncode != 0:
         message = f"ffprobe exited with {result.returncode}: {result.stderr.strip()}"
         if _is_resource_exhausted(result.stderr):

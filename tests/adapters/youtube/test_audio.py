@@ -22,7 +22,13 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from adapters.youtube.audio import DEFAULT_DOWNLOAD_TIMEOUT_SEC, YouTubeAudio, run_tool
-from common.errors import ResourceError, ToolFailureError, TransientNetworkError
+from common.errors import (
+    ErrorClass,
+    ResourceError,
+    ToolFailureError,
+    TransientNetworkError,
+    classify,
+)
 from common.models import AudioRef, AudioSource
 from tests.adapters.youtube.fakes import FakeRunner, completed
 
@@ -319,6 +325,21 @@ def test_duration_sec_comes_from_ffprobe_on_the_output(tmp_path: Path) -> None:
     info = probe(tmp_path / ref.rel_path)
     assert ref.duration_sec == pytest.approx(float(info["duration"]), abs=0.05)
     assert ref.duration_sec == pytest.approx(4.0, abs=0.2)
+
+
+def test_an_ffprobe_timeout_raises_tool_failure_and_leaves_no_tmp_file(
+    tmp_path: Path,
+) -> None:
+    ytdlp_runner = FakeDownloader(duration_sec=1.0)
+    ffprobe_runner = FakeRunner(subprocess.TimeoutExpired(["ffprobe"], 60))
+    audio = YouTubeAudio(ytdlp_runner=ytdlp_runner, ffprobe_runner=ffprobe_runner)
+
+    with pytest.raises(ToolFailureError) as exc_info:
+        audio.fetch_normalized(VIDEO_ID, tmp_path)
+
+    assert classify(exc_info.value) is ErrorClass.TOOL_FAILURE
+    assert isinstance(exc_info.value.__cause__, subprocess.TimeoutExpired)
+    assert files_under(tmp_path) == []
 
 
 def test_the_downloaded_stream_is_deleted_after_a_successful_conversion(
