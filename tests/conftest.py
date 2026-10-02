@@ -10,8 +10,9 @@ Desktop stopped.
 
 from __future__ import annotations
 
+import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
@@ -23,10 +24,55 @@ from testcontainers.community.postgres import PostgresContainer
 _POSTGRES_IMAGE = "postgres:18-alpine"
 
 
+def _probe_postgres(dsn: str, connect_timeout_sec: int) -> None:
+    with psycopg.connect(dsn, connect_timeout=connect_timeout_sec) as conn:
+        conn.execute("SELECT 1").fetchone()
+
+
+def _wait_for_postgres(
+    dsn: str,
+    container_id: str,
+    *,
+    probe: Callable[[str, int], None] = _probe_postgres,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+    deadline_sec: float = 30.0,
+    connect_timeout_sec: int = 5,
+) -> None:
+    parts = urlsplit(dsn)
+    endpoint = f"{parts.hostname}:{parts.port}"
+    started_at = monotonic()
+    deadline = started_at + deadline_sec
+    attempts = 0
+    delay = 0.1
+    last_exc: psycopg.OperationalError | None = None
+
+    while monotonic() < deadline:
+        attempts += 1
+        try:
+            probe(dsn, connect_timeout_sec)
+            return
+        except psycopg.OperationalError as exc:
+            last_exc = exc
+
+        now = monotonic()
+        if now >= deadline:
+            break
+        sleep(min(delay, 1.0, deadline - now))
+        delay = min(delay * 2, 1.0)
+
+    elapsed = monotonic() - started_at
+    raise RuntimeError(
+        f"Postgres container {container_id[:12]} was not reachable at {endpoint} "
+        f"after {elapsed:.1f}s and {attempts} attempts"
+    ) from last_exc
+
+
 @pytest.fixture(scope="session")
 def postgres_container() -> Iterator[PostgresContainer]:
     """One Postgres container for the whole test session."""
     with PostgresContainer(_POSTGRES_IMAGE, driver=None) as container:
+        _wait_for_postgres(container.get_connection_url(), container.get_container_id())
         yield container
 
 
