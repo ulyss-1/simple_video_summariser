@@ -48,6 +48,12 @@ _logger = logging.getLogger(__name__)
 #: excluded here.
 _VALID_KINDS = frozenset({"ingest", "transcribe", "analyze"})
 
+#: Priority bands (architecture.md §4). Claims run ``priority DESC``.
+PRIORITY_INTERACTIVE = 10  # POST /videos: a human is waiting
+PRIORITY_NORMAL = 0  # RSS-discovered new videos
+PRIORITY_REANALYSIS = -5  # re-analysis sweep after a PROMPT_VERSION change (C4)
+PRIORITY_BACKFILL = -10  # historical channel backfill (D9b, C4)
+
 
 def analyze_dedupe_key(prompt_version: str, summarizer_name: str) -> str:
     """The ``analyze`` job dedupe key, ``"<prompt_version>:<summarizer_name>"`` (C1).

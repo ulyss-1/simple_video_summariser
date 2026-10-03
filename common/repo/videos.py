@@ -17,7 +17,9 @@ def upsert_video(conn: psycopg.Connection[Any], meta: VideoMeta, origin: str) ->
 
     ``title``, ``duration_sec``, ``published_at`` and ``description`` are
     refreshed on every call, and a missing ``channel_id`` (a stub row from
-    ``record_unavailable``) is filled in. ``origin`` and ``discovered_at`` are set only
+    ``record_unavailable``, or a submitted video from
+    ``insert_submitted_video``) is filled in; a known ``channel_id`` is never
+    overwritten. ``origin`` and ``discovered_at`` are set only
     on the first insert - they record the video's *first* discovery, so a
     later call, even with a different ``origin``, never changes them.
 
@@ -132,6 +134,26 @@ def insert_discovered_video(conn: psycopg.Connection[Any], entry: FeedEntry, ori
         ON CONFLICT (video_id) DO NOTHING
         """,
         (entry.video_id, entry.channel_id, clean_text(entry.title), entry.published_at, origin),
+    )
+    return cur.rowcount == 1
+
+
+def insert_submitted_video(conn: psycopg.Connection[Any], video_id: str) -> bool:
+    """Insert a bare ``origin = 'adhoc'`` row for a submitted video (#40).
+
+    Only ``video_id`` and ``origin`` are set; ``channel_id``, ``title`` and the
+    rest stay NULL until ingest (#28) runs ``upsert_video``. Returns whether a
+    row was inserted. An existing row (from RSS, backfill or an earlier
+    submission) is left exactly as it is, including ``origin`` and
+    ``discovered_at``. No ``channels`` row is created.
+    """
+    cur = conn.execute(
+        """
+        INSERT INTO videos (video_id, origin)
+        VALUES (%s, 'adhoc')
+        ON CONFLICT (video_id) DO NOTHING
+        """,
+        (video_id,),
     )
     return cur.rowcount == 1
 

@@ -1,4 +1,4 @@
-"""Job read helpers (issues #28, #39, architecture.md §2).
+"""Job read helpers (issues #28, #39, #40, architecture.md §2).
 
 Writes go through the ``JobQueue`` port; this module only reads what a
 handler needs to decide what to do next.
@@ -27,6 +27,23 @@ def latest_job_state(conn: psycopg.Connection[Any], video_id: str, kind: str) ->
         (video_id, kind),
     ).fetchone()
     return None if row is None else str(row[0])
+
+
+def latest_job(conn: psycopg.Connection[Any], video_id: str, kind: str) -> tuple[int, str] | None:
+    """``(id, state)`` of the newest ``kind`` job for ``video_id``, or ``None`` (#40).
+
+    Ordered like ``latest_job_state``: ``created_at`` then ``id``.
+    """
+    row = conn.execute(
+        """
+        SELECT id, state FROM jobs
+        WHERE video_id = %s AND kind = %s
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        (video_id, kind),
+    ).fetchone()
+    return None if row is None else (int(row[0]), str(row[1]))
 
 
 def queue_depth(conn: psycopg.Connection[Any]) -> dict[tuple[str, str], int]:

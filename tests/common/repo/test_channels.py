@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import psycopg
 import pytest
 
-from common.repo.channels import add_channel, list_active_channels, record_poll
+from common.repo.channels import (
+    add_channel,
+    list_active_channels,
+    record_poll,
+    register_channel,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -92,3 +99,75 @@ def test_add_channel_strips_nul_from_title(conn: psycopg.Connection) -> None:
 
     [channel] = list_active_channels(conn)
     assert channel.title == "badtitle"
+
+
+def _row(conn: psycopg.Connection, channel_id: str) -> tuple[object, ...] | None:
+    return conn.execute(
+        """
+        SELECT channel_id, title, active, monitor_from, last_polled, last_poll_err, added_at
+        FROM channels WHERE channel_id = %s
+        """,
+        (channel_id,),
+    ).fetchone()
+
+
+def test_register_channel_creates_an_active_channel_from_now(conn: psycopg.Connection) -> None:
+    result = register_channel(conn, "UC1")
+
+    [now] = conn.execute("SELECT now()").fetchone() or ()
+    assert result.created is True
+    assert result.channel.channel_id == "UC1"
+    assert result.channel.active is True
+    assert result.channel.monitor_from == now
+    assert result.channel.added_at == now
+    assert _row(conn, "UC1") == (
+        "UC1", None, True, now, None, None, now,
+    )
+
+
+def test_register_channel_activates_an_inactive_channel_from_now(
+    conn: psycopg.Connection,
+) -> None:
+    old = datetime(2020, 1, 1, tzinfo=UTC)
+    conn.execute(
+        """
+        INSERT INTO channels (channel_id, title, active, monitor_from, added_at)
+        VALUES ('UC1', 'Kept title', false, %s, %s)
+        """,
+        (old, old),
+    )
+    conn.commit()
+
+    result = register_channel(conn, "UC1")
+
+    [now] = conn.execute("SELECT now()").fetchone() or ()
+    assert result.created is False
+    assert _row(conn, "UC1") == ("UC1", "Kept title", True, now, None, None, old)
+    assert result.channel.monitor_from == now
+    assert result.channel.added_at == old
+
+
+def test_register_channel_changes_nothing_for_an_active_channel(
+    conn: psycopg.Connection,
+) -> None:
+    old = datetime(2020, 1, 1, tzinfo=UTC)
+    polled = datetime(2021, 1, 1, tzinfo=UTC)
+    conn.execute(
+        """
+        INSERT INTO channels (channel_id, title, active, monitor_from, last_polled, added_at)
+        VALUES ('UC1', 'T', true, %s, %s, %s)
+        """,
+        (old, polled, old),
+    )
+    conn.commit()
+    before = _row(conn, "UC1")
+
+    result = register_channel(conn, "UC1")
+
+    assert result.created is False
+    assert _row(conn, "UC1") == before
+    assert result.channel.monitor_from == old
+
+
+def test_add_channel_docstring_no_longer_defers_reactivation_to_40() -> None:
+    assert "moved to #40" not in (add_channel.__doc__ or "")

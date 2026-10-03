@@ -12,6 +12,7 @@ from common.repo.channels import add_channel, list_active_channels
 from common.repo.videos import (
     clear_unavailable,
     insert_discovered_video,
+    insert_submitted_video,
     mark_unavailable,
     record_unavailable,
     upsert_video,
@@ -305,3 +306,49 @@ def test_video_exists_is_true_only_for_a_stored_video(conn: psycopg.Connection) 
 
     assert video_exists(conn, "abc12345678") is True
     assert video_exists(conn, "zzz12345678") is False
+
+
+def test_upsert_video_fills_the_channel_of_a_submitted_stub(conn: psycopg.Connection) -> None:
+    created = insert_submitted_video(conn, "abc12345678")
+
+    upsert_video(conn, make_meta(channel_id="UCreal"), origin="rss")
+
+    assert created is True
+    row = conn.execute(
+        "SELECT channel_id, origin FROM videos WHERE video_id = 'abc12345678'"
+    ).fetchone()
+    assert row == ("UCreal", "adhoc")
+
+
+def test_upsert_video_never_overwrites_a_known_channel(conn: psycopg.Connection) -> None:
+    upsert_video(conn, make_meta(channel_id="UCfirst"), origin="adhoc")
+
+    upsert_video(conn, make_meta(channel_id="UCsecond"), origin="adhoc")
+
+    row = conn.execute("SELECT channel_id FROM videos WHERE video_id = 'abc12345678'").fetchone()
+    assert row == ("UCfirst",)
+
+
+def test_insert_submitted_video_creates_a_bare_adhoc_row(conn: psycopg.Connection) -> None:
+    assert insert_submitted_video(conn, "abc12345678") is True
+
+    row = conn.execute(
+        """
+        SELECT channel_id, title, duration_sec, published_at, description, origin, unavailable
+        FROM videos WHERE video_id = 'abc12345678'
+        """
+    ).fetchone()
+    assert row == (None, None, None, None, None, "adhoc", None)
+    assert conn.execute("SELECT count(*) FROM channels").fetchone() == (0,)
+
+
+def test_insert_submitted_video_leaves_an_existing_row_untouched(
+    conn: psycopg.Connection,
+) -> None:
+    insert_discovered_video(conn, make_entry(), origin="rss")
+    before = conn.execute("SELECT * FROM videos WHERE video_id = 'feed1234567'").fetchone()
+
+    assert insert_submitted_video(conn, "feed1234567") is False
+
+    after = conn.execute("SELECT * FROM videos WHERE video_id = 'feed1234567'").fetchone()
+    assert after == before

@@ -5,7 +5,7 @@ from __future__ import annotations
 import psycopg
 import pytest
 
-from common.repo.jobs import latest_job_state, queue_depth
+from common.repo.jobs import latest_job, latest_job_state, queue_depth
 
 pytestmark = pytest.mark.integration
 
@@ -102,3 +102,17 @@ def test_queue_depth_runs_inside_a_read_only_transaction(conn: psycopg.Connectio
     conn.read_only = True
 
     assert queue_depth(conn) == {("ingest", "pending"): 1}
+
+
+def test_latest_job_is_none_without_a_job_of_that_kind(conn: psycopg.Connection) -> None:
+    add_job(conn, "analyze", "done")
+
+    assert latest_job(conn, VID, "ingest") is None
+
+
+def test_latest_job_returns_the_newest_jobs_id_and_state(conn: psycopg.Connection) -> None:
+    add_job(conn, "ingest", "dead")
+    newest = add_job(conn, "ingest", "pending")
+    add_job(conn, "analyze", "running")
+
+    assert latest_job(conn, VID, "ingest") == (newest, "pending")

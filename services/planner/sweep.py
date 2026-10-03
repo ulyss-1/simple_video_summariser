@@ -18,12 +18,12 @@ from typing import Any
 
 import psycopg
 
-from common.queue import JobQueue, analyze_dedupe_key
+from common.queue import PRIORITY_REANALYSIS, JobQueue, analyze_dedupe_key
 
 _logger = logging.getLogger(__name__)
 
 #: Below new videos (0) and interactive submissions (+10), so a sweep never starves them.
-REANALYSIS_PRIORITY = -5
+REANALYSIS_PRIORITY = PRIORITY_REANALYSIS
 
 _CANDIDATES_SQL = r"""
     SELECT v.video_id

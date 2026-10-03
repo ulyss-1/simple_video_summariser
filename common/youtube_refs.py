@@ -13,7 +13,7 @@ Only video hosts are accepted; ``music.youtube.com`` is rejected on purpose
 from __future__ import annotations
 
 import re
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import SplitResult, urlsplit
 
 # ``UC`` plus 22 characters, 24 in all. Always use ``fullmatch``: unlike
 # ``$``, it never accepts a trailing newline.
@@ -60,31 +60,19 @@ def parse_video_ref(text: str) -> str:
     Only the returned ID may be passed on. It can start with ``-``, so a
     process must get ``watch_url(id)``, never the bare ID.
     """
-    ref = text.strip() if isinstance(text, str) else ""
+    raw = text if isinstance(text, str) else ""
+    if len(raw) > MAX_REF_CHARS:
+        raise ValueError(f"input is longer than {MAX_REF_CHARS} characters")
+    ref = raw.strip()
     if not ref:
         raise ValueError("a video ID or URL is required")
     shown = repr(ref[:60]) + ("..." if len(ref) > 60 else "")
-    if len(ref) > MAX_REF_CHARS:
-        raise ValueError(f"input is longer than {MAX_REF_CHARS} characters: {shown}")
     if is_video_id(ref):
         return ref
     if _BAD_CHARS.search(ref):
         raise ValueError(f"not a YouTube video ID or URL: {shown}")
 
-    scheme = _SCHEME.match(ref)
-    if scheme is not None:
-        if scheme.group(1).lower() not in ("http", "https"):
-            raise ValueError(f"only http(s) YouTube URLs are accepted: {shown}")
-        url = ref
-    elif re.match(r"[^/?#]*:", ref):
-        # "javascript:...", "file:x", "youtube.com:443/..." - a scheme or a port.
-        raise ValueError(f"not a YouTube video ID or URL: {shown}")
-    else:
-        url = "https://" + ref
-    try:
-        parts = urlsplit(url)
-    except ValueError:
-        raise ValueError(f"not a YouTube video ID or URL: {shown}") from None
+    parts = _split_url(ref, shown, what="video ID or URL")
 
     # ``netloc`` keeps user info and a port, so those never match a host.
     host = parts.netloc.lower()
@@ -97,7 +85,8 @@ def parse_video_ref(text: str) -> str:
             candidate = segments[0]
     elif host in _HOSTS:
         if segments == ["watch"]:
-            values = [v for k, v in parse_qsl(parts.query, keep_blank_values=True) if k == "v"]
+            # Raw, not ``parse_qsl``: that would decode ``%51`` into ``Q``.
+            values = [p[2:] for p in parts.query.split("&") if p.startswith("v=") or p == "v"]
             if len(values) == 1:
                 candidate = values[0]
         elif len(segments) == 2 and segments[0] in _ID_PATH_PREFIXES:
@@ -107,3 +96,78 @@ def parse_video_ref(text: str) -> str:
     if candidate is None or not is_video_id(candidate):
         raise ValueError(f"no single valid video ID in the input: {shown}")
     return candidate
+
+
+def parse_channel_ref(text: str) -> str:
+    """The ``UC...`` channel ID in ``text``, a bare ID or a ``/channel/<id>`` URL.
+
+    Accepts a bare channel ID or ``/channel/<id>`` on ``youtube.com``,
+    ``www.youtube.com`` and ``m.youtube.com`` (http, https or no scheme; host
+    case-insensitive), optionally followed by ``/``, ``/videos``, a query or a
+    fragment. ``@handle``, ``/c/`` and ``/user/`` URLs are rejected: resolving
+    them needs a network call (#81). Everything else is rejected as in
+    ``parse_video_ref``, with the same short, escaped message.
+    """
+    raw = text if isinstance(text, str) else ""
+    if len(raw) > MAX_REF_CHARS:
+        raise ValueError(f"input is longer than {MAX_REF_CHARS} characters")
+    ref = raw.strip()
+    if not ref:
+        raise ValueError("a channel ID or URL is required")
+    shown = repr(ref[:60]) + ("..." if len(ref) > 60 else "")
+    if is_channel_id(ref):
+        return ref
+    if ref.startswith("@"):
+        raise UnsupportedChannelRef(_CHANNEL_ID_ONLY)
+    if _BAD_CHARS.search(ref):
+        raise ValueError(f"not a YouTube channel ID or URL: {shown}")
+
+    parts = _split_url(ref, shown, what="channel ID or URL")
+    host = parts.netloc.lower()
+    if host not in _HOSTS:
+        raise ValueError(f"not a YouTube channel URL (host {host[:60]!r}): {shown}")
+    segments = parts.path.split("/")[1:]
+    if segments and segments[-1] == "":
+        segments.pop()
+    if segments and (segments[0].startswith("@") or segments[0] in ("c", "user")):
+        raise UnsupportedChannelRef(_CHANNEL_ID_ONLY)
+    if (
+        len(segments) in (2, 3)
+        and segments[0] == "channel"
+        and (len(segments) == 2 or segments[2] == "videos")
+        and is_channel_id(segments[1])
+    ):
+        return segments[1]
+    raise ValueError(f"no valid channel ID in the input: {shown}")
+
+
+class UnsupportedChannelRef(ValueError):
+    """An ``@handle``, ``/c/`` or ``/user/`` reference: valid, but needs a lookup (#81)."""
+
+
+_CHANNEL_ID_ONLY = (
+    "only channel-ID URLs (youtube.com/channel/UC...) are supported, "
+    "not @handle, /c/ or /user/ URLs"
+)
+
+
+def _split_url(ref: str, shown: str, *, what: str) -> SplitResult:
+    """``ref`` as URL parts; ``https://`` is assumed when there is no scheme.
+
+    Only ``http`` and ``https`` are accepted. A bare ``name:`` prefix
+    (``javascript:...``, ``file:x``, ``youtube.com:443/...``) is a scheme or a
+    port and is rejected.
+    """
+    scheme = _SCHEME.match(ref)
+    if scheme is not None:
+        if scheme.group(1).lower() not in ("http", "https"):
+            raise ValueError(f"only http(s) YouTube URLs are accepted: {shown}")
+        url = ref
+    elif re.match(r"[^/?#]*:", ref):
+        raise ValueError(f"not a YouTube {what}: {shown}")
+    else:
+        url = "https://" + ref
+    try:
+        return urlsplit(url)
+    except ValueError:
+        raise ValueError(f"not a YouTube {what}: {shown}") from None

@@ -24,3 +24,19 @@ def test_empty_or_colon_containing_parts_raise_value_error(
 
 def test_keyword_arguments_use_the_documented_names() -> None:
     assert analyze_dedupe_key(prompt_version="v1", summarizer_name="anthropic") == "v1:anthropic"
+
+
+def test_priority_bands_match_architecture_section_4() -> None:
+    from common.queue import (
+        PRIORITY_BACKFILL,
+        PRIORITY_INTERACTIVE,
+        PRIORITY_NORMAL,
+        PRIORITY_REANALYSIS,
+    )
+
+    assert (PRIORITY_INTERACTIVE, PRIORITY_NORMAL, PRIORITY_REANALYSIS, PRIORITY_BACKFILL) == (
+        10,
+        0,
+        -5,
+        -10,
+    )

@@ -55,7 +55,7 @@ from common.models import (
     Summarizer,
     Transcriber,
 )
-from common.queue import Job
+from common.queue import PRIORITY_INTERACTIVE, Job
 from common.repo.analyses import latest_analysis
 from common.repo.transcripts import get_best_transcript, get_chunks, get_transcript
 from common.repo.videos import get_video_meta
@@ -70,7 +70,7 @@ from services.transcriber.transcribe import make_transcribe_handler
 Handler = Callable[[Job, JobContext], None]
 
 #: The Interactive band (architecture.md §4): a human is waiting for this one.
-PRIORITY = 10
+PRIORITY = PRIORITY_INTERACTIVE
 #: A single video needs ingest, transcribe and analyze; ten is generous.
 MAX_JOBS = 10
 #: Cap for one error message on stderr.

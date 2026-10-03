@@ -26,14 +26,14 @@ import psycopg
 
 from common.errors import MAX_ERROR_BYTES
 from common.models import Channel, FeedSource
-from common.queue import JobQueue
+from common.queue import PRIORITY_NORMAL, JobQueue
 from common.repo.channels import list_active_channels, record_poll
 from common.repo.videos import insert_discovered_video
 
 _logger = logging.getLogger(__name__)
 
 _ORIGIN = "rss"
-_INGEST_PRIORITY = 0  # the Normal band (architecture.md §4)
+_INGEST_PRIORITY = PRIORITY_NORMAL  # architecture.md §4
 
 
 @dataclass(frozen=True)
