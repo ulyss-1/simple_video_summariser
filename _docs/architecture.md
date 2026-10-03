@@ -700,10 +700,63 @@ web/src/
   server-side — `GET /videos/{id}/transcript?offset=&limit=`.
 - **Stack:** React 19.3 + Vite 8 (Rolldown) + TypeScript; React Compiler
   enabled (§16.4) so memoization is automatic rather than hand-managed.
+  Routing uses `react-router` (owner decision, 2026-10-03; #122). Tests run on
+  Vitest, with `jsdom` and `@testing-library/react` for component tests
+  (#127).
 - **CSP:** `frame-src https://www.youtube-nocookie.com` only; `default-src
   'self'`. Enforced in `ops/nginx.conf` (§11.3), not in application code.
 - **Served by nginx, same origin as the API** via `/api` proxy (§11.2), so no
   CORS configuration exists to get wrong.
+
+### 9.1 Player transport: direct `postMessage`, not the `iframe_api` script
+
+**Decision (owner, 2026-10-03; #48):** `Player` controls the
+`youtube-nocookie.com` embed by speaking the IFrame Player API's `postMessage`
+protocol to an `enablejsapi=1` iframe directly. It loads no YouTube script and
+uses no npm wrapper.
+
+**Why:**
+
+- **The CSP stays as specified.** `default-src 'self'` plus
+  `frame-src https://www.youtube-nocookie.com` is enough. Nothing from a
+  third party runs in our origin. D12b requires keeping the rest of the CSP
+  strict, and this is the only option that does.
+- **No third-party code with access to our page.** The official script would
+  run with full access to the DOM and to the same-origin `/api`.
+- **Small and testable.** The transport is a few dozen lines in one module
+  with no React in it. Tests fake `contentWindow` and the incoming messages,
+  with no network.
+- **Incoming messages are checked.** A message is accepted only if both its
+  `origin` and its `source` are the embed, and it parses as a JSON object.
+
+**Accepted cost:** the wire format (`listening` handshake, `command` messages,
+`onReady`/`onError`/`initialDelivery` events) is what YouTube's own widget
+script sends. It is not documented on its own and could change without notice.
+If it breaks, seeking stops working, but the embed still plays. The
+embed-error fallback (open `youtube.com/watch?v=<id>&t=<s>s` in a new tab)
+still works.
+
+**Discarded alternative: the official `https://www.youtube.com/iframe_api`
+script.** It is the documented, supported way to use the API, and it pulls in
+`www-widgetapi.js`. It was rejected because:
+
+- it needs `script-src 'self' https://www.youtube.com` in the CSP, and possibly
+  more YouTube script origins as its loader changes;
+- it runs third-party JavaScript in our origin.
+
+The `react-youtube` and `youtube-player` wrappers were rejected for the same
+reason, since they load that script too.
+
+**When to revisit:** switch to the official script if any of these happens:
+- the undocumented protocol breaks and cannot be fixed quickly;
+- we need player features the protocol does not expose (for example,
+  bidirectional sync, which D12b defers);
+- the threat model changes so that a YouTube `script-src` becomes acceptable.
+
+The change stays inside the transport module
+(`web/src/components/player/`), plus `script-src` in `ops/nginx.conf` (§11.3)
+and in this section's CSP line. Do not widen the CSP without updating this
+section.
 
 ---
 
@@ -1406,6 +1459,21 @@ config; consider View Transitions for route changes. Being days old, treat 19.3
 itself as worth a beat of caution — 19.2 is a fine fallback, and the compiler is
 available either way.
 
+**Wiring (owner-approved, 2026-10-03; #47):** with Vite 8, `@vitejs/plugin-react`
+offers two ways to enable the compiler:
+
+- **Chosen: Babel.** `babel({ presets: [reactCompilerPreset()] })` from
+  `@rolldown/plugin-babel`, together with `babel-plugin-react-compiler` 1.x
+  and `@babel/core` (plus `@types/babel__core`). This is the stable 1.0
+  compiler that this section names, and every package it needs is approved.
+- **Not chosen: the plugin's native `compiler: true` option.** It uses
+  `oxc-transform-react`, a Rust port of the compiler. Upstream calls it
+  experimental, and the package is not approved.
+
+Revisit the native option when it is stable, if Babel's build-time cost
+becomes noticeable. Switching means one config line plus swapping the
+dependencies.
+
 ### 16.5 Vite 8 with Rolldown
 
 Vite 8.0 shipped 2026-03-12, replacing esbuild *and* Rollup with **Rolldown**, a
@@ -1595,6 +1663,6 @@ targets a scale or throughput problem this system does not have.
 | D10 Postgres queue | §5, §6 `jobs` |
 | D11 four services | §1, §2 dependency rule |
 | D12 React SPA | §9, §11.3 `Dockerfile.frontend` — no Node at runtime |
-| D12b click-to-seek | §9 `Player`/`Timestamp` |
+| D12b click-to-seek | §9 `Player`/`Timestamp`, §9.1 player transport |
 | D12c SSR render path | §8.3 `GET /videos/{id}/render` |
 | D13 auth-additive | §2 route split, §8.3 `require_auth` no-op, §11.4 loopback bind + internal network |

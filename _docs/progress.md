@@ -3,6 +3,31 @@
 Status of the groomed backlog (GitHub issues #1–#20), worked through per
 `_docs/process.md`. An issue is closed only after a QA PASS comment.
 
+## Owner decisions — 2026-10-03
+
+- **Python dependencies approved** and pinned with #39: `fastapi==0.142.2` and
+  `uvicorn==0.54.0` (runtime), `httpx==0.28.1` (dev).
+- **npm dependencies approved** for #47-#54 (pin exact versions and commit the
+  lockfile in #47):
+  - Runtime: `react` and `react-dom` 19.3.x, `@tanstack/react-query` 5.x,
+    `react-router`.
+  - Dev:
+    - build and types: `vite` 8.x, `@vitejs/plugin-react`, `typescript`,
+      `@types/react`, `@types/react-dom`, `@types/node` 24.x (only if
+      `vite.config.ts` needs it);
+    - React Compiler: `babel-plugin-react-compiler` 1.x, `@babel/core`,
+      `@rolldown/plugin-babel`, `@types/babel__core`;
+    - tests: `vitest`, `jsdom`, `@testing-library/react`;
+    - API types: `openapi-typescript` (#46).
+- **Router:** `react-router` (#122).
+- **Player transport:** direct `postMessage` to the `enablejsapi=1` embed. The
+  `iframe_api` script is discarded, so the CSP is unchanged (#48;
+  architecture.md §9.1).
+- **React Compiler:** wired through Babel. The native `compiler: true` option
+  (`oxc-transform-react`) is experimental (architecture.md §16.4).
+- **Still open:** the visual direction (#124). `_docs/design-system.md` is
+  empty.
+
 ## Checkpoint 4 — 2026-09-28, batch 2 (#21-#40) done except #39/#40; #41-#60 groomed
 
 Closed after QA PASS since checkpoint 3: #24 Ollama adapter (defines the
