@@ -9,6 +9,7 @@ import pytest
 
 from common.repo.channels import (
     add_channel,
+    channel_exists,
     list_active_channels,
     record_poll,
     register_channel,
@@ -171,3 +172,11 @@ def test_register_channel_changes_nothing_for_an_active_channel(
 
 def test_add_channel_docstring_no_longer_defers_reactivation_to_40() -> None:
     assert "moved to #40" not in (add_channel.__doc__ or "")
+
+
+def test_channel_exists_for_active_and_inactive_rows_only(conn: psycopg.Connection) -> None:
+    conn.execute("INSERT INTO channels (channel_id, active) VALUES ('UCon', true), ('UCoff', false)")
+
+    assert channel_exists(conn, "UCon") is True
+    assert channel_exists(conn, "UCoff") is True
+    assert channel_exists(conn, "UCnone") is False

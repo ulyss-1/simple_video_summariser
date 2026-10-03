@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import statistics
 from collections.abc import Sequence
+from decimal import Decimal
 from typing import Any
 
 import psycopg
@@ -216,3 +218,40 @@ def get_transcript(conn: psycopg.Connection[Any], video_id: str, source: str) ->
         (video_id, source),
     ).fetchone()
     return None if row is None else _transcript(row)
+
+
+RTF_SAMPLE_SIZE = 20
+_MIN_RTF = Decimal("1e-300")
+_MAX_RTF = Decimal("1e300")
+
+
+def median_whisper_rtf(conn: psycopg.Connection[Any]) -> tuple[float | None, int]:
+    """Median ``engine_meta.rtf`` of the newest usable whisper transcripts.
+
+    Returns ``(median, samples)``. Only the newest ``RTF_SAMPLE_SIZE``
+    ``whisper`` transcripts whose ``rtf`` is a positive finite JSON number
+    count; with none, the result is ``(None, 0)``.
+    """
+    # The CASE guards each cast, since Postgres may evaluate WHERE terms in
+    # any order. The bounds keep the float8 conversion finite and non-zero.
+    rows = conn.execute(
+        """
+        SELECT rtf FROM (
+            SELECT id, created_at,
+                   CASE WHEN jsonb_typeof(engine_meta) = 'object'
+                         AND jsonb_typeof(engine_meta->'rtf') = 'number'
+                        THEN (engine_meta->>'rtf')::numeric
+                   END AS rtf
+            FROM transcripts
+            WHERE source = 'whisper'
+        ) t
+        WHERE rtf > %s AND rtf < %s
+        ORDER BY created_at DESC, id DESC
+        LIMIT %s
+        """,
+        (_MIN_RTF, _MAX_RTF, RTF_SAMPLE_SIZE),
+    ).fetchall()
+    values = [float(row[0]) for row in rows]
+    if not values:
+        return None, 0
+    return statistics.median(values), len(values)

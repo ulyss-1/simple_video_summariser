@@ -77,6 +77,14 @@ def register_channel(conn: psycopg.Connection[Any], channel_id: str) -> Register
     return RegisteredChannel(channel=_channel(existing), created=False)
 
 
+def channel_exists(conn: psycopg.Connection[Any], channel_id: str) -> bool:
+    """Whether ``channel_id`` has a ``channels`` row, active or not."""
+    row = conn.execute(
+        "SELECT 1 FROM channels WHERE channel_id = %s", (channel_id,)
+    ).fetchone()
+    return row is not None
+
+
 def list_active_channels(conn: psycopg.Connection[Any]) -> list[Channel]:
     """Every channel with ``active = true``."""
     rows = conn.execute(

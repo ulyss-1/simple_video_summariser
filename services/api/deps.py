@@ -8,6 +8,8 @@ audit of every endpoint.
 ``get_conn`` is the only way a route reaches Postgres. It opens a short-lived,
 time-bounded connection through ``common.db.connect()`` and always closes it.
 Tests override it rather than patching internals.
+
+``get_catalog`` hands the backfill route its ``CatalogSource`` (#41).
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from typing import Any
 import psycopg
 
 from common.db import connect
+from common.models import CatalogSource
 
 #: Both stay well under the compose healthcheck's 5 s timeout (§11.4).
 CONNECT_TIMEOUT_SEC = 2
@@ -51,3 +54,18 @@ def get_conn() -> Generator[psycopg.Connection[Any]]:
         yield conn
     finally:
         conn.close()
+
+
+#: Below nginx's ``proxy_read_timeout 120s`` (architecture.md 11.3).
+BACKFILL_LIST_TIMEOUT_SEC = 90
+
+
+def get_catalog() -> CatalogSource:
+    """The channel catalog for ``POST /channels/{id}/backfill`` (#41).
+
+    The adapter is imported here, not at module level, so importing the app
+    loads no ``adapters.*`` or yt-dlp module. Tests override this dependency.
+    """
+    from adapters.youtube.catalog import YouTubeCatalog
+
+    return YouTubeCatalog(timeout=BACKFILL_LIST_TIMEOUT_SEC)

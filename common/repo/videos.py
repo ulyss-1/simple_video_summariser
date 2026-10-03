@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import psycopg
 
-from common.models import FeedEntry, VideoMeta
+from common.models import CatalogEntry, FeedEntry, VideoMeta
 from common.repo._hygiene import clean_text
 
 _UNAVAILABLE_REASONS = {"removed", "private", "geoblocked", "agegated"}
@@ -197,3 +198,37 @@ def get_video_meta(conn: psycopg.Connection[Any], video_id: str) -> VideoMeta | 
         manual_subtitle_langs=(),
         auto_caption_langs=(),
     )
+
+
+def known_video_ids(conn: psycopg.Connection[Any], video_ids: Sequence[str]) -> set[str]:
+    """Return the subset of ``video_ids`` that already has a ``videos`` row.
+
+    Any row counts, whatever its origin, job state or ``unavailable`` flag.
+    One query for the whole list.
+    """
+    if not video_ids:
+        return set()
+    rows = conn.execute(
+        "SELECT video_id FROM videos WHERE video_id = ANY(%s)", (list(video_ids),)
+    ).fetchall()
+    return {row[0] for row in rows}
+
+
+def insert_backfill_video(
+    conn: psycopg.Connection[Any], entry: CatalogEntry, *, channel_id: str
+) -> bool:
+    """Insert a channel-backfill row from a catalog entry (issue #41).
+
+    ``origin`` is ``'backfill'``; the title is cleaned. An existing row for
+    the video is left untouched. Returns whether this call inserted the row.
+    """
+    row = conn.execute(
+        """
+        INSERT INTO videos (video_id, channel_id, title, duration_sec, origin)
+        VALUES (%s, %s, %s, %s, 'backfill')
+        ON CONFLICT (video_id) DO NOTHING
+        RETURNING video_id
+        """,
+        (entry.video_id, channel_id, clean_text(entry.title), entry.duration_sec),
+    ).fetchone()
+    return row is not None

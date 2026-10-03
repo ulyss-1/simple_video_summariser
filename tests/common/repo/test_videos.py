@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 import psycopg
 import pytest
 
-from common.models import FeedEntry, VideoMeta
+from common.models import CatalogEntry, FeedEntry, VideoMeta
 from common.repo.channels import add_channel, list_active_channels
 from common.repo.videos import (
     clear_unavailable,
+    insert_backfill_video,
     insert_discovered_video,
     insert_submitted_video,
+    known_video_ids,
     mark_unavailable,
     record_unavailable,
     upsert_video,
@@ -352,3 +355,61 @@ def test_insert_submitted_video_leaves_an_existing_row_untouched(
 
     after = conn.execute("SELECT * FROM videos WHERE video_id = 'feed1234567'").fetchone()
     assert after == before
+
+
+def test_known_video_ids_returns_only_ids_that_have_a_row(conn: psycopg.Connection) -> None:
+    insert_submitted_video(conn, "known000001")
+    insert_discovered_video(conn, make_entry(video_id="known000002"), origin="rss")
+    record_unavailable(conn, "known000003", "removed", origin="backfill")
+
+    found = known_video_ids(
+        conn, ["known000001", "new00000001", "known000002", "known000003"]
+    )
+
+    assert found == {"known000001", "known000002", "known000003"}
+
+
+def test_known_video_ids_of_an_empty_list_is_empty(conn: psycopg.Connection) -> None:
+    assert known_video_ids(conn, []) == set()
+
+
+def test_known_video_ids_is_one_query(conn: psycopg.Connection) -> None:
+    queries: list[str] = []
+
+    class Spy:
+        def execute(self, query: str, params: Any = None) -> Any:
+            queries.append(query)
+            return conn.execute(query, params)
+
+    known_video_ids(Spy(), [f"v{i:010d}" for i in range(50)])  # type: ignore[arg-type]
+
+    assert len(queries) == 1
+
+
+def test_insert_backfill_video_inserts_catalog_fields(conn: psycopg.Connection) -> None:
+    conn.execute("INSERT INTO channels (channel_id, active) VALUES ('UCb', false)")
+
+    inserted = insert_backfill_video(
+        conn, CatalogEntry("back0000001", "A\x00title", 321), channel_id="UCb"
+    )
+
+    assert inserted is True
+    row = conn.execute(
+        "SELECT channel_id, title, duration_sec, origin, published_at, description"
+        " FROM videos WHERE video_id = 'back0000001'"
+    ).fetchone()
+    assert row == ("UCb", "Atitle", 321, "backfill", None, None)
+
+
+def test_insert_backfill_video_leaves_an_existing_row_untouched(
+    conn: psycopg.Connection,
+) -> None:
+    insert_discovered_video(conn, make_entry(), origin="rss")
+    before = conn.execute("SELECT * FROM videos WHERE video_id = 'feed1234567'").fetchone()
+
+    inserted = insert_backfill_video(
+        conn, CatalogEntry("feed1234567", "Other", 9), channel_id="UCfeed"
+    )
+
+    assert inserted is False
+    assert conn.execute("SELECT * FROM videos WHERE video_id = 'feed1234567'").fetchone() == before

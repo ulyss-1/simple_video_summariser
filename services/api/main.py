@@ -10,7 +10,8 @@ are sync ``def``, so their blocking psycopg calls run in the threadpool.
 Every route passes through ``deps.require_auth`` (attached once, here); write
 routes also pass through ``deps.rate_limit``. Errors never reflect input: an
 unhandled exception is a bare ``500 {"detail": "internal error"}``, a
-validation error lists only ``loc``/``msg``/``type``, and there is no CORS
+validation error lists only ``loc``/``msg``/``type`` (an unknown key's
+name is dropped from ``loc``), and there is no CORS
 middleware (same-origin through nginx, §9).
 
 ``RequestContextMiddleware`` gives each request a ``request_id`` (the
@@ -28,7 +29,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import cast
+from typing import Any, cast
 
 import structlog
 from fastapi import Depends, FastAPI, Request
@@ -120,13 +121,21 @@ async def _validation_error(request: Request, exc: Exception) -> JSONResponse:
     errors = cast(RequestValidationError, exc).errors()
     detail = [
         {
-            "loc": list(error.get("loc", ())),
+            "loc": _safe_loc(error),
             "msg": error.get("msg", ""),
             "type": error.get("type", ""),
         }
         for error in errors
     ]
     return JSONResponse(status_code=422, content={"detail": detail})
+
+
+def _safe_loc(error: Any) -> list[Any]:
+    """An unknown key's name is submitted text, so it is dropped from ``loc``."""
+    loc = list(error.get("loc", ()))
+    if error.get("type") == "extra_forbidden" and loc:
+        loc = loc[:-1]
+    return loc
 
 
 async def _database_unavailable(request: Request, exc: Exception) -> JSONResponse:
