@@ -334,6 +334,50 @@ def test_concurrent_enqueue_of_the_same_key_produces_exactly_one_row(
         assert row[0] == 1
 
 
+def test_concurrent_enqueue_on_transactional_connections_commits_one_row_and_leaves_all_idle(
+    head_dsn: str,
+) -> None:
+    """#75: the 8-thread race on default (non-autocommit) connections, as ``connect()`` gives."""
+    n_threads = 8
+    barrier = threading.Barrier(n_threads)
+    results: list[int | None] = [None] * n_threads
+    statuses: list[object] = [None] * n_threads
+    errors: list[BaseException] = []
+    errors_lock = threading.Lock()
+
+    def worker(i: int) -> None:
+        conn = psycopg.connect(head_dsn)
+        try:
+            worker_queue = PostgresQueue(conn, settings=_settings())
+            barrier.wait(timeout=10)
+            results[i] = worker_queue.enqueue("analyze", "v1", dedupe_key="same-key")
+            statuses[i] = conn.info.transaction_status
+        except BaseException as exc:  # noqa: BLE001 - reported by the test
+            with errors_lock:
+                errors.append(exc)
+        finally:
+            conn.close()
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert all(not t.is_alive() for t in threads)
+
+    assert not errors, f"enqueue() raised under the race: {errors!r}"
+    winners = [r for r in results if r is not None]
+    assert len(winners) == 1
+    assert statuses == [psycopg.pq.TransactionStatus.IDLE] * n_threads
+
+    with _connect(head_dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM jobs WHERE video_id = 'v1' AND kind = 'analyze'"
+            " AND dedupe_key = 'same-key'"
+        )
+        assert cur.fetchall() == [(winners[0],)]
+
+
 # ---------------------------------------------------------------------------
 # Duplicate while running / re-run after completion (C1)
 # ---------------------------------------------------------------------------
