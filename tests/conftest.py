@@ -36,7 +36,7 @@ def _wait_for_postgres(
     probe: Callable[[str, int], None] = _probe_postgres,
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
-    deadline_sec: float = 30.0,
+    deadline_sec: float = 60.0,
     connect_timeout_sec: int = 5,
 ) -> None:
     parts = urlsplit(dsn)
@@ -70,7 +70,14 @@ def _wait_for_postgres(
 
 @pytest.fixture(scope="session")
 def postgres_container() -> Iterator[PostgresContainer]:
-    """One Postgres container for the whole test session."""
+    """One Postgres container for the whole test session.
+
+    Root cause of #74: Docker Desktop (WSL) publishes the host port a moment
+    after the container reports ready, so the first connect can be refused.
+    The fixture waits for a real connection and ``SELECT 1`` on the mapped
+    port, up to 60 s, then fails explicitly naming the endpoint. One run of
+    the suite verifies it; no repeat loops (testing-guidelines.md).
+    """
     with PostgresContainer(_POSTGRES_IMAGE, driver=None) as container:
         _wait_for_postgres(container.get_connection_url(), container.get_container_id())
         yield container

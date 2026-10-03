@@ -34,3 +34,35 @@ Per-layer approach is in architecture.md §13 — follow it. These rules apply o
 - Deterministic: no sleep, inject the clock, no test-order dependence.
 - Test via public interfaces; prefer fakes over mocking internals.
 - `tests/` mirrors the package layout; name tests after the behaviour.
+
+## Flaky or racy behaviour: find the cause, don't loop the test
+
+Running a test 20 or 50 times "to prove it's not flaky" is not evidence and
+is not an acceptance criterion. A loop only lowers the odds of seeing a
+failure; it never says why it happened, and it costs minutes on every check.
+Owner decision, 2026-10-03.
+
+When a test fails intermittently, or a criterion is about a race:
+
+1. **Find the root cause.** Reproduce it once, read the error, name the exact
+   condition (for example "the first connect to the container's mapped port
+   is refused for a moment after the container reports ready").
+2. **Fix the cause or wait on the condition explicitly.** Wait for the
+   observable condition with a bounded deadline (30-60 s for infrastructure,
+   a few seconds for locks), then fail with a clear message that names what
+   was unreachable or never happened. No retries that hide a real failure.
+3. **Force the interleaving instead of hoping for it.** For a race, make the
+   dangerous order happen every time: hold one transaction open, start the
+   competing call, confirm it is blocked (`pg_stat_activity` /
+   `pg_blocking_pids`, bounded deadline), then commit or roll back. A
+   `threading.Barrier` alone only makes a race *likely*; it can be kept as a
+   smoke test, but it is not the proof.
+4. **Test the logic deterministically.** Inject the clock, sleep and probe so
+   wait/retry logic runs in microseconds with fakes (see
+   `tests/test_postgres_readiness.py`).
+
+One run of the suite is the bar. If a test needs repetition to be trusted,
+the test is wrong: rewrite it to force the condition. Do not write "passes N
+runs in a row", `seq N` loops, `pytest-repeat` or rerun plugins into
+acceptance criteria or QA steps. If an issue still contains one, treat it as
+superseded by this section: verify the forced-interleaving test instead.

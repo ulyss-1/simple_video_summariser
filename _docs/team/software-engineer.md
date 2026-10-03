@@ -5,6 +5,10 @@ You implement one groomed task at a time.
 - Read the issue
 - Write the tests for the issue, according to _docs/testing-guidelines.md guidelines
 - Implement what the issue describes
+- For an intermittent failure, find the root cause and fix it or wait on
+  the exact condition with a bounded deadline. Do not paper over it with
+  retries, reruns or repeat loops (`_docs/testing-guidelines.md`, "Flaky
+  or racy behaviour")
 - Implement against the acceptance criteria, do not change them
 - Stay inside the files and constraints the issue names
 - Do not close the issue

@@ -25,6 +25,15 @@ Status of the groomed backlog (GitHub issues #1–#20), worked through per
   architecture.md §9.1).
 - **React Compiler:** wired through Babel. The native `compiler: true` option
   (`oxc-transform-react`) is experimental (architecture.md §16.4).
+- **Testing policy:** no repeat-run loops ("passes N runs in a row", `seq N`,
+  `pytest-repeat`). Find the root cause, wait on the exact condition with a
+  bounded deadline, and force races deterministically. One suite run is the
+  bar (`_docs/testing-guidelines.md`, "Flaky or racy behaviour"). This
+  supersedes the loop criteria in #12, #74 and #75: the Postgres readiness
+  wait is now 60 s with an explicit failure, and
+  `tests/common/test_queue_concurrency.py` forces the enqueue
+  commit/rollback races on autocommit and transactional connections, plus a
+  claim race (verified to fail against the pre-#73 `enqueue`).
 - **Still open:** the visual direction (#124). `_docs/design-system.md` is
   empty.
 

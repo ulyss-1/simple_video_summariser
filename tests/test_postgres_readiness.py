@@ -126,3 +126,25 @@ def test_postgres_readiness_does_not_retry_other_exceptions() -> None:
     assert exc_info.value is expected
     assert calls == 1
     assert clock.sleeps == []
+
+
+def test_postgres_readiness_waits_up_to_60_seconds_then_fails_explicitly() -> None:
+    clock = FakeClock()
+    attempts_at: list[float] = []
+
+    def probe(dsn: str, connect_timeout_sec: int) -> None:
+        attempts_at.append(clock.now)
+        raise psycopg.OperationalError("refused")
+
+    with pytest.raises(RuntimeError, match="not reachable at localhost:55012"):
+        _wait()(
+            "postgresql://user:secret@localhost:55012/db",
+            "abc123",
+            probe=probe,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
+
+    assert clock.now == pytest.approx(60.0)
+    assert all(t < 60.0 for t in attempts_at)
+    assert max(clock.sleeps) == 1.0

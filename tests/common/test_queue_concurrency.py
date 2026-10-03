@@ -30,6 +30,7 @@ import subprocess
 import sys
 import textwrap
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -676,3 +677,179 @@ def test_graceful_release_on_keyboard_interrupt_leaves_the_job_claimable_at_once
         assert job2 is not None
         assert job2.id == job_id
         assert job2.attempts == 1
+
+
+# ---------------------------------------------------------------------------
+# Forced interleavings (testing-guidelines.md, "Flaky or racy behaviour")
+#
+# The Barrier tests above make a race likely; these make the dangerous order
+# happen on every run: connection A holds its transaction open, B's call is
+# started and confirmed blocked on A through pg_blocking_pids, then A commits
+# or rolls back. One run is the proof - no repeat loops.
+# ---------------------------------------------------------------------------
+
+
+def _wait_until_blocked_by(
+    observer: psycopg.Connection[Any], blocked_pid: int, blocker_pid: int
+) -> None:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        with observer.cursor() as cur:
+            cur.execute(
+                "SELECT %s = ANY(pg_blocking_pids(%s))", (blocker_pid, blocked_pid)
+            )
+            row = cur.fetchone()
+        if row is not None and row[0]:
+            return
+    raise AssertionError(f"backend {blocked_pid} was never blocked by {blocker_pid}")
+
+
+class _Call(threading.Thread):
+    """Runs ``fn(conn)`` on its own connection; keeps the result or the error."""
+
+    def __init__(self, dsn: str, fn: Any, *, autocommit: bool = True) -> None:
+        super().__init__(daemon=True)
+        self.conn = psycopg.connect(dsn, autocommit=autocommit)
+        self.pid = self.conn.info.backend_pid
+        self._fn = fn
+        self.result: Any = None
+        self.error: BaseException | None = None
+
+    def run(self) -> None:
+        try:
+            self.result = self._fn(self.conn)
+        except BaseException as exc:  # noqa: BLE001 - reported by the test
+            self.error = exc
+
+    def finish(self) -> Any:
+        self.join(timeout=10)
+        assert not self.is_alive(), "the blocked call never finished"
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+def _insert_pending(conn: psycopg.Connection[Any], key: str = "k") -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO jobs (video_id, kind, dedupe_key) VALUES ('v1', 'analyze', %s)"
+            " RETURNING id",
+            (key,),
+        )
+        row = cur.fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+def _rows_for(conn: psycopg.Connection[Any], key: str = "k") -> list[tuple[Any, ...]]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, state FROM jobs WHERE video_id = 'v1' AND kind = 'analyze'"
+            " AND dedupe_key = %s",
+            (key,),
+        )
+        return cur.fetchall()
+
+
+@pytest.mark.parametrize(
+    "autocommit", [True, False], ids=["autocommit", "transactional"]
+)
+def test_enqueue_blocked_by_an_uncommitted_duplicate_returns_none_once_it_commits(
+    head_dsn: str, autocommit: bool
+) -> None:
+    holder = psycopg.connect(head_dsn)
+    racer: _Call | None = None
+    try:
+        winner_id = _insert_pending(holder)
+        racer = _Call(
+            head_dsn,
+            lambda c: PostgresQueue(c, settings=_settings()).enqueue(
+                "analyze", "v1", dedupe_key="k"
+            ),
+            autocommit=autocommit,
+        )
+        racer.start()
+        with _connect(head_dsn) as observer:
+            _wait_until_blocked_by(observer, racer.pid, holder.info.backend_pid)
+            assert racer.is_alive()
+            holder.commit()
+            assert racer.finish() is None
+            assert (
+                racer.conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+            )
+            assert _rows_for(observer) == [(winner_id, "pending")]
+    finally:
+        holder.rollback()
+        holder.close()
+        if racer is not None:
+            racer.join(timeout=10)
+            racer.conn.close()
+
+
+@pytest.mark.parametrize(
+    "autocommit", [True, False], ids=["autocommit", "transactional"]
+)
+def test_enqueue_blocked_by_an_uncommitted_duplicate_inserts_once_it_rolls_back(
+    head_dsn: str, autocommit: bool
+) -> None:
+    holder = psycopg.connect(head_dsn)
+    racer: _Call | None = None
+    try:
+        _insert_pending(holder)
+        racer = _Call(
+            head_dsn,
+            lambda c: PostgresQueue(c, settings=_settings()).enqueue(
+                "analyze", "v1", dedupe_key="k"
+            ),
+            autocommit=autocommit,
+        )
+        racer.start()
+        with _connect(head_dsn) as observer:
+            _wait_until_blocked_by(observer, racer.pid, holder.info.backend_pid)
+            assert racer.is_alive()
+            holder.rollback()
+            new_id = racer.finish()
+            assert isinstance(new_id, int)
+            assert (
+                racer.conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+            )
+            assert _rows_for(observer) == [(new_id, "pending")]
+    finally:
+        holder.rollback()
+        holder.close()
+        if racer is not None:
+            racer.join(timeout=10)
+            racer.conn.close()
+
+
+def test_a_claim_racing_a_claim_mid_commit_takes_the_other_job(head_dsn: str) -> None:
+    """A claims job 1 and holds the row lock; B's claim must skip it, never wait."""
+    with _connect(head_dsn) as seed:
+        q = PostgresQueue(seed, settings=_settings())
+        first = q.enqueue("ingest", "v1")
+        second = q.enqueue("ingest", "v2")
+    holder = psycopg.connect(head_dsn)
+    try:
+        with holder.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM jobs WHERE state='pending' ORDER BY priority DESC, run_after"
+                " LIMIT 1 FOR UPDATE"
+            )
+            row = cur.fetchone()
+        assert row is not None and row[0] == first
+
+        def claim(c: psycopg.Connection[Any]) -> int | None:
+            with PostgresQueue(c, settings=_settings()).claim(
+                ["ingest"], worker="B"
+            ) as job:
+                return None if job is None else job.id
+
+        racer = _Call(head_dsn, claim)
+        racer.start()
+        try:
+            assert racer.finish() == second
+        finally:
+            racer.conn.close()
+    finally:
+        holder.rollback()
+        holder.close()

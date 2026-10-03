@@ -7,6 +7,10 @@ You groom a task before anyone implements it.
 - Make the acceptance criteria checkable - someone should be able to
   point at the screen and say yes or no
 - Think about the edge cases the person who filed it did not consider
+- For races, flakes and timing: write criteria that force the condition
+  (hold a lock, wait on an observable state with a bounded deadline, fail
+  with a clear message). Never "passes N runs in a row" or a `seq N` loop
+  (`_docs/testing-guidelines.md`, "Flaky or racy behaviour")
 - Do not write any code
 
 Definition of done:
