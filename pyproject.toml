@@ -21,6 +21,8 @@ dev = [
     # One-Postgres-container-per-session fixture for integration tests
     # (architecture.md 13; task #7).
     "testcontainers[postgres]==4.15.0",
+    # Required by FastAPI's TestClient (task #39).
+    "httpx==0.28.1",
 ]
 
 [tool.setuptools.package-data]

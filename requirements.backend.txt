@@ -31,3 +31,9 @@ alembic==1.20.0
 # SQLAlchemy maps to the (uninstalled) psycopg2 by default, so
 # migrations/env.py rewrites it to postgresql+psycopg:// (task #7).
 psycopg[binary]==3.3.6
+
+# HTTP API (architecture.md 8.3, 16.10; task #39). Plain uvicorn, without the
+# [standard] extras: the API serves a single operator, so uvloop/httptools
+# buy nothing measurable.
+fastapi==0.142.2
+uvicorn==0.54.0

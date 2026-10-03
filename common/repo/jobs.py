@@ -1,4 +1,4 @@
-"""Job read helpers (issue #28, architecture.md §2).
+"""Job read helpers (issues #28, #39, architecture.md §2).
 
 Writes go through the ``JobQueue`` port; this module only reads what a
 handler needs to decide what to do next.
@@ -27,3 +27,13 @@ def latest_job_state(conn: psycopg.Connection[Any], video_id: str, kind: str) ->
         (video_id, kind),
     ).fetchone()
     return None if row is None else str(row[0])
+
+
+def queue_depth(conn: psycopg.Connection[Any]) -> dict[tuple[str, str], int]:
+    """Number of jobs per ``(kind, state)``, for ``/healthz`` (#39) and ``/metrics`` (#60).
+
+    Only groups that have at least one row appear; zero-filling the known
+    kinds and states is the caller's job. Read-only.
+    """
+    rows = conn.execute("SELECT kind, state, count(*) FROM jobs GROUP BY kind, state").fetchall()
+    return {(str(kind), str(state)): int(count) for kind, state, count in rows}

@@ -1,11 +1,11 @@
-"""Tests for common/repo/jobs.py (issue #28)."""
+"""Tests for common/repo/jobs.py (issues #28, #39)."""
 
 from __future__ import annotations
 
 import psycopg
 import pytest
 
-from common.repo.jobs import latest_job_state
+from common.repo.jobs import latest_job_state, queue_depth
 
 pytestmark = pytest.mark.integration
 
@@ -67,3 +67,38 @@ def test_only_the_asked_kind_counts(conn: psycopg.Connection) -> None:
 
     assert latest_job_state(conn, VID, "transcribe") == "dead"
     assert latest_job_state(conn, VID, "analyze") == "pending"
+
+
+def test_queue_depth_of_an_empty_jobs_table_is_empty(conn: psycopg.Connection) -> None:
+    assert queue_depth(conn) == {}
+
+
+def test_queue_depth_counts_each_kind_and_state_group(conn: psycopg.Connection) -> None:
+    add_job(conn, "ingest", "done", key="a")
+    add_job(conn, "ingest", "done", key="b")
+    add_job(conn, "ingest", "done", key="c")
+    add_job(conn, "ingest", "pending", key="d")
+    add_job(conn, "transcribe", "running", key="e")
+    add_job(conn, "transcribe", "dead", key="f")
+    add_job(conn, "transcribe", "dead", key="g")
+    add_job(conn, "analyze", "pending", key="h")
+    add_job(conn, "notify", "pending", key="i")
+    add_job(conn, "analyze", "paused", key="j")
+
+    assert queue_depth(conn) == {
+        ("ingest", "done"): 3,
+        ("ingest", "pending"): 1,
+        ("transcribe", "running"): 1,
+        ("transcribe", "dead"): 2,
+        ("analyze", "pending"): 1,
+        ("notify", "pending"): 1,
+        ("analyze", "paused"): 1,
+    }
+
+
+def test_queue_depth_runs_inside_a_read_only_transaction(conn: psycopg.Connection) -> None:
+    add_job(conn, "ingest", "pending")
+    conn.commit()
+    conn.read_only = True
+
+    assert queue_depth(conn) == {("ingest", "pending"): 1}

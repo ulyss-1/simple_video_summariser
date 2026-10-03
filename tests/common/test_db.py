@@ -57,3 +57,15 @@ def test_connect_uses_the_postgresql_scheme_dsn_directly(
 
     conn = connect()
     conn.close()
+
+
+def test_connect_passes_connection_parameters_through(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", postgres_dsn)
+    get_settings.cache_clear()
+
+    with connect(connect_timeout=2, options="-c statement_timeout=1234") as conn:
+        row = conn.execute("SHOW statement_timeout").fetchone()
+
+    assert row == ("1234ms",)
