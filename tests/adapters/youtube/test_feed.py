@@ -24,17 +24,17 @@ from adapters.youtube.feed import (
     YouTubeFeed,
     parse_feed,
 )
-from adapters.youtube.ids import (
-    is_channel_id,
-    is_video_id,
-    validate_channel_id,
-)
 from common.errors import (
     RateLimitedError,
     ToolFailureError,
     TransientNetworkError,
 )
 from common.models import ChannelFeed, FeedEntry
+from common.youtube_refs import (
+    is_channel_id,
+    is_video_id,
+    validate_channel_id,
+)
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures" / "feed"
 CHANNEL = "UCAuUUnT6oDeKwE6v1NGQxug"

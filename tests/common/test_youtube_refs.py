@@ -1,4 +1,4 @@
-"""``parse_video_ref``: the CLI's and the API's trust boundary for user-supplied videos (#31)."""
+"""``parse_video_ref``: the CLI's and the API's trust boundary for user-supplied videos (#31, #40)."""
 
 from __future__ import annotations
 
@@ -6,8 +6,12 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from adapters.youtube.ids import parse_video_ref
-from adapters.youtube.metadata import watch_url
+from common.youtube_refs import parse_video_ref
+
+
+def watch_url(video_id: str) -> str:
+    return f"https://www.youtube.com/watch?v={video_id}"
+
 
 ID = "dQw4w9WgXcQ"
 DASH_ID = "-wNyEUrxzFU"
@@ -70,7 +74,7 @@ def test_every_accepted_form_yields_the_bare_id(text: str) -> None:
         f"https://user@www.youtube.com/watch?v={ID}",
         f"https://www.youtube.com:8080/watch?v={ID}",
         f"https://www.youtube.com@evil.com/watch?v={ID}",
-        f"https://music.youtube.com/watch?v={ID}",
+        f"https://music.youtube.com/watch?v={ID}",  # video only (owner, 2026-10-03)
         f"https://youtu.be.evil.com/{ID}",
         "https://www.youtube.com/watch",
         "https://www.youtube.com/watch?list=PLabc123",

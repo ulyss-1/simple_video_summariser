@@ -8,7 +8,6 @@ between jobs and writes no SQL: the database is reached through
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable
 from enum import StrEnum
 from typing import Any, Protocol
@@ -24,9 +23,10 @@ from common.repo.jobs import latest_job_state
 from common.repo.transcripts import get_best_transcript
 from common.repo.videos import clear_unavailable, record_unavailable, upsert_video
 from common.worker import JobContext
+from common.youtube_refs import VIDEO_ID_PATTERN
 from services.transcriber.persist import enqueue_analyze, save_transcript_with_chunks
 
-_VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
+_VIDEO_ID = VIDEO_ID_PATTERN
 _ORIGINS = frozenset({"adhoc", "rss", "backfill"})
 _STRONG_SOURCES = frozenset({"youtube_manual", "whisper"})
 

@@ -23,10 +23,10 @@ import math
 from typing import Any
 
 from adapters.youtube.errors import decode_ytdlp_json
-from adapters.youtube.ids import is_video_id, validate_channel_id
 from adapters.youtube.ytdlp import ProcessRunner, run_process, run_ytdlp
 from common.errors import ToolFailureError
 from common.models import CatalogEntry, ChannelCatalog
+from common.youtube_refs import is_video_id, validate_channel_id
 
 _logger = logging.getLogger(__name__)
 

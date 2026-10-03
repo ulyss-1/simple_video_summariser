@@ -33,7 +33,6 @@ from pydantic import ValidationError
 from adapters.summarize.factory import SummarizerConfigError, build_summarizer
 from adapters.transcription.faster_whisper import FasterWhisperTranscriber
 from adapters.youtube.audio import YouTubeAudio
-from adapters.youtube.ids import parse_video_ref
 from adapters.youtube.metadata import YouTubeMetadata
 from adapters.youtube.subtitles import YouTubeSubtitles
 from common.chunking import chunk_segments, chunk_strategy
@@ -61,6 +60,7 @@ from common.repo.analyses import latest_analysis
 from common.repo.transcripts import get_best_transcript, get_chunks, get_transcript
 from common.repo.videos import get_video_meta
 from common.worker import JobContext
+from common.youtube_refs import parse_video_ref
 from services.analyzer.handler import make_analyze_handler
 from services.cli.inprocess import InProcessQueue
 from services.cli.output import format_result, sanitize_text

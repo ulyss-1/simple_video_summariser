@@ -1,8 +1,13 @@
-"""YouTube identifier checks shared by the adapters (trust boundary).
+"""YouTube identifier and reference parsing (trust boundary; #31, #40).
 
-IDs reach URLs and yt-dlp arguments, so they are validated here before any
-request or process starts. Used by the RSS feed adapter (#26) and the channel
-catalog adapter (#27).
+Pure functions with no I/O. IDs reach URLs, yt-dlp arguments and the
+database, so they are validated here before any request, process or write.
+Used by the RSS feed adapter (#26), the channel catalog adapter (#27), the
+video metadata adapter, the CLI (#31) and the HTTP API (#40). It lives in
+``common/`` so the API can use it without importing an adapter.
+
+Only video hosts are accepted; ``music.youtube.com`` is rejected on purpose
+(owner decision, 2026-10-03: the product is about video).
 """
 
 from __future__ import annotations
@@ -10,10 +15,12 @@ from __future__ import annotations
 import re
 from urllib.parse import parse_qsl, urlsplit
 
-# ``UC`` plus 22 characters, 24 in all. ``fullmatch`` never accepts a trailing
-# newline, unlike ``$``.
-_CHANNEL_ID = re.compile(r"UC[A-Za-z0-9_-]{22}")
-_VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
+# ``UC`` plus 22 characters, 24 in all. Always use ``fullmatch``: unlike
+# ``$``, it never accepts a trailing newline.
+CHANNEL_ID_PATTERN = re.compile(r"UC[A-Za-z0-9_-]{22}")
+VIDEO_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{11}")
+_CHANNEL_ID = CHANNEL_ID_PATTERN
+_VIDEO_ID = VIDEO_ID_PATTERN
 
 MAX_REF_CHARS = 2048
 _HOSTS = frozenset({"youtube.com", "www.youtube.com", "m.youtube.com"})

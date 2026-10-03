@@ -6,7 +6,6 @@ a ``VideoMeta``. Failures arrive already classified by the shared runner.
 
 from __future__ import annotations
 
-import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -14,6 +13,7 @@ from adapters.youtube.errors import UpcomingVideoError, decode_ytdlp_json
 from adapters.youtube.ytdlp import ProcessRunner, run_process, run_ytdlp
 from common.errors import ToolFailureError
 from common.models import VideoMeta
+from common.youtube_refs import VIDEO_ID_PATTERN
 
 DEFAULT_TIMEOUT_SEC = 120.0
 
@@ -24,7 +24,7 @@ _DUMP_FLAGS = ("--dump-json", "--skip-download", "--no-playlist", "--no-warnings
 # age-gated videos into successful dumps with no formats.
 _UPCOMING_FLAGS = (*_DUMP_FLAGS, "--ignore-no-formats-error")
 
-_VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
+_VIDEO_ID = VIDEO_ID_PATTERN
 
 # yt-dlp lists the live chat replay as a subtitle track; it is not a language.
 _NOT_A_LANGUAGE = "live_chat"
