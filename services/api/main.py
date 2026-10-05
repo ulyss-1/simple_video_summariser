@@ -40,7 +40,13 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from common.config import get_settings
 from common.logging import bound_context, configure_logging
 from services.api import routes_ops, routes_read, routes_write
-from services.api.deps import UNAVAILABLE_BODY, DatabaseUnavailable, require_auth
+from services.api.deps import (
+    READ_UNAVAILABLE_BODY,
+    UNAVAILABLE_BODY,
+    DatabaseUnavailable,
+    ReadDatabaseUnavailable,
+    require_auth,
+)
 
 _log = structlog.get_logger(__name__)
 
@@ -140,7 +146,10 @@ def _safe_loc(error: Any) -> list[Any]:
 
 async def _database_unavailable(request: Request, exc: Exception) -> JSONResponse:
     _log.error("database unavailable", exc_info=exc)
-    return JSONResponse(status_code=503, content=UNAVAILABLE_BODY)
+    read = isinstance(exc, ReadDatabaseUnavailable) or routes_read.is_read_request(request)
+    return JSONResponse(
+        status_code=503, content=READ_UNAVAILABLE_BODY if read else UNAVAILABLE_BODY
+    )
 
 
 def create_app() -> FastAPI:

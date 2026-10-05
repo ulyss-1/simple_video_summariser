@@ -1,5 +1,242 @@
-"""Read routes (issue #39; D13). Empty until #42/#43/#45."""
+"""Read routes (issues #39, #42; architecture.md 8.3, 9; D2, D7, D13).
 
-from fastapi import APIRouter
+- ``GET /videos``: the library, filtered and paged.
+- ``GET /videos/{video_id}``: one video, its best transcript and latest analysis.
+- ``GET /videos/{video_id}/analyses``: every analysis run, newest first.
+- ``GET /videos/{video_id}/transcript``: one page of the best transcript's segments.
 
-router = APIRouter()
+Every path and query parameter is untrusted. It is validated by a gate
+dependency that runs before ``get_read_conn``, so a 422 never opens a
+database connection (FastAPI would otherwise resolve the connection even
+when parameter parsing fails). A rejection never echoes the submitted value.
+The routes hold no SQL, run on a read-only connection, and write nothing.
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Callable
+from datetime import UTC, date, datetime
+from typing import Annotated, Any, Literal
+
+import psycopg
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.exceptions import RequestValidationError
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    ValidationError,
+    model_validator,
+)
+
+from common.repo.analyses import latest_analysis_run, list_analysis_runs
+from common.repo.transcripts import best_transcript_info, best_transcript_page
+from common.repo.videos import get_video, list_videos, video_exists
+from common.youtube_refs import is_channel_id, is_video_id
+from services.api import schemas
+from services.api.deps import get_read_conn
+
+
+def _mark_read_request(request: Request) -> None:
+    request.state.read_route = True
+
+
+def is_read_request(request: Request) -> bool:
+    """Whether ``request`` is being served by this router (for the 503 body)."""
+    return bool(getattr(request.state, "read_route", False))
+
+
+router = APIRouter(dependencies=[Depends(_mark_read_request)])
+
+MAX_OFFSET = 1_000_000
+BAD_VIDEO_ID = "video id must be 11 characters of A-Z, a-z, 0-9, '_' or '-'"
+VIDEO_NOT_FOUND = "video not found"
+TRANSCRIPT_NOT_FOUND = "transcript not found"
+
+_DIGITS = re.compile(r"[0-9]{1,7}")
+_MAX_DATE_CHARS = 64
+
+
+def _query_int(value: object) -> object:
+    """Plain ASCII digits only: no sign, exponent, fraction, underscore or space.
+
+    At most 7 digits (every bound here is at most 1_000_000), so a huge value
+    is rejected before it is parsed; a zero-padded value longer than that is
+    rejected too.
+    """
+    if isinstance(value, str):
+        if _DIGITS.fullmatch(value) is None:
+            raise ValueError("must be a non-negative integer within range")
+        return int(value)
+    return value
+
+
+def _query_datetime(value: object) -> object:
+    """ISO 8601 date (midnight UTC) or datetime; a naive datetime is UTC."""
+    if not isinstance(value, str):
+        return value
+    if len(value) > _MAX_DATE_CHARS:
+        raise ValueError("must be an ISO 8601 date or datetime")
+    try:
+        if len(value) <= 10:
+            parsed = datetime.combine(date.fromisoformat(value), datetime.min.time())
+        else:
+            parsed = datetime.fromisoformat(value)
+    except ValueError:
+        raise ValueError("must be an ISO 8601 date or datetime") from None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def _channel(value: object) -> object:
+    if value is not None and not is_channel_id(value):
+        raise ValueError("must be a canonical channel ID (UC + 22 characters)")
+    return value
+
+
+QueryInt = Annotated[int, BeforeValidator(_query_int)]
+QueryDatetime = Annotated[datetime, BeforeValidator(_query_datetime)]
+ChannelId = Annotated[str, BeforeValidator(_channel)]
+
+
+class VideoListQuery(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    channel: ChannelId | None = None
+    status: Literal["done", "processing", "unavailable", "failed", "idle"] | None = None
+    published_after: QueryDatetime | None = None
+    published_before: QueryDatetime | None = None
+    offset: QueryInt = Field(0, ge=0, le=MAX_OFFSET)
+    limit: QueryInt = Field(50, ge=1, le=200)
+
+    @model_validator(mode="after")
+    def _ordered_dates(self) -> VideoListQuery:
+        after, before = self.published_after, self.published_before
+        if after is not None and before is not None and after > before:
+            raise ValueError("published_after must not be later than published_before")
+        return self
+
+
+class AnalysesQuery(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    offset: QueryInt = Field(0, ge=0, le=MAX_OFFSET)
+    limit: QueryInt = Field(10, ge=1, le=50)
+
+
+class TranscriptQuery(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    offset: QueryInt = Field(0, ge=0, le=MAX_OFFSET)
+    limit: QueryInt = Field(200, ge=1, le=1000)
+
+
+def _gate(model: type[BaseModel]) -> Callable[[Request], None]:
+    """A dependency that validates the query string and *raises* on failure.
+
+    Raising (rather than letting FastAPI collect the error) stops dependency
+    resolution before ``get_read_conn``. The route still declares ``model``
+    as its ``Query()`` parameter, for the typed value and for ``/openapi.json``.
+    """
+
+    def gate(request: Request) -> None:
+        try:
+            model.model_validate(dict(request.query_params))
+        except ValidationError as exc:
+            errors = exc.errors(include_input=False, include_context=False, include_url=False)
+            raise RequestValidationError(
+                [{**error, "loc": ("query", *error["loc"])} for error in errors]
+            ) from None
+
+    return gate
+
+
+def _valid_video_id(request: Request, video_id: str) -> str:
+    """The path id, also required verbatim in the raw path.
+
+    A valid id never contains ``%``, so requiring it as a whole raw segment
+    rejects a percent-encoded id (``%41...``) that would otherwise decode into
+    validity, whatever prefix (``root_path``) the app is mounted under.
+    """
+    raw_path = request.scope.get("raw_path")
+    raw_ok = not isinstance(raw_path, bytes) or video_id.encode() in raw_path.split(b"/")
+    if not raw_ok or not is_video_id(video_id):
+        raise RequestValidationError(
+            [{"loc": ("path", "video_id"), "msg": BAD_VIDEO_ID, "type": "value_error"}]
+        )
+    return video_id
+
+
+ReadConn = Annotated[psycopg.Connection[Any], Depends(get_read_conn)]
+VideoId = Annotated[str, Depends(_valid_video_id)]
+
+
+@router.get("/videos", response_model=schemas.VideoList)
+def get_videos(
+    _: Annotated[None, Depends(_gate(VideoListQuery))],
+    params: Annotated[VideoListQuery, Query()],
+    conn: ReadConn,
+) -> schemas.VideoList:
+    """The library, newest published first; ``total`` counts every match."""
+    page = list_videos(
+        conn,
+        channel_id=params.channel,
+        status=params.status,
+        published_after=params.published_after,
+        published_before=params.published_before,
+        offset=params.offset,
+        limit=params.limit,
+    )
+    return schemas.VideoList(
+        items=[schemas.video_item(v) for v in page.items],
+        total=page.total,
+        offset=params.offset,
+        limit=params.limit,
+    )
+
+
+@router.get("/videos/{video_id}", response_model=schemas.VideoDetail)
+def get_video_detail(video_id: VideoId, conn: ReadConn) -> schemas.VideoDetail:
+    """One video, its status, best transcript (D2) and latest analysis."""
+    video = get_video(conn, video_id)
+    if video is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, VIDEO_NOT_FOUND)
+    return schemas.video_detail(
+        video, best_transcript_info(conn, video_id), latest_analysis_run(conn, video_id)
+    )
+
+
+@router.get("/videos/{video_id}/analyses", response_model=schemas.AnalysisList)
+def get_video_analyses(
+    video_id: VideoId,
+    _: Annotated[None, Depends(_gate(AnalysesQuery))],
+    params: Annotated[AnalysesQuery, Query()],
+    conn: ReadConn,
+) -> schemas.AnalysisList:
+    """Every analysis run of the video, newest first (D7)."""
+    if not video_exists(conn, video_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, VIDEO_NOT_FOUND)
+    runs, total = list_analysis_runs(conn, video_id, offset=params.offset, limit=params.limit)
+    return schemas.AnalysisList(
+        items=[schemas.analysis_out(run) for run in runs],
+        total=total,
+        offset=params.offset,
+        limit=params.limit,
+    )
+
+
+@router.get("/videos/{video_id}/transcript", response_model=schemas.TranscriptOut)
+def get_video_transcript(
+    video_id: VideoId,
+    _: Annotated[None, Depends(_gate(TranscriptQuery))],
+    params: Annotated[TranscriptQuery, Query()],
+    conn: ReadConn,
+) -> schemas.TranscriptOut:
+    """One page of the best transcript's segments (D2, architecture.md 9)."""
+    if not video_exists(conn, video_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, VIDEO_NOT_FOUND)
+    page = best_transcript_page(conn, video_id, offset=params.offset, limit=params.limit)
+    if page is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, TRANSCRIPT_NOT_FOUND)
+    return schemas.transcript_out(page, offset=params.offset, limit=params.limit)

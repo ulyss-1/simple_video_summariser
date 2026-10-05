@@ -10,7 +10,14 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
-from common.models import Chunk, Segment, Transcript
+from common.models import (
+    Chunk,
+    IndexedSegment,
+    Segment,
+    Transcript,
+    TranscriptInfo,
+    TranscriptPage,
+)
 from common.repo._hygiene import clean_json, clean_text
 
 _SOURCES = {"youtube_manual", "youtube_auto", "whisper"}
@@ -255,3 +262,54 @@ def median_whisper_rtf(conn: psycopg.Connection[Any]) -> tuple[float | None, int
     if not values:
         return None, 0
     return statistics.median(values), len(values)
+
+
+_BEST_INFO = """
+    SELECT id, source, language, speaker_source, jsonb_array_length(segments)
+    FROM transcripts
+    WHERE video_id = %s
+    ORDER BY transcript_rank(source), id
+    LIMIT 1
+"""
+
+
+def best_transcript_info(conn: psycopg.Connection[Any], video_id: str) -> TranscriptInfo | None:
+    """The best transcript's identity and segment count, without its text (#42).
+
+    Ranked like ``get_best_transcript`` (D2: manual > whisper > auto).
+    """
+    row = conn.execute(_BEST_INFO, (video_id,)).fetchone()
+    if row is None:
+        return None
+    transcript_id, source, language, speaker_source, count = row
+    return TranscriptInfo(int(transcript_id), source, language, speaker_source, int(count))
+
+
+def best_transcript_page(
+    conn: psycopg.Connection[Any], video_id: str, *, offset: int, limit: int
+) -> TranscriptPage | None:
+    """One page of the best transcript's segments, sliced in SQL (#42).
+
+    ``None`` when the video has no transcript. Neither the whole ``segments``
+    array nor ``full_text`` is ever fetched.
+    """
+    info = best_transcript_info(conn, video_id)
+    if info is None:
+        return None
+    rows = conn.execute(
+        """
+        SELECT s.ord - 1, (s.seg->>'start')::float8, (s.seg->>'end')::float8,
+               s.seg->>'text', s.seg->>'speaker'
+        FROM transcripts t,
+             jsonb_array_elements(t.segments) WITH ORDINALITY AS s(seg, ord)
+        WHERE t.id = %s
+        ORDER BY s.ord
+        OFFSET %s LIMIT %s
+        """,
+        (info.id, offset, limit),
+    ).fetchall()
+    segments = tuple(
+        IndexedSegment(int(i), float(start), float(end), text, speaker)
+        for i, start, end, text, speaker in rows
+    )
+    return TranscriptPage(video_id=video_id, info=info, segments=segments)

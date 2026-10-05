@@ -13,7 +13,7 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
-from common.models import Analysis, Claim, Quote, Topic
+from common.models import Analysis, AnalysisRun, Claim, Quote, Topic
 from common.repo._hygiene import clean_json, clean_text
 
 
@@ -124,8 +124,8 @@ def analysis_exists(
 def latest_analysis(conn: psycopg.Connection[Any], video_id: str) -> Analysis | None:
     """The newest analysis for ``video_id``, with its children populated.
 
-    Topics ordered by ``seq``, claims and quotes by ``start_sec``; ties on
-    ``created_at`` broken by ``id DESC``. ``None`` when the video has no
+    Topics ordered by ``seq``, claims and quotes by ``start_sec`` (nulls
+    last, then ``id``); ties on ``created_at`` broken by ``id DESC``. ``None`` when the video has no
     analysis.
     """
     row = conn.execute(
@@ -169,14 +169,14 @@ def latest_analysis(conn: psycopg.Connection[Any], video_id: str) -> Analysis | 
     claims = conn.execute(
         """
         SELECT id, text, speaker, start_sec, confidence, source_chunk_seq FROM claims
-        WHERE analysis_id = %s ORDER BY start_sec
+        WHERE analysis_id = %s ORDER BY start_sec ASC NULLS LAST, id ASC
         """,
         (analysis_id,),
     ).fetchall()
     quotes = conn.execute(
         """
         SELECT id, text, speaker, start_sec, source_chunk_seq FROM quotes
-        WHERE analysis_id = %s ORDER BY start_sec
+        WHERE analysis_id = %s ORDER BY start_sec ASC NULLS LAST, id ASC
         """,
         (analysis_id,),
     ).fetchall()
@@ -236,4 +236,114 @@ def _quote(row: tuple[Any, ...]) -> Quote:
         start_sec=float(start_sec) if start_sec is not None else None,
         source_chunk_seq=source_chunk_seq,
         id=int(quote_id),
+    )
+
+
+_RUN_COLUMNS = """
+    a.id, a.video_id, a.transcript_id, a.chunk_strategy, a.model, a.prompt_version,
+    a.tldr, a.speaker_roster, a.input_tokens, a.output_tokens, a.cost_usd,
+    a.duration_ms, a.created_at, t.source
+"""
+
+
+def latest_analysis_run(conn: psycopg.Connection[Any], video_id: str) -> AnalysisRun | None:
+    """The newest analysis of ``video_id`` with its children and transcript source (#42)."""
+    runs = _runs(conn, video_id, offset=0, limit=1)
+    return runs[0] if runs else None
+
+
+def list_analysis_runs(
+    conn: psycopg.Connection[Any], video_id: str, *, offset: int, limit: int
+) -> tuple[tuple[AnalysisRun, ...], int]:
+    """A page of ``video_id``'s analyses, newest first, and the total count (#42).
+
+    Ordered by ``created_at DESC, id DESC``. Children are loaded with one
+    statement per child table for the whole page, never one per analysis;
+    topics by ``seq``, claims and quotes by ``start_sec`` (nulls last, then ``id``).
+    """
+    total_row = conn.execute(
+        "SELECT count(*) FROM analyses WHERE video_id = %s", (video_id,)
+    ).fetchone()
+    total = int(total_row[0]) if total_row else 0
+    return _runs(conn, video_id, offset=offset, limit=limit), total
+
+
+def _runs(
+    conn: psycopg.Connection[Any], video_id: str, *, offset: int, limit: int
+) -> tuple[AnalysisRun, ...]:
+    rows = conn.execute(
+        f"""
+        SELECT {_RUN_COLUMNS}
+        FROM analyses a JOIN transcripts t ON t.id = a.transcript_id
+        WHERE a.video_id = %s
+        ORDER BY a.created_at DESC, a.id DESC
+        OFFSET %s LIMIT %s
+        """,
+        (video_id, offset, limit),
+    ).fetchall()
+    ids = [int(row[0]) for row in rows]
+    topics: dict[int, list[Topic]] = {i: [] for i in ids}
+    claims: dict[int, list[Claim]] = {i: [] for i in ids}
+    quotes: dict[int, list[Quote]] = {i: [] for i in ids}
+    if ids:
+        for row in conn.execute(
+            """
+            SELECT analysis_id, id, seq, title, summary, start_sec FROM topics
+            WHERE analysis_id = ANY(%s) ORDER BY analysis_id, seq, id
+            """,
+            (ids,),
+        ).fetchall():
+            topics[int(row[0])].append(_topic(row[1:]))
+        for row in conn.execute(
+            """
+            SELECT analysis_id, id, text, speaker, start_sec, confidence, source_chunk_seq
+            FROM claims WHERE analysis_id = ANY(%s)
+            ORDER BY analysis_id, start_sec ASC NULLS LAST, id ASC
+            """,
+            (ids,),
+        ).fetchall():
+            claims[int(row[0])].append(_claim(row[1:]))
+        for row in conn.execute(
+            """
+            SELECT analysis_id, id, text, speaker, start_sec, source_chunk_seq
+            FROM quotes WHERE analysis_id = ANY(%s)
+            ORDER BY analysis_id, start_sec ASC NULLS LAST, id ASC
+            """,
+            (ids,),
+        ).fetchall():
+            quotes[int(row[0])].append(_quote(row[1:]))
+    return tuple(
+        AnalysisRun(
+            analysis=_analysis(row[:13], topics[int(row[0])], claims[int(row[0])],
+                               quotes[int(row[0])]),
+            transcript_source=row[13],
+        )
+        for row in rows
+    )
+
+
+def _analysis(
+    row: tuple[Any, ...], topics: list[Topic], claims: list[Claim], quotes: list[Quote]
+) -> Analysis:
+    (
+        analysis_id, video_id, transcript_id, chunk_strategy, model, prompt_version, tldr,
+        speaker_roster, input_tokens, output_tokens, cost_usd, duration_ms, created_at,
+    ) = row
+    return Analysis(
+        id=int(analysis_id),
+        video_id=video_id,
+        transcript_id=int(transcript_id),
+        chunk_strategy=chunk_strategy,
+        model=model,
+        prompt_version=prompt_version,
+        tldr=tldr,
+        speaker_roster=speaker_roster,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost_usd=float(cost_usd) if cost_usd is not None else None,
+        duration_ms=duration_ms,
+        created_at=created_at,
+        topics=tuple(topics),
+        claims=tuple(claims),
+        quotes=tuple(quotes),
     )

@@ -335,3 +335,88 @@ class Summarizer(Protocol):
     def reduce(self, partials: list[ChunkAnalysis], meta: VideoMeta) -> str: ...
 
     def take_usage(self) -> Usage: ...  # totals since the last call, then reset to zero
+
+
+# ActiveJob, JobFailure, VideoSummary, VideoPage, AnalysisRun, TranscriptInfo,
+# IndexedSegment and TranscriptPage belong to #42 (read endpoints). They are
+# what the common/repo/ read functions behind GET /videos... return.
+
+VIDEO_STATUSES = ("done", "processing", "unavailable", "failed", "idle")
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveJob:
+    """A ``pending`` or ``running`` job of a video."""
+
+    id: int
+    kind: str
+    state: str
+
+
+@dataclass(frozen=True, slots=True)
+class JobFailure:
+    """A video's newest ``dead`` job. ``jobs.last_error`` is deliberately absent."""
+
+    job_id: int
+    kind: str
+    error_class: str | None
+    finished_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class VideoSummary:
+    """One ``videos`` row plus its derived processing status (#42)."""
+
+    video_id: str
+    title: str | None
+    channel_id: str | None
+    channel_title: str | None
+    published_at: datetime | None
+    duration_sec: int | None
+    origin: str
+    unavailable: str | None
+    status: str  # one of VIDEO_STATUSES
+    active_job: ActiveJob | None
+    last_failure: JobFailure | None
+    latest_analysis_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class VideoPage:
+    items: tuple[VideoSummary, ...]
+    total: int
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisRun:
+    """An analysis plus the ``source`` of the transcript it was made from."""
+
+    analysis: Analysis
+    transcript_source: str
+
+
+@dataclass(frozen=True, slots=True)
+class TranscriptInfo:
+    id: int
+    source: str
+    language: str | None
+    speaker_source: str
+    segment_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class IndexedSegment:
+    """A transcript segment and its absolute 0-based position."""
+
+    index: int
+    start: float
+    end: float
+    text: str
+    speaker: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class TranscriptPage:
+    video_id: str
+    info: TranscriptInfo
+    segments: tuple[IndexedSegment, ...]

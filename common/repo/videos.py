@@ -3,11 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 
 import psycopg
 
-from common.models import CatalogEntry, FeedEntry, VideoMeta
+from common.models import (
+    ActiveJob,
+    CatalogEntry,
+    FeedEntry,
+    JobFailure,
+    VideoMeta,
+    VideoPage,
+    VideoSummary,
+)
 from common.repo._hygiene import clean_text
 
 _UNAVAILABLE_REASONS = {"removed", "private", "geoblocked", "agegated"}
@@ -232,3 +241,127 @@ def insert_backfill_video(
         (entry.video_id, channel_id, clean_text(entry.title), entry.duration_sec),
     ).fetchone()
     return row is not None
+
+
+# The one definition of a video's processing status (#42). Both list_videos and
+# get_video select from this, so the rules cannot drift apart. ``v`` is the
+# videos row; the LATERAL joins see only that video's jobs and analyses.
+_VIDEO_READ = """
+    SELECT v.video_id, v.title, v.channel_id, c.title AS channel_title,
+           v.published_at, v.duration_sec, v.origin, v.unavailable,
+           CASE
+               WHEN la.created_at IS NOT NULL THEN 'done'
+               WHEN aj.id IS NOT NULL THEN 'processing'
+               WHEN v.unavailable IS NOT NULL THEN 'unavailable'
+               WHEN nj.state = 'dead' THEN 'failed'
+               ELSE 'idle'
+           END AS status,
+           aj.id AS aj_id, aj.kind AS aj_kind, aj.state AS aj_state,
+           lf.id AS lf_id, lf.kind AS lf_kind, lf.error_class AS lf_error_class,
+           lf.finished_at AS lf_finished_at,
+           la.created_at AS latest_analysis_at,
+           v.discovered_at
+    FROM videos v
+    LEFT JOIN channels c ON c.channel_id = v.channel_id
+    LEFT JOIN LATERAL (
+        SELECT a.created_at FROM analyses a
+        WHERE a.video_id = v.video_id
+        ORDER BY a.created_at DESC, a.id DESC LIMIT 1
+    ) la ON true
+    LEFT JOIN LATERAL (
+        SELECT j.id, j.kind, j.state FROM jobs j
+        WHERE j.video_id = v.video_id AND j.state IN ('pending', 'running')
+        ORDER BY CASE j.kind WHEN 'ingest' THEN 0 WHEN 'transcribe' THEN 1
+                             WHEN 'analyze' THEN 2 ELSE 3 END,
+                 j.created_at, j.id
+        LIMIT 1
+    ) aj ON true
+    LEFT JOIN LATERAL (
+        SELECT j.state FROM jobs j
+        WHERE j.video_id = v.video_id
+        ORDER BY j.created_at DESC, j.id DESC LIMIT 1
+    ) nj ON true
+    LEFT JOIN LATERAL (
+        SELECT j.id, j.kind, j.error_class, j.finished_at FROM jobs j
+        WHERE j.video_id = v.video_id AND j.state = 'dead'
+        ORDER BY j.created_at DESC, j.id DESC LIMIT 1
+    ) lf ON true
+"""
+
+
+def list_videos(
+    conn: psycopg.Connection[Any],
+    *,
+    channel_id: str | None = None,
+    status: str | None = None,
+    published_after: datetime | None = None,
+    published_before: datetime | None = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> VideoPage:
+    """One page of the library plus the total match count (#42).
+
+    Filters combine with AND; any date filter excludes videos with no
+    ``published_at``. ``published_after`` is inclusive, ``published_before``
+    exclusive. Ordered by ``published_at DESC NULLS LAST, discovered_at DESC,
+    video_id``. One statement, however large ``limit`` is.
+    """
+    rows = conn.execute(
+        f"""
+        WITH m AS (
+            SELECT * FROM ({_VIDEO_READ}) r
+            WHERE (%(channel)s::text IS NULL OR channel_id = %(channel)s)
+              AND (%(status)s::text IS NULL OR status = %(status)s)
+              AND (%(after)s::timestamptz IS NULL OR published_at >= %(after)s)
+              AND (%(before)s::timestamptz IS NULL OR published_at < %(before)s)
+        )
+        SELECT t.total, p.*
+        FROM (SELECT count(*) AS total FROM m) t
+        LEFT JOIN LATERAL (
+            SELECT * FROM m
+            ORDER BY published_at DESC NULLS LAST, discovered_at DESC, video_id ASC
+            OFFSET %(offset)s LIMIT %(limit)s
+        ) p ON true
+        """,
+        {
+            "channel": channel_id,
+            "status": status,
+            "after": published_after,
+            "before": published_before,
+            "offset": offset,
+            "limit": limit,
+        },
+    ).fetchall()
+    total = int(rows[0][0]) if rows else 0
+    items = tuple(_summary(row[1:]) for row in rows if row[1] is not None)
+    return VideoPage(items=items, total=total)
+
+
+def get_video(conn: psycopg.Connection[Any], video_id: str) -> VideoSummary | None:
+    """One video with its derived status, or ``None`` without a ``videos`` row (#42)."""
+    row = conn.execute(f"{_VIDEO_READ} WHERE v.video_id = %s", (video_id,)).fetchone()
+    return None if row is None else _summary(row)
+
+
+def _summary(row: Sequence[Any]) -> VideoSummary:
+    (
+        video_id, title, channel_id, channel_title, published_at, duration_sec, origin,
+        unavailable, status, aj_id, aj_kind, aj_state, lf_id, lf_kind, lf_class,
+        lf_finished, latest_analysis_at, _discovered_at,
+    ) = row
+    return VideoSummary(
+        video_id=video_id,
+        title=title,
+        channel_id=channel_id,
+        channel_title=channel_title,
+        published_at=published_at,
+        duration_sec=duration_sec,
+        origin=origin,
+        unavailable=unavailable,
+        status=status,
+        active_job=None if aj_id is None else ActiveJob(int(aj_id), aj_kind, aj_state),
+        last_failure=(
+            None if lf_id is None else JobFailure(int(lf_id), lf_kind, lf_class, lf_finished)
+        ),
+        latest_analysis_at=latest_analysis_at,
+    )
