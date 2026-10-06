@@ -18,6 +18,7 @@ from common.models import (
     TranscriptPage,
     VideoSummary,
 )
+from common.repo.search import SearchPage as RepoSearchPage
 
 UtcDatetime = Annotated[datetime, AfterValidator(lambda value: value.astimezone(UTC))]
 VideoStatus = Literal["done", "processing", "unavailable", "failed", "idle"]
@@ -36,15 +37,20 @@ class LastFailureOut(BaseModel):
     finished_at: UtcDatetime | None
 
 
-class VideoItem(BaseModel):
+class VideoFields(BaseModel):
+    """Fields shared by a library item and a search result (#42, #43)."""
+
     video_id: str
     title: str | None
     channel_id: str | None
     channel_title: str | None
     published_at: UtcDatetime | None
     duration_sec: int | None
-    origin: str
     unavailable: str | None
+
+
+class VideoItem(VideoFields):
+    origin: str
     status: VideoStatus
     active_job: ActiveJobOut | None
     last_failure: LastFailureOut | None
@@ -137,6 +143,48 @@ class TranscriptOut(BaseModel):
     offset: int
     limit: int
     segments: list[SegmentOut]
+
+
+class SpanOut(BaseModel):
+    text: str
+    match: bool
+
+
+class SearchResult(VideoFields):
+    transcript_source: str
+    excerpts: list[list[SpanOut]]
+
+
+class SearchPage(BaseModel):
+    results: list[SearchResult]
+    limit: int
+    offset: int
+    has_more: bool
+
+
+def search_page(page: RepoSearchPage, *, limit: int, offset: int) -> SearchPage:
+    return SearchPage(
+        results=[
+            SearchResult(
+                video_id=hit.video_id,
+                title=hit.title,
+                channel_id=hit.channel_id,
+                channel_title=hit.channel_title,
+                published_at=hit.published_at,
+                duration_sec=hit.duration_sec,
+                unavailable=hit.unavailable,
+                transcript_source=hit.transcript_source,
+                excerpts=[
+                    [SpanOut(text=span.text, match=span.match) for span in fragment]
+                    for fragment in hit.excerpts
+                ],
+            )
+            for hit in page.results
+        ],
+        limit=limit,
+        offset=offset,
+        has_more=page.has_more,
+    )
 
 
 def video_item(video: VideoSummary) -> VideoItem:

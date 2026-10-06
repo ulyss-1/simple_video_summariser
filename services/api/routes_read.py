@@ -4,6 +4,7 @@
 - ``GET /videos/{video_id}``: one video, its best transcript and latest analysis.
 - ``GET /videos/{video_id}/analyses``: every analysis run, newest first.
 - ``GET /videos/{video_id}/transcript``: one page of the best transcript's segments.
+- ``GET /search``: full-text search over each video's preferred transcript (#43).
 
 Every path and query parameter is untrusted. It is validated by a gate
 dependency that runs before ``get_read_conn``, so a 422 never opens a
@@ -15,11 +16,13 @@ The routes hold no SQL, run on a read-only connection, and write nothing.
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from typing import Annotated, Any, Literal
 
 import psycopg
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.exceptions import RequestValidationError
 from pydantic import (
@@ -32,11 +35,12 @@ from pydantic import (
 )
 
 from common.repo.analyses import latest_analysis_run, list_analysis_runs
+from common.repo.search import search_transcripts
 from common.repo.transcripts import best_transcript_info, best_transcript_page
 from common.repo.videos import get_video, list_videos, video_exists
 from common.youtube_refs import is_channel_id, is_video_id
 from services.api import schemas
-from services.api.deps import get_read_conn
+from services.api.deps import ReadDatabaseUnavailable, get_read_conn
 
 
 def _mark_read_request(request: Request) -> None:
@@ -49,8 +53,11 @@ def is_read_request(request: Request) -> bool:
 
 
 router = APIRouter(dependencies=[Depends(_mark_read_request)])
+_log = structlog.get_logger(__name__)
 
 MAX_OFFSET = 1_000_000
+MAX_SEARCH_CHARS = 200
+MAX_SEARCH_OFFSET = 1000
 BAD_VIDEO_ID = "video id must be 11 characters of A-Z, a-z, 0-9, '_' or '-'"
 VIDEO_NOT_FOUND = "video not found"
 TRANSCRIPT_NOT_FOUND = "transcript not found"
@@ -116,6 +123,27 @@ class VideoListQuery(BaseModel):
         if after is not None and before is not None and after > before:
             raise ValueError("published_after must not be later than published_before")
         return self
+
+
+def _search_q(value: object) -> object:
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    if "\x00" in stripped:
+        raise ValueError("q must not contain NUL")
+    if not 1 <= len(stripped) <= MAX_SEARCH_CHARS:
+        raise ValueError(f"q must be 1-{MAX_SEARCH_CHARS} characters after trimming")
+    return stripped
+
+
+class SearchQuery(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    q: Annotated[str, BeforeValidator(_search_q)] = Field(
+        min_length=1, max_length=MAX_SEARCH_CHARS
+    )
+    offset: QueryInt = Field(0, ge=0, le=MAX_SEARCH_OFFSET)
+    limit: QueryInt = Field(20, ge=1, le=50)
 
 
 class AnalysesQuery(BaseModel):
@@ -240,3 +268,30 @@ def get_video_transcript(
     if page is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, TRANSCRIPT_NOT_FOUND)
     return schemas.transcript_out(page, offset=params.offset, limit=params.limit)
+
+
+@router.get("/search", response_model=schemas.SearchPage)
+def get_search(
+    _: Annotated[None, Depends(_gate(SearchQuery))],
+    params: Annotated[SearchQuery, Query()],
+    conn: ReadConn,
+) -> schemas.SearchPage:
+    """Videos whose preferred transcript matches ``q``, most relevant first.
+
+    The body never echoes ``q``, and the log line records only its length.
+    Any database error is a 503 (``deps.get_read_conn``).
+    """
+    started = time.perf_counter()
+    try:
+        page = search_transcripts(conn, params.q, params.limit, params.offset)
+    except psycopg.Error as exc:
+        raise ReadDatabaseUnavailable from exc
+    _log.info(
+        "search",
+        q_len=len(params.q),
+        results=len(page.results),
+        offset=params.offset,
+        limit=params.limit,
+        duration_ms=round((time.perf_counter() - started) * 1000, 1),
+    )
+    return schemas.search_page(page, limit=params.limit, offset=params.offset)
