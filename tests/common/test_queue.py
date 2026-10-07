@@ -1336,6 +1336,18 @@ def test_retry_dead_concurrent_retries_give_exactly_one_200_and_one_409(
 def test_retry_dead_racing_an_enqueue_leaves_exactly_one_active_job(
     head_dsn: str,
 ) -> None:
+    """A ``retry_dead`` whose ``NOT EXISTS`` check cannot see an in-flight
+    concurrent enqueue (it is not yet committed, so a plain snapshot read
+    does not see it) must still never produce two active rows for the same
+    key: the forced interleaving below is the one a barrier only sometimes
+    reproduces (testing-guidelines.md, "Flaky or racy behaviour") - here the
+    competing INSERT is held open and uncommitted while ``retry_dead``'s
+    UPDATE is confirmed blocked on it (via ``pg_blocking_pids``), so the
+    UPDATE's own unique-index check, not the ``NOT EXISTS`` pre-check, is
+    what has to catch the conflict and turn it into ``RetryOutcome
+    "superseded"`` rather than a raised ``UniqueViolation`` or a second
+    active row.
+    """
     seed_conn = psycopg.connect(head_dsn, autocommit=True)
     try:
         seed_queue = PostgresQueue(seed_conn, settings=_settings())
@@ -1343,37 +1355,45 @@ def test_retry_dead_racing_an_enqueue_leaves_exactly_one_active_job(
     finally:
         seed_conn.close()
 
+    holder = psycopg.connect(head_dsn)  # autocommit=False: transaction stays open
+    try:
+        # Not PostgresQueue.enqueue(): it wraps its INSERT in its own
+        # conn.transaction() block, which commits on exit even though
+        # holder.autocommit is False. A bare execute() leaves the INSERT in
+        # the connection's still-open implicit transaction, uncommitted
+        # until the explicit holder.commit() below - exactly the window a
+        # concurrent snapshot read (retry_dead's own NOT EXISTS) cannot see.
+        new_job_id = holder.execute(
+            "INSERT INTO jobs (video_id, kind, dedupe_key, payload, priority, run_after)"
+            " VALUES ('v1', 'ingest', 'default', '{}', 0, now()) RETURNING id"
+        ).fetchone()
+        assert new_job_id is not None
 
-    barrier = threading.Barrier(2)
-    retry_outcome: list[RetryOutcome] = []
-    enqueue_result: list[int | None] = []
-    errors: list[BaseException] = []
+        with psycopg.connect(head_dsn, autocommit=True) as observer:
+            racer_conn = psycopg.connect(head_dsn, autocommit=True)
+            try:
+                racer_queue = PostgresQueue(racer_conn, settings=_settings())
+                outcome: list[RetryOutcome] = []
 
-    def retry() -> None:
-        try:
-            with psycopg.connect(head_dsn, autocommit=True) as c:
-                q = PostgresQueue(c, settings=_settings())
-                barrier.wait(timeout=10)
-                retry_outcome.append(q.retry_dead(job_id))
-        except BaseException as exc:  # noqa: BLE001 - reported by the test
-            errors.append(exc)
+                def attempt() -> None:
+                    outcome.append(racer_queue.retry_dead(job_id))
 
-    def enqueue() -> None:
-        try:
-            with psycopg.connect(head_dsn, autocommit=True) as c:
-                q = PostgresQueue(c, settings=_settings())
-                barrier.wait(timeout=10)
-                enqueue_result.append(q.enqueue("ingest", "v1", dedupe_key="default"))
-        except BaseException as exc:  # noqa: BLE001 - reported by the test
-            errors.append(exc)
+                t = threading.Thread(target=attempt)
+                t.start()
+                _wait_until_blocked_by(
+                    observer, racer_conn.info.backend_pid, holder.info.backend_pid
+                )
+                assert t.is_alive(), "retry_dead did not block on the uncommitted insert"
+                holder.commit()
+                t.join(timeout=10)
+                assert not t.is_alive()
+            finally:
+                racer_conn.close()
 
-    threads = [threading.Thread(target=retry), threading.Thread(target=enqueue)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(timeout=15)
-    assert all(not t.is_alive() for t in threads)
-    assert not errors, f"unexpected exception: {errors!r}"
+        assert outcome[0].status == "superseded"
+    finally:
+        holder.rollback()
+        holder.close()
 
     with psycopg.connect(head_dsn, autocommit=True) as c:
         active = c.execute(
@@ -1381,3 +1401,8 @@ def test_retry_dead_racing_an_enqueue_leaves_exactly_one_active_job(
             " AND dedupe_key = 'default' AND state IN ('pending', 'running')"
         ).fetchone()
     assert active == (1,)
+    with psycopg.connect(head_dsn, autocommit=True) as c:
+        dead_state = c.execute(
+            "SELECT state FROM jobs WHERE id = %s", (job_id,)
+        ).fetchone()
+    assert dead_state == ("dead",)

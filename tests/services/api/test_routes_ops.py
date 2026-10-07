@@ -470,6 +470,41 @@ def test_list_jobs_error_class_none_matches_only_null_rows_end_to_end(
 
 
 @pytest.mark.integration
+def test_list_jobs_pagination_boundaries_end_to_end(
+    api: TestClient, db: psycopg.Connection[Any]
+) -> None:
+    """``next_before_id`` and ``has_more`` at the exact-limit / limit+1 boundaries.
+
+    ``list_jobs`` itself is asked for ``limit`` and ``limit + 1`` rows in
+    ``tests/common/repo/test_jobs.py``; this test instead proves the route
+    is the one passing ``params.limit + 1`` to it (a route that passed a
+    bare ``limit`` would still make every unit test in this module pass,
+    since those construct ``FakeConn`` rows directly).
+    """
+    assert api.get("/ops/jobs", params={"limit": 3}).json() == {
+        "items": [],
+        "next_before_id": None,
+    }
+
+    ids = [_seed_job(db, video_id=f"v{i}") for i in range(3)]
+    exact = api.get("/ops/jobs", params={"limit": 3}).json()
+    assert [item["id"] for item in exact["items"]] == list(reversed(ids))
+    assert exact["next_before_id"] is None
+
+    ids.append(_seed_job(db, video_id="v3"))
+    full_page = api.get("/ops/jobs", params={"limit": 3}).json()
+    assert len(full_page["items"]) == 3
+    assert [item["id"] for item in full_page["items"]] == list(reversed(ids))[:3]
+    cursor = full_page["next_before_id"]
+    assert cursor == full_page["items"][-1]["id"]
+    assert cursor is not None
+
+    second_page = api.get("/ops/jobs", params={"limit": 3, "before_id": cursor}).json()
+    assert [item["id"] for item in second_page["items"]] == list(reversed(ids))[3:]
+    assert second_page["next_before_id"] is None
+
+
+@pytest.mark.integration
 def test_retry_success_end_to_end(
     api: TestClient, db: psycopg.Connection[Any], logs: LogSink
 ) -> None:
