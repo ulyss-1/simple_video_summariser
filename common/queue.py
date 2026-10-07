@@ -32,7 +32,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import psycopg
 from psycopg.rows import dict_row
@@ -45,8 +45,10 @@ _logger = logging.getLogger(__name__)
 
 #: The only kinds enqueue() accepts (architecture.md §4). ``notify`` is a v2
 #: kind, declared but not created (architecture.md §6), so it is deliberately
-#: excluded here.
-_VALID_KINDS = frozenset({"ingest", "transcribe", "analyze"})
+#: excluded here. Public so #44's ``routes_ops.py`` validates against the
+#: same set instead of a duplicated literal.
+VALID_KINDS = frozenset({"ingest", "transcribe", "analyze"})
+_VALID_KINDS = VALID_KINDS
 
 #: Priority bands (architecture.md §4). Claims run ``priority DESC``.
 PRIORITY_INTERACTIVE = 10  # POST /videos: a human is waiting
@@ -91,6 +93,35 @@ _CLAIM_SQL = """
     RETURNING *
 """
 
+#: #44. ``NOT EXISTS`` only looks at active-index states, matching the
+#: superseded-by-a-later-attempt case the AC describes (an auto-caption
+#: fallback ingest, a later resubmission); a finished (done) later job also
+#: counts, since ``id > j.id`` alone is enough once ``state = 'dead'`` has
+#: already excluded this very row.
+#: ``candidate`` locks and captures the pre-update ``attempts`` (the route's
+#: log line needs "the previous attempts", which the plain ``UPDATE ...
+#: RETURNING *`` below would otherwise only show as the new value, 0) in the
+#: same statement as the write, so there is still no read-then-write gap.
+_RETRY_DEAD_SQL = """
+    WITH candidate AS (
+        SELECT id, attempts AS prev_attempts
+        FROM jobs j
+        WHERE j.id = %(id)s AND j.state = 'dead'
+          AND NOT EXISTS (
+              SELECT 1 FROM jobs newer
+              WHERE newer.video_id = j.video_id AND newer.kind = j.kind
+                AND newer.dedupe_key = j.dedupe_key AND newer.id > j.id
+          )
+        FOR UPDATE
+    )
+    UPDATE jobs j SET state='pending', attempts=0, run_after=now(),
+                      finished_at=NULL, locked_by=NULL, locked_at=NULL,
+                      heartbeat_at=NULL
+    FROM candidate c
+    WHERE j.id = c.id
+    RETURNING j.*, c.prev_attempts
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class Job:
@@ -116,6 +147,29 @@ class Job:
 
 def _job_from_row(row: dict[str, Any]) -> Job:
     return Job(**row)
+
+
+@dataclass(frozen=True, slots=True)
+class RetryOutcome:
+    """Result of ``PostgresQueue.retry_dead`` (#44); the route maps ``status``
+    to a response.
+
+    - ``"retried"``: ``job`` is the now-``pending`` job (same id);
+      ``prev_attempts`` is its attempt count just before the retry, for the
+      route's log line.
+    - ``"not_found"``: no job has that id.
+    - ``"not_dead"``: the job exists but is ``state`` (not ``dead``).
+    - ``"superseded"``: a newer job exists for the same
+      ``(video_id, kind, dedupe_key)``; ``newer_job_id`` is its id, or
+      ``None`` if the race (not the initial check) is what caught it and the
+      newer job could not be identified by that key alone.
+    """
+
+    status: Literal["retried", "not_found", "not_dead", "superseded"]
+    job: Job | None = None
+    state: str | None = None
+    newer_job_id: int | None = None
+    prev_attempts: int | None = None
 
 
 class JobQueue(Protocol):
@@ -336,6 +390,59 @@ class PostgresQueue:
                     "reaped and reclaimed by another worker",
                     extra={"job_id": job.id, "worker": worker, "kind": job.kind},
                 )
+
+    # -- retry_dead ------------------------------------------------------------
+
+    def retry_dead(self, job_id: int) -> RetryOutcome:
+        """Put a ``dead`` job back to ``pending`` with ``attempts = 0`` (#44).
+
+        Same id, same ``priority``/``payload``/``dedupe_key``/``created_at``;
+        ``error_class`` and ``last_error`` are kept so the Ops view still
+        shows why it died. Refuses (``RetryOutcome.status``) a job that is
+        not ``dead``, one superseded by a newer job for the same
+        ``(video_id, kind, dedupe_key)`` (higher id, any state - only the
+        newest job for a key may be revived), or one that no longer exists.
+        The state check and the write are one conditional ``UPDATE ...
+        WHERE ... NOT EXISTS (...) RETURNING``, never a read then a write.
+        The exception must propagate out of ``self._conn.transaction()``'s
+        own ``with`` block to roll back and leave the connection ``IDLE``
+        (as in ``enqueue``'s own ``UniqueViolation`` case) before this method
+        catches it: a concurrent ``enqueue`` that still wins the race raises
+        ``UniqueViolation``, reported the same way as a pre-existing newer
+        job, never a 500.
+        """
+        try:
+            with self._conn.transaction(), self._conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(_RETRY_DEAD_SQL, {"id": job_id})
+                row = cur.fetchone()
+        except psycopg.errors.UniqueViolation:
+            return RetryOutcome("superseded")
+
+        if row is not None:
+            prev_attempts = row.pop("prev_attempts")
+            return RetryOutcome(
+                "retried", job=_job_from_row(row), prev_attempts=prev_attempts
+            )
+
+        existing = self._conn.execute(
+            "SELECT video_id, kind, dedupe_key, state FROM jobs WHERE id = %s", (job_id,)
+        ).fetchone()
+        if existing is None:
+            return RetryOutcome("not_found")
+        video_id, kind, dedupe_key, state = existing
+        if state != "dead":
+            return RetryOutcome("not_dead", state=state)
+
+        newer = self._conn.execute(
+            """
+            SELECT id FROM jobs
+            WHERE video_id = %(video_id)s AND kind = %(kind)s
+              AND dedupe_key = %(dedupe_key)s AND id > %(id)s
+            ORDER BY id DESC LIMIT 1
+            """,
+            {"video_id": video_id, "kind": kind, "dedupe_key": dedupe_key, "id": job_id},
+        ).fetchone()
+        return RetryOutcome("superseded", newer_job_id=None if newer is None else int(newer[0]))
 
     # -- heartbeat -----------------------------------------------------------
 

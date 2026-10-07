@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import logging
 import random
+import threading
+import time
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -36,7 +38,7 @@ from common.errors import (
     ToolFailureError,
     TransientNetworkError,
 )
-from common.queue import Job, PostgresQueue
+from common.queue import Job, PostgresQueue, RetryOutcome
 
 pytestmark = pytest.mark.integration
 
@@ -1023,3 +1025,359 @@ def test_reap_stale_is_one_transaction_and_a_failure_commits_nothing(
 
     assert _row(conn, good)["state"] == "running"
     assert _row(conn, bad)["state"] == "running"
+
+
+# ---------------------------------------------------------------------------
+# retry_dead (#44)
+# ---------------------------------------------------------------------------
+
+
+def _make_dead(
+    queue: PostgresQueue,
+    conn: psycopg.Connection[Any],
+    *,
+    video_id: str = "v1",
+    kind: str = "ingest",
+    dedupe_key: str = "default",
+    attempts: int = 3,
+    error_class: str = "TOOL_FAILURE",
+    last_error: str = "boom",
+    priority: int = 5,
+) -> int:
+    job_id = queue.enqueue(kind, video_id, dedupe_key=dedupe_key, priority=priority)
+    assert job_id is not None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE jobs SET state='dead', attempts=%(attempts)s,
+                   error_class=%(error_class)s, last_error=%(last_error)s,
+                   finished_at=now(), locked_by='w1', locked_at=now(),
+                   heartbeat_at=now()
+            WHERE id = %(id)s
+            """,
+            {
+                "id": job_id,
+                "attempts": attempts,
+                "error_class": error_class,
+                "last_error": last_error,
+            },
+        )
+    return job_id
+
+
+def test_retry_dead_puts_the_job_back_to_pending_with_the_same_id(
+    queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    job_id = _make_dead(queue, conn, attempts=3)
+
+    outcome = queue.retry_dead(job_id)
+
+    assert outcome.status == "retried"
+    assert outcome.job is not None
+    assert outcome.job.id == job_id
+    assert outcome.job.attempts == 0
+    assert outcome.prev_attempts == 3
+    row = _row(conn, job_id)
+    assert row["state"] == "pending"
+    assert row["attempts"] == 0
+    assert row["finished_at"] is None
+    assert row["locked_by"] is None
+    assert row["locked_at"] is None
+    assert row["heartbeat_at"] is None
+    assert row["run_after"] <= datetime.now(UTC) + timedelta(seconds=5)
+
+
+def test_retry_dead_keeps_priority_payload_dedupe_key_and_created_at(
+    queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    job_id = _make_dead(queue, conn, dedupe_key="k9", priority=7)
+    before = _row(conn, job_id)
+
+    queue.retry_dead(job_id)
+
+    after = _row(conn, job_id)
+    assert after["priority"] == before["priority"] == 7
+    assert after["payload"] == before["payload"]
+    assert after["dedupe_key"] == before["dedupe_key"] == "k9"
+    assert after["created_at"] == before["created_at"]
+
+
+def test_retry_dead_keeps_error_class_and_last_error(
+    queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    job_id = _make_dead(queue, conn, error_class="BUG", last_error="caf\u00e9 traceback")
+
+    queue.retry_dead(job_id)
+
+    row = _row(conn, job_id)
+    assert row["error_class"] == "BUG"
+    assert row["last_error"] == "caf\u00e9 traceback"
+
+
+def test_retry_dead_job_is_claimable_at_once_and_gets_a_full_attempt_budget(
+    queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    job_id = _make_dead(queue, conn, kind="ingest", attempts=4)  # was already at kind max
+
+    outcome = queue.retry_dead(job_id)
+    assert outcome.status == "retried"
+
+    with queue.claim(["ingest"], worker="w2") as job:
+        assert job is not None
+        assert job.id == job_id
+        assert job.attempts == 1
+        for _ in range(3):
+            raise TransientNetworkError("still broken")
+    # First of 4 fresh attempts: pending, not dead yet.
+    assert _row(conn, job_id)["state"] == "pending"
+    assert _row(conn, job_id)["attempts"] == 1
+
+
+@pytest.mark.parametrize("error_class", ["PERMANENT_SOURCE", "BUG"])
+def test_retry_dead_accepts_any_error_class(
+    queue: PostgresQueue, conn: psycopg.Connection[Any], error_class: str
+) -> None:
+    job_id = _make_dead(queue, conn, error_class=error_class)
+
+    outcome = queue.retry_dead(job_id)
+
+    assert outcome.status == "retried"
+
+
+def test_retry_dead_does_not_touch_videos_unavailable(
+    queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    conn.execute(
+        "INSERT INTO videos (video_id, unavailable) VALUES (%s, %s)", ("v1", "private")
+    )
+    job_id = _make_dead(queue, conn, video_id="v1")
+
+    queue.retry_dead(job_id)
+
+    row = conn.execute(
+        "SELECT unavailable FROM videos WHERE video_id = %s", ("v1",)
+    ).fetchone()
+    assert row == ("private",)
+
+
+def test_retry_dead_not_found_for_a_missing_id(
+    queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    outcome = queue.retry_dead(999_999)
+
+    assert outcome == RetryOutcome("not_found")
+
+
+@pytest.mark.parametrize("state", ["pending", "running", "done"])
+def test_retry_dead_refuses_a_non_dead_job_and_reports_its_state(
+    queue: PostgresQueue, conn: psycopg.Connection[Any], state: str
+) -> None:
+    job_id = queue.enqueue("ingest", "v1")
+    assert job_id is not None
+    _set(conn, job_id, state=state)
+
+    outcome = queue.retry_dead(job_id)
+
+    assert outcome == RetryOutcome("not_dead", state=state)
+    assert _row(conn, job_id)["attempts"] == 0
+
+
+def test_retry_dead_refuses_a_job_superseded_by_a_newer_active_job(
+    queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    dead_id = _make_dead(queue, conn, video_id="v1", kind="ingest", dedupe_key="default")
+    newer_id = queue.enqueue("ingest", "v1", dedupe_key="default")
+    assert newer_id is not None
+    assert newer_id > dead_id
+
+    outcome = queue.retry_dead(dead_id)
+
+    assert outcome == RetryOutcome("superseded", newer_job_id=newer_id)
+    assert _row(conn, dead_id)["state"] == "dead"
+
+
+def test_retry_dead_refuses_a_job_superseded_by_later_redone_work(
+    queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    """E.g. the auto-caption fallback ingest (#92/#97): the later job is done."""
+    dead_id = _make_dead(queue, conn, video_id="v1", kind="ingest", dedupe_key="default")
+    newer_id = queue.enqueue("ingest", "v1", dedupe_key="default")
+    assert newer_id is not None
+    _set(conn, newer_id, state="done")
+
+    outcome = queue.retry_dead(dead_id)
+
+    assert outcome == RetryOutcome("superseded", newer_job_id=newer_id)
+
+
+def test_retry_dead_allows_reviving_the_newest_job_for_a_key(
+    queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    """Only the newest dead job for a key is retryable; an older dead sibling is not."""
+    older_dead = _make_dead(queue, conn, video_id="v1", kind="ingest", dedupe_key="default")
+    newer_dead = _make_dead(queue, conn, video_id="v1", kind="ingest", dedupe_key="default")
+    assert newer_dead > older_dead
+
+    assert queue.retry_dead(older_dead) == RetryOutcome(
+        "superseded", newer_job_id=newer_dead
+    )
+    outcome = queue.retry_dead(newer_dead)
+    assert outcome.status == "retried"
+
+
+def test_retry_dead_holds_the_row_lock_across_its_own_check_and_write(
+    head_dsn: str,
+) -> None:
+    """One ``UPDATE ... WHERE ... RETURNING``, not a read then a write.
+
+    A second ``retry_dead`` of the same job, started while the first is
+    mid-transaction (not yet committed), must block on the row lock rather
+    than running its own check against a state the first call might still
+    change - proof there is no read-then-write gap for a race to slip
+    through. (This complements the two already-committed-first-wins
+    scenario covered by the barrier-based concurrency tests.)
+    """
+    seed_conn = psycopg.connect(head_dsn, autocommit=True)
+    try:
+        seed_queue = PostgresQueue(seed_conn, settings=_settings())
+        job_id = _make_dead(seed_queue, seed_conn)
+    finally:
+        seed_conn.close()
+
+    holder = psycopg.connect(head_dsn)  # autocommit=False: transaction stays open
+    try:
+        holder_queue = PostgresQueue(holder, settings=_settings())
+        with holder.cursor() as cur:
+            cur.execute("BEGIN")
+        first_outcome = holder_queue.retry_dead(job_id)
+        assert first_outcome.status == "retried"
+        # The row is locked by the UPDATE above; the transaction is not
+        # committed yet.
+
+        with psycopg.connect(head_dsn, autocommit=True) as observer:
+            second_conn = psycopg.connect(head_dsn, autocommit=True)
+            try:
+                second_queue = PostgresQueue(second_conn, settings=_settings())
+                result: list[RetryOutcome] = []
+
+                def attempt() -> None:
+                    result.append(second_queue.retry_dead(job_id))
+
+                t = threading.Thread(target=attempt)
+                t.start()
+                _wait_until_blocked_by(
+                    observer, second_conn.info.backend_pid, holder.info.backend_pid
+                )
+                assert t.is_alive(), "the second retry did not block on the row lock"
+                holder.commit()
+                t.join(timeout=10)
+                assert not t.is_alive()
+            finally:
+                second_conn.close()
+
+        assert result[0].status == "not_dead"
+        assert result[0].state == "pending"
+    finally:
+        holder.rollback()
+        holder.close()
+
+
+def _wait_until_blocked_by(
+    observer: psycopg.Connection[Any], blocked_pid: int, blocker_pid: int
+) -> None:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        with observer.cursor() as cur:
+            cur.execute(
+                "SELECT %s = ANY(pg_blocking_pids(%s))", (blocker_pid, blocked_pid)
+            )
+            row = cur.fetchone()
+        if row is not None and row[0]:
+            return
+    raise AssertionError(f"backend {blocked_pid} was never blocked by {blocker_pid}")
+
+
+def test_retry_dead_concurrent_retries_give_exactly_one_200_and_one_409(
+    head_dsn: str,
+) -> None:
+    seed_conn = psycopg.connect(head_dsn, autocommit=True)
+    try:
+        seed_queue = PostgresQueue(seed_conn, settings=_settings())
+        job_id = _make_dead(seed_queue, seed_conn)
+    finally:
+        seed_conn.close()
+
+
+    barrier = threading.Barrier(2)
+    results: list[RetryOutcome] = [None, None]  # type: ignore[list-item]
+
+    def worker(i: int) -> None:
+        with psycopg.connect(head_dsn, autocommit=True) as c:
+            q = PostgresQueue(c, settings=_settings())
+            barrier.wait(timeout=10)
+            results[i] = q.retry_dead(job_id)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=15)
+    assert all(not t.is_alive() for t in threads)
+
+    statuses = sorted(r.status for r in results)
+    assert statuses == ["not_dead", "retried"]
+
+    with psycopg.connect(head_dsn, autocommit=True) as c:
+        row = _row(c, job_id)
+    assert row["state"] == "pending"
+    assert row["attempts"] == 0
+
+
+def test_retry_dead_racing_an_enqueue_leaves_exactly_one_active_job(
+    head_dsn: str,
+) -> None:
+    seed_conn = psycopg.connect(head_dsn, autocommit=True)
+    try:
+        seed_queue = PostgresQueue(seed_conn, settings=_settings())
+        job_id = _make_dead(seed_queue, seed_conn, video_id="v1", dedupe_key="default")
+    finally:
+        seed_conn.close()
+
+
+    barrier = threading.Barrier(2)
+    retry_outcome: list[RetryOutcome] = []
+    enqueue_result: list[int | None] = []
+    errors: list[BaseException] = []
+
+    def retry() -> None:
+        try:
+            with psycopg.connect(head_dsn, autocommit=True) as c:
+                q = PostgresQueue(c, settings=_settings())
+                barrier.wait(timeout=10)
+                retry_outcome.append(q.retry_dead(job_id))
+        except BaseException as exc:  # noqa: BLE001 - reported by the test
+            errors.append(exc)
+
+    def enqueue() -> None:
+        try:
+            with psycopg.connect(head_dsn, autocommit=True) as c:
+                q = PostgresQueue(c, settings=_settings())
+                barrier.wait(timeout=10)
+                enqueue_result.append(q.enqueue("ingest", "v1", dedupe_key="default"))
+        except BaseException as exc:  # noqa: BLE001 - reported by the test
+            errors.append(exc)
+
+    threads = [threading.Thread(target=retry), threading.Thread(target=enqueue)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=15)
+    assert all(not t.is_alive() for t in threads)
+    assert not errors, f"unexpected exception: {errors!r}"
+
+    with psycopg.connect(head_dsn, autocommit=True) as c:
+        active = c.execute(
+            "SELECT count(*) FROM jobs WHERE video_id = 'v1' AND kind = 'ingest'"
+            " AND dedupe_key = 'default' AND state IN ('pending', 'running')"
+        ).fetchone()
+    assert active == (1,)

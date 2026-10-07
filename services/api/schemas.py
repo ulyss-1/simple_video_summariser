@@ -1,4 +1,4 @@
-"""Response models for the read routes (issue #42).
+"""Response models for the read and ops routes (issues #42, #44).
 
 They are the public contract #46 generates TypeScript types from, so every
 field is declared explicitly. Datetimes are always serialised in UTC.
@@ -18,6 +18,7 @@ from common.models import (
     TranscriptPage,
     VideoSummary,
 )
+from common.repo.jobs import JobRow
 from common.repo.search import SearchPage as RepoSearchPage
 
 UtcDatetime = Annotated[datetime, AfterValidator(lambda value: value.astimezone(UTC))]
@@ -281,6 +282,51 @@ def analysis_out(run: AnalysisRun) -> AnalysisOut:
             )
             for q in a.quotes
         ],
+    )
+
+
+class JobOut(BaseModel):
+    """One ``jobs`` row for the Ops view (#44). ``payload`` is never exposed."""
+
+    id: int
+    video_id: str
+    video_title: str | None
+    kind: str
+    dedupe_key: str
+    state: str
+    priority: int
+    attempts: int
+    error_class: str | None
+    last_error: str | None
+    run_after: UtcDatetime
+    locked_by: str | None
+    heartbeat_at: UtcDatetime | None
+    finished_at: UtcDatetime | None
+    created_at: UtcDatetime
+
+
+class JobListOut(BaseModel):
+    items: list[JobOut]
+    next_before_id: int | None
+
+
+def job_out(row: JobRow) -> JobOut:
+    return JobOut(
+        id=row.id,
+        video_id=row.video_id,
+        video_title=row.video_title,
+        kind=row.kind,
+        dedupe_key=row.dedupe_key,
+        state=row.state,
+        priority=row.priority,
+        attempts=row.attempts,
+        error_class=row.error_class,
+        last_error=row.last_error,
+        run_after=row.run_after,
+        locked_by=row.locked_by,
+        heartbeat_at=row.heartbeat_at,
+        finished_at=row.finished_at,
+        created_at=row.created_at,
     )
 
 
