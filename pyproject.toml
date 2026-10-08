@@ -27,6 +27,7 @@ dev = [
 
 [tool.setuptools.package-data]
 "adapters.summarize" = ["prompts/*/*.txt"]
+"services.api" = ["templates/*.html"]
 
 [tool.setuptools.packages.find]
 include = ["common*", "adapters*", "services*"]
