@@ -268,5 +268,5 @@ def test_read_routes_are_sync_and_declare_response_models() -> None:
     assert len(routes) == 5
     for route in routes:
         assert not inspect.iscoroutinefunction(route.endpoint)  # type: ignore[attr-defined]
-        if not route.path.endswith("/render"):  # the HTML page (#45) has no JSON model  # type: ignore[attr-defined]
+        if not route.path.endswith("/render"):  # type: ignore[attr-defined]  # HTML page, no JSON model (#45)
             assert route.response_model is not None  # type: ignore[attr-defined]
