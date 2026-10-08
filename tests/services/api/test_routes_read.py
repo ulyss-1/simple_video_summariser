@@ -265,7 +265,8 @@ def test_read_routes_are_sync_and_declare_response_models() -> None:
     import inspect
 
     routes = [r for r in routes_read.router.routes if getattr(r, "path", "").startswith("/videos")]
-    assert len(routes) == 4
+    assert len(routes) == 5
     for route in routes:
         assert not inspect.iscoroutinefunction(route.endpoint)  # type: ignore[attr-defined]
-        assert route.response_model is not None  # type: ignore[attr-defined]
+        if not route.path.endswith("/render"):  # the HTML page (#45) has no JSON model  # type: ignore[attr-defined]
+            assert route.response_model is not None  # type: ignore[attr-defined]

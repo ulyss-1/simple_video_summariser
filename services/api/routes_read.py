@@ -4,6 +4,7 @@
 - ``GET /videos/{video_id}``: one video, its best transcript and latest analysis.
 - ``GET /videos/{video_id}/analyses``: every analysis run, newest first.
 - ``GET /videos/{video_id}/transcript``: one page of the best transcript's segments.
+- ``GET /videos/{video_id}/render``: the latest analysis as one HTML page (#45).
 - ``GET /search``: full-text search over each video's preferred transcript (#43).
 
 Every path and query parameter is untrusted. It is validated by a gate
@@ -25,6 +26,7 @@ import psycopg
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import HTMLResponse
 from pydantic import (
     BaseModel,
     BeforeValidator,
@@ -33,14 +35,41 @@ from pydantic import (
     ValidationError,
     model_validator,
 )
+from starlette.convertors import Convertor, register_url_convertor
 
-from common.repo.analyses import latest_analysis_run, list_analysis_runs
+from common.repo.analyses import (
+    latest_analysis,
+    latest_analysis_run,
+    list_analysis_runs,
+)
+from common.repo.channels import get_channel_title
 from common.repo.search import search_transcripts
 from common.repo.transcripts import best_transcript_info, best_transcript_page
-from common.repo.videos import get_video, list_videos, video_exists
+from common.repo.videos import get_video, get_video_meta, list_videos, video_exists
 from common.youtube_refs import is_channel_id, is_video_id
 from services.api import schemas
 from services.api.deps import ReadDatabaseUnavailable, get_read_conn
+from services.api.render import render_analysis_html
+
+
+class _AnySegment(Convertor[str]):
+    """Matches anything, newlines and a decoded ``/`` included.
+
+    The default ``str`` converter stops at ``/``, so ``/videos/a%2Fb/render``
+    would be a bare 404 instead of the route's own 422. ``VideoId`` validates
+    the value. Only the render route names ``:any_segment``.
+    """
+
+    regex = "(?s:.+?)"
+
+    def convert(self, value: str) -> str:
+        return value
+
+    def to_string(self, value: str) -> str:
+        return value
+
+
+register_url_convertor("any_segment", _AnySegment())
 
 
 def _mark_read_request(request: Request) -> None:
@@ -61,6 +90,14 @@ MAX_SEARCH_OFFSET = 1000
 BAD_VIDEO_ID = "video id must be 11 characters of A-Z, a-z, 0-9, '_' or '-'"
 VIDEO_NOT_FOUND = "video not found"
 TRANSCRIPT_NOT_FOUND = "transcript not found"
+NO_ANALYSIS_YET = "no analysis yet"
+#: The render page loads nothing and runs nothing (#45).
+RENDER_HEADERS = {
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Cache-Control": "no-cache",
+}
 
 _DIGITS = re.compile(r"[0-9]{1,7}")
 _MAX_DATE_CHARS = 64
@@ -268,6 +305,23 @@ def get_video_transcript(
     if page is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, TRANSCRIPT_NOT_FOUND)
     return schemas.transcript_out(page, offset=params.offset, limit=params.limit)
+
+
+@router.get("/videos/{video_id:any_segment}/render", response_class=HTMLResponse)
+def get_video_render(video_id: VideoId, conn: ReadConn) -> HTMLResponse:
+    """The video's latest analysis as a self-contained page (D12c).
+
+    The page comes from ``render.render_analysis_html``; this handler only
+    reads and sets the security headers. Neither 404 echoes the id.
+    """
+    video = get_video_meta(conn, video_id)
+    if video is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, VIDEO_NOT_FOUND)
+    analysis = latest_analysis(conn, video_id)
+    if analysis is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, NO_ANALYSIS_YET)
+    page = render_analysis_html(video, get_channel_title(conn, video.channel_id), analysis)
+    return HTMLResponse(page, headers=RENDER_HEADERS)
 
 
 @router.get("/search", response_model=schemas.SearchPage)

@@ -125,3 +125,19 @@ def _channel(row: tuple[Any, ...]) -> Channel:
         last_poll_err=last_poll_err,
         added_at=added_at,
     )
+
+
+def get_channel_title(conn: psycopg.Connection[Any], channel_id: str) -> str | None:
+    """The stored title of ``channel_id`` (#45), read-only.
+
+    ``None`` for an empty or unknown ``channel_id`` and for a channel whose
+    title is NULL or empty.
+    """
+    if not channel_id:
+        return None
+    row = conn.execute(
+        "SELECT title FROM channels WHERE channel_id = %s", (channel_id,)
+    ).fetchone()
+    if row is None or not row[0]:
+        return None
+    return str(row[0])

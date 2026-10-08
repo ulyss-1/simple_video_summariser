@@ -10,6 +10,7 @@ import pytest
 from common.repo.channels import (
     add_channel,
     channel_exists,
+    get_channel_title,
     list_active_channels,
     record_poll,
     register_channel,
@@ -180,3 +181,19 @@ def test_channel_exists_for_active_and_inactive_rows_only(conn: psycopg.Connecti
     assert channel_exists(conn, "UCon") is True
     assert channel_exists(conn, "UCoff") is True
     assert channel_exists(conn, "UCnone") is False
+
+
+def test_get_channel_title_returns_the_stored_title(conn: psycopg.Connection) -> None:
+    add_channel(conn, "UC123", "Some Channel")
+
+    assert get_channel_title(conn, "UC123") == "Some Channel"
+
+
+def test_get_channel_title_is_none_for_unknown_empty_or_untitled(
+    conn: psycopg.Connection,
+) -> None:
+    add_channel(conn, "UC123", None)
+
+    assert get_channel_title(conn, "UC123") is None
+    assert get_channel_title(conn, "UCunknown") is None
+    assert get_channel_title(conn, "") is None
