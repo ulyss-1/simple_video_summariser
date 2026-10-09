@@ -120,6 +120,12 @@ function VideoPage({ videoId }: { videoId: string }) {
         <a href={buildWatchUrl(videoId)} target="_blank" rel="noopener noreferrer">
           Open on YouTube
         </a>
+        {video.transcript !== null && (
+          <>
+            {' · '}
+            <Link to={`/videos/${videoId}/transcript`}>Transcript</Link>
+          </>
+        )}
         {analysis !== null && (
           <>
             {' · '}

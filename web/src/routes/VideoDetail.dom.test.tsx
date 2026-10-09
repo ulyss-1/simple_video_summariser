@@ -668,3 +668,27 @@ describe('accessibility', () => {
     }
   })
 })
+
+describe('link to the transcript (#51)', () => {
+  const summary = { id: 3, source: 'whisper', language: 'en', segment_count: 10, speaker_source: 'none' }
+
+  it('links to the transcript route when the video has a transcript', async () => {
+    await mountWith(video({ transcript: summary }))
+    expect(screen.getByRole('link', { name: 'Transcript' }).getAttribute('href')).toBe(
+      `/videos/${ID}/transcript`,
+    )
+  })
+
+  it.each(['processing', 'failed', 'idle'] as const)(
+    'has no link when the transcript is null and the video is %s',
+    async (status) => {
+      await mountWith(video({ transcript: null, status, analysis: null }))
+      expect(screen.queryByRole('link', { name: 'Transcript' })).toBeNull()
+    },
+  )
+
+  it('has no link for a done video whose transcript is null', async () => {
+    await mountWith(video({ transcript: null }))
+    expect(screen.queryByRole('link', { name: 'Transcript' })).toBeNull()
+  })
+})

@@ -25,11 +25,11 @@ function heading(html: string): string {
 describe('route table', () => {
   it.each([
     ['/', 'Library'],
-    [`/videos/${ID}/transcript`, 'Transcript'],
+    [`/videos/${ID}/transcript`, ID],
     [`/videos/${ID}/compare`, 'Compare'],
     ['/search', 'Search'],
     ['/ops', 'Ops'],
-  ])('%s renders the %s placeholder', (path, name) => {
+  ])('%s renders the view with heading %s', (path, name) => {
     expect(heading(render(path).html)).toContain(name)
   })
 
@@ -93,7 +93,6 @@ describe('route table', () => {
 
   it.each([
     ['/search?q=hello%20world&page=3', '?q=hello%20world&amp;page=3'],
-    [`/videos/${ID}/transcript?page=3`, '?page=3'],
     [`/videos/${ID}/compare?x=1`, '?x=1'],
     ['/ops?state=dead&before=100', '?state=dead&amp;before=100'],
   ])('%s shows its search string unchanged', (path, shown) => {
