@@ -119,6 +119,8 @@ describe('query strings survive the shared route table', () => {
     ['/?page=2&status=failed', '?page=2&status=failed'],
     ['/videos/-wNyEUrxzFU?t=3723', '?t=3723'],
     ['/videos/-wNyEUrxzFU/transcript?page=3', '?page=3'],
+    ['/ops?state=dead&before=100', '?state=dead&before=100'],
+    ['/ops?state=pending&kind=ingest&error_class=none', '?state=pending&kind=ingest&error_class=none'],
   ])('%s keeps its search string after effects have run', async (entry, search) => {
     const router = mount(entry)
     await settle()

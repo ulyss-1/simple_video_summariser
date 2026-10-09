@@ -91,10 +91,6 @@ describe('route table', () => {
     expect(html).not.toContain('Something went wrong')
   })
 
-  it.each([
-  ])('%s shows its search string unchanged', (path, shown) => {
-    expect(render(path).html).toContain(shown)
-  })
 })
 
 describe('search string on the Search view', () => {
@@ -113,6 +109,20 @@ describe('compare route query string', () => {
     expect(router.state.location.pathname).toBe(`/videos/${ID}/compare`)
     expect(heading(html)).toBe(ID)
   })
+})
+
+describe('ops route query string', () => {
+  // The shared `routes` table, not a local router: this is what proves routing
+  // passes the query through to the Ops view (#122).
+  it.each(['?state=dead&before=100', '?state=pending&kind=ingest&error_class=none', '?state=dead&before=100&x=1'])(
+    '%s reaches the ops route unchanged',
+    (search) => {
+      const { html, router } = render(`/ops${search}`)
+      expect(router.state.location.search).toBe(search)
+      expect(router.state.location.pathname).toBe('/ops')
+      expect(heading(html)).toBe('Ops')
+    },
+  )
 })
 
 describe('search string on the Ops view', () => {
