@@ -1,15 +1,8 @@
 import type { components } from '../api'
 import { parseRoster } from '../lib/roster'
-import { Timestamp } from './Timestamp'
+import { ClaimItem, QuoteItem, TopicItem } from './ClaimItem'
 
 type Analysis = components['schemas']['AnalysisOut']
-
-/** Same wording as the server-side renderer (services/api/render.py). */
-export const UNATTRIBUTED = 'Unattributed'
-
-function speakerLabel(speaker: string): string {
-  return speaker === 'unknown' ? UNATTRIBUTED : speaker
-}
 
 function utcIso(value: string): string {
   const d = new Date(value)
@@ -54,10 +47,7 @@ export function AnalysisView({ analysis }: { analysis: Analysis }) {
         ) : (
           <ol>
             {analysis.topics.map((t, i) => (
-              <li key={i}>
-                <strong>{t.title}</strong> <Timestamp seconds={t.start_sec} />
-                {t.summary ? <p>{t.summary}</p> : null}
-              </li>
+              <TopicItem key={i} topic={t} />
             ))}
           </ol>
         )}
@@ -69,11 +59,7 @@ export function AnalysisView({ analysis }: { analysis: Analysis }) {
         ) : (
           <ul>
             {analysis.claims.map((c, i) => (
-              <li key={i}>
-                <span>{c.text}</span> <span>Speaker: {speakerLabel(c.speaker)}</span>
-                {c.confidence !== null && <span> Confidence: {c.confidence}</span>}{' '}
-                <Timestamp seconds={c.start_sec} />
-              </li>
+              <ClaimItem key={i} claim={c} />
             ))}
           </ul>
         )}
@@ -85,10 +71,7 @@ export function AnalysisView({ analysis }: { analysis: Analysis }) {
         ) : (
           <ul>
             {analysis.quotes.map((q, i) => (
-              <li key={i}>
-                <q>{q.text}</q> <span>Speaker: {speakerLabel(q.speaker)}</span>{' '}
-                <Timestamp seconds={q.start_sec} />
-              </li>
+              <QuoteItem key={i} quote={q} />
             ))}
           </ul>
         )}

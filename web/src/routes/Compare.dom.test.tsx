@@ -627,6 +627,30 @@ describe('pickers', () => {
     expect([selected(selA()), selected(selB())]).toEqual([4, 2])
   })
 
+  it('a spoofed picker value that parses but is not a run reaches the handler and is dropped without a PUSH', async () => {
+    stubApi({ runs: MIXED })
+    const router = await mount()
+    const before = router.state.location.search
+    // jsdom reads a <select> set to a missing option back as '', which the
+    // parser already rejects. Adding a real option outside React lets the
+    // genuine '999' reach the change handler, so the runs.some check is hit.
+    for (const sel of [selA(), selB()]) {
+      const bogus = document.createElement('option')
+      bogus.value = '999'
+      sel.appendChild(bogus)
+    }
+    const actions: string[] = []
+    const unsubscribe = router.subscribe((state) => actions.push(`${state.historyAction} ${state.location.search}`))
+    fireEvent.change(selA(), { target: { value: '999' } })
+    fireEvent.change(selB(), { target: { value: '999' } })
+    await settle()
+    unsubscribe()
+    expect(actions.filter((a) => a.startsWith('PUSH'))).toEqual([])
+    expect(actions).toEqual([])
+    expect(router.state.location.search).toBe(before)
+    expect([selected(selA()), selected(selB())]).toEqual([4, 2])
+  })
+
   it('does not refetch the runs when the selection changes', async () => {
     stubApi({ runs: MIXED })
     await mount()

@@ -1,13 +1,16 @@
 import type { components } from '../api'
-import { UNATTRIBUTED } from './AnalysisView'
 import { Timestamp } from './Timestamp'
 
 type Claim = components['schemas']['ClaimOut']
 type Quote = components['schemas']['QuoteOut']
 type Topic = components['schemas']['TopicOut']
 
-// The same wording and markup as the single-run view (AnalysisView, #50), as
-// items a table cell can hold. Everything is a React text child: nothing here
+/** Same wording as the server-side renderer (services/api/render.py). */
+export const UNATTRIBUTED = 'Unattributed'
+
+// The one copy of the claim, quote and topic markup, shared by the single-run
+// view (AnalysisView, #50) and the Compare view (#53), as items a table cell
+// can hold. Everything is a React text child: nothing here
 // builds HTML or a URL, and every time goes through <Timestamp>.
 
 function speakerLabel(speaker: string): string {
