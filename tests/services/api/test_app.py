@@ -83,6 +83,19 @@ def test_three_router_modules_are_all_included_and_healthz_is_an_ops_route(
     assert "/__test_write" in app_paths
 
 
+def test_metrics_is_the_only_schema_excluded_route() -> None:
+    # A second include_in_schema=False route would silently escape the
+    # all-routes 401 sweep below, which walks app.openapi()["paths"] (#60).
+    excluded = {
+        (route.path, method)
+        for module in (routes_read, routes_write, routes_ops)
+        for route in module.router.routes
+        if isinstance(route, APIRoute) and not route.include_in_schema
+        for method in route.methods or ()
+    }
+    assert excluded == {("/metrics", "GET")}
+
+
 def test_starting_the_app_configures_logging_exactly_once(
     app: FastAPI, logs: LogSink
 ) -> None:

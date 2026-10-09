@@ -106,6 +106,18 @@ def test_metrics_answers_200_with_the_text_format_content_type(app: FastAPI) -> 
     assert "reanalysis_backlog_videos 6\n" in body
 
 
+_FAMILIES = (
+    "queue_depth",
+    "job_duration_seconds",
+    "whisper_rtf",
+    "llm_tokens_total",
+    "llm_cost_usd_total",
+    "speaker_coercions_total",
+    "audio_bytes_used",
+    "reanalysis_backlog_videos",
+)
+
+
 def _deny() -> None:
     raise HTTPException(status_code=401, detail="denied")
 
@@ -121,6 +133,13 @@ def test_metrics_returns_401_when_require_auth_denies(app: FastAPI) -> None:
 
     assert response.status_code == 401
     assert conn.queries == []
+    # An auth failure must not leak any part of a scrape.
+    assert not response.headers["content-type"].startswith("text/plain")
+    assert "version=0.0.4" not in response.headers["content-type"]
+    assert "# HELP" not in response.text
+    assert "# TYPE" not in response.text
+    for family in _FAMILIES:
+        assert family not in response.text
 
 
 def test_two_scrapes_of_an_unchanged_database_are_byte_identical(app: FastAPI) -> None:
