@@ -112,7 +112,7 @@ def _parse_csp(value: str) -> dict[str, list[str]]:
 
 
 def _all_locations() -> list[str]:
-    """Every `location` header in the server block, e.g. "= /api/metrics"."""
+    """Every `location` header in the server block, e.g. "^~ /api/metrics"."""
     found = [
         " ".join(m.group(1).split())
         for m in re.finditer(r"location\s+([^{]+?)\s*\{", _server())
@@ -371,16 +371,45 @@ def test_security_headers_are_sent_once_and_with_always(header: str, name: str) 
 
 def test_locations_are_derived_and_include_the_known_ones() -> None:
     assert PROXY_LOCATIONS == ["/api/"]
-    assert {"/assets/", "= /assets", "/", "= /api", "= /api/metrics"} <= set(
+    assert {"/assets/", "= /assets", "/", "= /api", "^~ /api/metrics"} <= set(
         OWN_LOCATIONS
     )
 
 
 def test_metrics_is_blocked_before_the_proxy_location() -> None:
     text = _server()
-    assert text.index("location = /api/metrics") < text.index("location /api/ ")
-    assert "return 404;" in _location("= /api/metrics")
-    assert "proxy_pass" not in _location("= /api/metrics")
+    assert text.index("location ^~ /api/metrics") < text.index("location /api/ ")
+    assert "return 404;" in _location("^~ /api/metrics")
+    assert "proxy_pass" not in _location("^~ /api/metrics")
+
+
+def test_metrics_block_covers_the_whole_prefix_not_just_the_exact_path() -> None:
+    # An exact `=` match is bypassable with /api/metrics/ or /api/metrics/x,
+    # which fall through to the proxy. Simulate nginx's choice: an exact match
+    # wins, else a ^~ prefix wins, else the longest prefix.
+    locs = _all_locations()
+
+    def chosen(uri: str) -> str:
+        exact = [h for h in locs if h.startswith("= ") and h[2:] == uri]
+        if exact:
+            return exact[0]
+        prefixes = [
+            (h.removeprefix("^~ "), h)
+            for h in locs
+            if not h.startswith("= ") and uri.startswith(h.removeprefix("^~ "))
+        ]
+        return max(prefixes, key=lambda p: len(p[0]))[1]
+
+    for uri in (
+        "/api/metrics",
+        "/api/metrics/",
+        "/api/metrics/anything",
+        "/api/metrics/a/b",
+    ):
+        assert chosen(uri) == "^~ /api/metrics", uri
+    assert chosen("/api/healthz") == "/api/"
+    assert "^~" in " ".join(locs)
+    assert not [h for h in locs if h.startswith("~")], "regex locations need review"
 
 
 def test_proxy_locations_carry_no_security_header() -> None:

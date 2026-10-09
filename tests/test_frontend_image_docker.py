@@ -595,7 +595,12 @@ def test_prefix_is_stripped_and_the_query_arrives_byte_for_byte(
 def test_metrics_is_not_published_but_the_rest_of_the_api_is(stack: Stack) -> None:
     # #60 grooming: /api/metrics must be a 404 from nginx itself, never the
     # API's route and never the SPA; its neighbours still proxy normally.
-    for path in ("/api/metrics", "/api/metrics?x=1"):
+    for path in (
+        "/api/metrics",
+        "/api/metrics/",
+        "/api/metrics?x=1",
+        "/api/metrics/sub",
+    ):
         resp = stack.get(path)
         assert resp.status == 404
         assert b'<div id="root">' not in resp.body
