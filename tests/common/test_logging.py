@@ -24,6 +24,7 @@ from common.config import Settings
 from common.errors import ToolFailureError, log_dead_letter
 from common.logging import bound_context, configure_logging
 
+UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
 JOB_FIELDS = ("job_id", "video_id", "kind", "attempt")
 
 
@@ -32,7 +33,18 @@ def restore_logging() -> Iterator[None]:
     root = logging.getLogger()
     handlers = root.handlers[:]
     level = root.level
+    saved = {
+        name: (lg.handlers[:], lg.propagate, lg.disabled, lg.level)
+        for name in UVICORN_LOGGERS
+        for lg in [logging.getLogger(name)]
+    }
     yield
+    for name, (hs, prop, disabled, lvl) in saved.items():
+        lg = logging.getLogger(name)
+        lg.handlers[:] = hs
+        lg.propagate = prop
+        lg.disabled = disabled
+        lg.setLevel(lvl)
     for handler in root.handlers[:]:
         if handler not in handlers:
             root.removeHandler(handler)
@@ -380,3 +392,106 @@ def test_reconfiguring_applies_the_new_level_and_format() -> None:
     assert "dbg" in line
     with pytest.raises(json.JSONDecodeError):
         json.loads(line)
+
+
+# --- uvicorn's own loggers (issue #58) ------------------------------------
+# uvicorn installs plain-text handlers with propagate=False on "uvicorn" and
+# "uvicorn.access" (via dictConfig, before the app module is imported), so
+# their records never reach the root JSON handler unless configure_logging
+# takes them back. These tests need no uvicorn import: they simulate it.
+
+
+def simulate_uvicorn_logging(sink: io.StringIO) -> None:
+    """Mimic uvicorn.config.LOGGING_CONFIG: own handlers, no propagation."""
+    plain = logging.Formatter("%(levelname)s:     %(message)s")
+    for name in ("uvicorn", "uvicorn.access"):
+        lg = logging.getLogger(name)
+        handler = logging.StreamHandler(sink)
+        handler.setFormatter(plain)
+        lg.handlers[:] = [handler]
+        lg.propagate = False
+        lg.setLevel(logging.INFO)
+    logging.getLogger("uvicorn.error").setLevel(logging.INFO)
+
+
+def test_uvicorn_loggers_have_no_handlers_and_propagate() -> None:
+    simulate_uvicorn_logging(io.StringIO())
+    setup()
+    for name in UVICORN_LOGGERS:
+        lg = logging.getLogger(name)
+        assert lg.handlers == [], name
+        assert lg.propagate is True, name
+
+
+def test_uvicorn_server_record_is_one_json_line() -> None:
+    plain = io.StringIO()
+    simulate_uvicorn_logging(plain)
+    stream = setup()
+    logging.getLogger("uvicorn.error").info("Application startup complete.")
+    logging.getLogger("uvicorn").info("Started server process [%d]", 1)
+    recs = records(stream)
+    assert [r["event"] for r in recs] == [
+        "Application startup complete.",
+        "Started server process [1]",
+    ]
+    assert recs[0]["logger"] == "uvicorn.error"
+    assert recs[0]["level"] == "info"
+    assert "timestamp" in recs[0]
+    assert plain.getvalue() == ""
+    assert len(lines(stream)) == 2
+
+
+def test_uvicorn_access_log_is_silenced() -> None:
+    # RequestContextMiddleware already logs one "request" line per request.
+    plain = io.StringIO()
+    simulate_uvicorn_logging(plain)
+    stream = setup()
+    logging.getLogger("uvicorn.access").info(
+        '%s - "%s %s HTTP/%s" %d', "127.0.0.1:1", "GET", "/healthz", "1.1", 200
+    )
+    assert stream.getvalue() == ""
+    assert plain.getvalue() == ""
+
+
+def test_uvicorn_errors_still_reach_json_output() -> None:
+    simulate_uvicorn_logging(io.StringIO())
+    stream = setup()
+    try:
+        raise RuntimeError("boom")
+    except RuntimeError:
+        logging.getLogger("uvicorn.error").exception("Exception in ASGI application")
+    (rec,) = records(stream)
+    assert rec["level"] == "error"
+    assert "RuntimeError: boom" in rec["exception"]
+
+
+def test_uvicorn_loggers_are_tamed_without_uvicorn_ever_configuring_them() -> None:
+    # Non-API services never have uvicorn handlers; nothing may break there.
+    stream = setup()
+    for name in UVICORN_LOGGERS:
+        assert logging.getLogger(name).handlers == []
+    logging.getLogger("uvicorn.error").warning("w")
+    structlog.get_logger("worker").info("job done")
+    assert [r["event"] for r in records(stream)] == ["w", "job done"]
+
+
+def test_works_with_uvicorns_real_logging_config() -> None:
+    # The real startup order: uvicorn's dictConfig first, app import and
+    # configure_logging afterwards.
+    import logging.config
+
+    uvicorn_config = pytest.importorskip("uvicorn.config")
+    logging.config.dictConfig(uvicorn_config.LOGGING_CONFIG)
+    stream = setup()
+    logging.getLogger("uvicorn.error").info("Uvicorn running on http://0.0.0.0:8000")
+    logging.getLogger("uvicorn.access").info("GET /healthz 200")
+    (rec,) = records(stream)
+    assert rec["event"] == "Uvicorn running on http://0.0.0.0:8000"
+
+
+def test_reconfiguring_after_uvicorn_installs_handlers_again_retakes_them() -> None:
+    setup()
+    simulate_uvicorn_logging(io.StringIO())
+    setup()
+    for name in UVICORN_LOGGERS:
+        assert logging.getLogger(name).handlers == []

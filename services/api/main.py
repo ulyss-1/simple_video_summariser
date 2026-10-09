@@ -28,13 +28,14 @@ import re
 import time
 import uuid
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any, cast
 
 import structlog
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
+from pydantic import ValidationError
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from common.config import get_settings
@@ -172,3 +173,12 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+# uvicorn logs "Started server process" right after importing this module and
+# before the lifespan runs, and its own config has just given its loggers
+# plain-text handlers. Configure logging at import so that line, and every
+# later uvicorn line, is JSON; the lifespan call stays for in-process servers.
+# Without settings (tooling that merely imports the module) there is nothing
+# to configure; a real server fails loudly in the lifespan instead.
+with suppress(ValidationError):
+    configure_logging(get_settings())

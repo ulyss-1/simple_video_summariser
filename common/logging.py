@@ -48,6 +48,29 @@ def _json_dumps(obj: Any, **kwargs: Any) -> str:
     return json.dumps(obj, **kwargs)
 
 
+def _adopt_uvicorn_loggers() -> None:
+    """Make uvicorn's records flow to the root JSON handler.
+
+    uvicorn's own logging config gives ``uvicorn`` and ``uvicorn.access``
+    plain-text handlers with ``propagate = False``, so without this the API
+    container prints non-JSON lines. This touches only logger objects by
+    name: it imports nothing, so it is a no-op where uvicorn is absent
+    (workers, migrate) and ``common`` keeps no dependency on a web framework.
+
+    uvicorn applies its config before it imports the app, so this must run
+    after that, at app import time or later; the API calls it on import.
+
+    The access log is switched off: ``RequestContextMiddleware`` already logs
+    one ``request`` line per request with its request id, and the compose
+    healthcheck would otherwise add an access line every 30 seconds.
+    """
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        lg = logging.getLogger(name)
+        lg.handlers.clear()
+        lg.propagate = True
+    logging.getLogger("uvicorn.access").disabled = True
+
+
 def configure_logging(settings: Settings, *, stream: TextIO | None = None) -> None:
     """Route structlog and stdlib logging to ``stream`` (default stdout).
 
@@ -95,6 +118,7 @@ def configure_logging(settings: Settings, *, stream: TextIO | None = None) -> No
             old.close()
     root.addHandler(handler)
     root.setLevel(settings.LOG_LEVEL)
+    _adopt_uvicorn_loggers()
 
     structlog.configure(
         processors=[

@@ -148,6 +148,10 @@ def test_planner_has_one_replica_and_worker_healthcheck_keeps_its_dollars(
     assert isinstance(deploy, dict) and deploy["replicas"] == 1
     health = services["planner"]["healthcheck"]
     assert isinstance(health, dict)
+    # UNVERIFIED (no Docker when written): Compose may re-escape "$" as "$$"
+    # in `config --format json`, which would make this literal assertion
+    # fail. Whoever first runs this with Docker should check the actual
+    # output before trusting or "fixing" the assertion.
     assert "$(( $(date +%s) - $(stat -c %Y /tmp/heartbeat) ))" in health["test"][1]
     assert services["planner"]["healthcheck"] == services["analyzer"]["healthcheck"]
     assert services["planner"]["healthcheck"] == services["transcriber"]["healthcheck"]

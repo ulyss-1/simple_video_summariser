@@ -224,13 +224,21 @@ def test_egress_services_reach_the_internet(stack: Stack, service: str) -> None:
 
 
 def test_db_has_no_egress(stack: Stack) -> None:
+    # Positive control: the tool must exist before a non-zero exit can mean
+    # "blocked"; a missing wget would also exit non-zero (127).
+    control = stack.exec("db", "sh", "-c", "command -v wget")
+    assert control.returncode == 0, "wget is missing from the db image"
     result = stack.exec(
         "db", "wget", "-q", "-T", "5", "-O", "/dev/null", "https://www.youtube.com"
     )
-    assert result.returncode != 0
+    assert result.returncode not in (0, 126, 127), result.stderr
 
 
 def test_web_cannot_reach_db_but_api_can(stack: Stack) -> None:
+    # Positive control: nc must exist and succeed against something web can
+    # reach (itself on :80) before a failure toward db can mean "blocked".
+    control = stack.exec("web", "sh", "-c", "nc -z -w 3 127.0.0.1 80")
+    assert control.returncode == 0, f"nc is unusable in the web image: {control.stderr}"
     assert stack.exec("web", "sh", "-c", "nc -z -w 3 db 5432").returncode != 0
     api = stack.exec(
         "api", "python", "-c",
