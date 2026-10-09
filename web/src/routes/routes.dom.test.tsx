@@ -4,7 +4,6 @@ import { createMemoryRouter, RouterProvider, type RouteObject } from 'react-rout
 import { describe, expect, it, vi } from 'vitest'
 import { routes } from './index'
 
-const ID = '-wNyEUrxzFU'
 
 function mount(entry: string, table: RouteObject[] = routes) {
   const router = createMemoryRouter(table, { initialEntries: [entry] })
@@ -25,11 +24,6 @@ describe('shell and navigation', () => {
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Search')
     fireEvent.click(screen.getByRole('link', { name: 'Ops' }))
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Ops')
-  })
-
-  it('shows the location search on the placeholder', () => {
-    mount(`/videos/${ID}?t=3723`)
-    expect(screen.getByText('?t=3723')).toBeTruthy()
   })
 
   it('keeps an API link as a plain anchor the router does not intercept', () => {

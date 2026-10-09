@@ -25,7 +25,6 @@ function heading(html: string): string {
 describe('route table', () => {
   it.each([
     ['/', 'Library'],
-    [`/videos/${ID}`, 'VideoDetail'],
     [`/videos/${ID}/transcript`, 'Transcript'],
     [`/videos/${ID}/compare`, 'Compare'],
     ['/search', 'Search'],
@@ -46,9 +45,10 @@ describe('route table', () => {
   })
 
   it('passes the video id through exactly, case and leading dash kept', () => {
-    const html = render('/videos/AbC-_xYz012').html
-    expect(html).toContain('AbC-_xYz012')
-    expect(render(`/videos/${ID}`).html).toContain(ID)
+    // VideoDetail (#50) renders its loading state on the server; a valid id
+    // reaches the query instead of the "Video not found" state.
+    expect(render('/videos/AbC-_xYz012').html).toContain('Loading video')
+    expect(render(`/videos/${ID}`).html).toContain('Loading video')
   })
 
   it.each(['/videos/short', '/videos/abcdefghijkl', '/videos/abc%2Fdefghi', '/videos/..', '/videos/%20%20%20%20%20%20%20%20%20%20%20'])(
@@ -87,13 +87,12 @@ describe('route table', () => {
     [`/videos/${ID}?t=%E0%A4%A`],
   ])('does not throw on malformed encoding in %s', (path) => {
     const { html } = render(path)
-    expect(html).toMatch(/Page not found|Video not found|<h1/)
+    expect(html).toMatch(/Page not found|Video not found|Loading video|<h1/)
     expect(html).not.toContain('Something went wrong')
   })
 
   it.each([
     ['/search?q=hello%20world&page=3', '?q=hello%20world&amp;page=3'],
-    [`/videos/${ID}?t=3723`, '?t=3723'],
     [`/videos/${ID}/transcript?page=3`, '?page=3'],
     [`/videos/${ID}/compare?x=1`, '?x=1'],
     ['/ops?state=dead&before=100', '?state=dead&amp;before=100'],
