@@ -111,6 +111,10 @@ def _read_snapshot(conn: psycopg.Connection[Any]) -> metrics.MetricsSnapshot:
         conn.rollback()
 
 
+# Not in the OpenAPI schema: an operational endpoint, not part of the generated
+# client contract (#46). That also hides it from the all-routes 401 test in
+# tests/services/api/test_app.py, so its 401 is covered by
+# test_metrics_returns_401_when_require_auth_denies in test_routes_metrics.py.
 @router.get(METRICS_PATH, response_class=PlainTextResponse, include_in_schema=False)
 def get_metrics(
     conn: Annotated[psycopg.Connection[Any], Depends(get_conn)],

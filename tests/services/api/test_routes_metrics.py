@@ -14,7 +14,7 @@ from typing import Any
 
 import psycopg
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from common.config import get_settings
@@ -104,6 +104,23 @@ def test_metrics_answers_200_with_the_text_format_content_type(app: FastAPI) -> 
     assert "speaker_coercions_total 4\n" in body
     assert "audio_bytes_used 1234\n" in body
     assert "reanalysis_backlog_videos 6\n" in body
+
+
+def _deny() -> None:
+    raise HTTPException(status_code=401, detail="denied")
+
+
+def test_metrics_returns_401_when_require_auth_denies(app: FastAPI) -> None:
+    # /metrics is include_in_schema=False, so the all-routes 401 test in
+    # test_app.py (which walks the OpenAPI schema) skips it; this is its coverage.
+    conn = FakeConn()
+    _use(app, conn)
+    app.dependency_overrides[deps.require_auth] = _deny
+
+    response = _get(app)
+
+    assert response.status_code == 401
+    assert conn.queries == []
 
 
 def test_two_scrapes_of_an_unchanged_database_are_byte_identical(app: FastAPI) -> None:
