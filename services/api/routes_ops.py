@@ -27,12 +27,22 @@ import psycopg
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from common import metrics
+from common.config import get_settings
 from common.errors import ErrorClass
 from common.queue import VALID_KINDS, PostgresQueue
-from common.repo.jobs import UNSET, get_job, list_jobs, queue_depth
+from common.repo.analyses import (
+    reanalysis_backlog_count,
+    token_usage_by_model,
+    total_cost_usd,
+    total_speaker_coercions,
+)
+from common.repo.jobs import UNSET, duration_histograms, get_job, list_jobs, queue_depth
+from common.repo.media import total_bytes
+from common.repo.transcripts import latest_whisper_rtf
 from services.api import schemas
 from services.api.deps import UNAVAILABLE_BODY, get_conn, rate_limit
 
@@ -71,6 +81,47 @@ def healthz(
         _log.exception("healthz database check failed")
         return JSONResponse(status_code=503, content=UNAVAILABLE_BODY)
     return {"status": "ok", "queue": _zero_filled(depth)}
+
+
+METRICS_PATH = "/metrics"
+#: The fixed 503 body of ``/metrics``: no exception text, DSN or host (#60).
+METRICS_UNAVAILABLE_BODY = "database unavailable\n"
+
+
+def metrics_unavailable() -> PlainTextResponse:
+    return PlainTextResponse(METRICS_UNAVAILABLE_BODY, status_code=503)
+
+
+def _read_snapshot(conn: psycopg.Connection[Any]) -> metrics.MetricsSnapshot:
+    """One statement per family, all inside one ``REPEATABLE READ, READ ONLY`` transaction."""
+    conn.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
+    conn.read_only = True
+    try:
+        return metrics.MetricsSnapshot(
+            queue_depth=queue_depth(conn),
+            job_durations=duration_histograms(conn),
+            whisper_rtf=latest_whisper_rtf(conn),
+            token_usage=token_usage_by_model(conn),
+            llm_cost_usd=total_cost_usd(conn),
+            speaker_coercions=total_speaker_coercions(conn),
+            audio_bytes=total_bytes(conn),
+            reanalysis_backlog=reanalysis_backlog_count(conn, get_settings().PROMPT_VERSION),
+        )
+    finally:
+        conn.rollback()
+
+
+@router.get(METRICS_PATH, response_class=PlainTextResponse, include_in_schema=False)
+def get_metrics(
+    conn: Annotated[psycopg.Connection[Any], Depends(get_conn)],
+) -> Response:
+    """Prometheus text format 0.0.4, derived from Postgres at scrape time (#60)."""
+    try:
+        snapshot = _read_snapshot(conn)
+    except Exception:  # noqa: BLE001 - any database failure is "unavailable", never a 500
+        _log.exception("metrics database query failed")
+        return metrics_unavailable()
+    return PlainTextResponse(metrics.render(snapshot), media_type=metrics.CONTENT_TYPE)
 
 
 class JobsQuery(BaseModel):

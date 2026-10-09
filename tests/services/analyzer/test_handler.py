@@ -659,6 +659,40 @@ def test_an_empty_transcript_persists_an_empty_analysis_without_llm_calls(
     assert (got.input_tokens, got.output_tokens) == (0, 0)
     assert got.speaker_roster == {"speakers": []}
     assert got.transcript_id == rig.transcripts["whisper"]
+    assert got.speakers_coerced == 0  # the no-chunks path stores 0, not NULL (#60)
+
+
+@integration
+def test_the_coerced_speaker_total_is_stored_on_the_analysis(
+    rig_factory: Callable[..., Rig],
+) -> None:
+    summarizer = FakeSummarizer(
+        roster=ROSTER,
+        chunks={
+            0: analysis(
+                claims=(claim("c", "Mallory"),),
+                quotes=(quote("q", "Eve"),),
+                speaker_coercions=1,
+            ),
+            1: analysis(),
+        },
+    )
+    rig = rig_factory(summarizer)
+
+    rig.run()
+
+    assert rig.latest().speakers_coerced == 3  # same total the completion log line reports
+
+
+@integration
+def test_an_analysis_with_only_known_speakers_stores_zero_coercions(
+    rig_factory: Callable[..., Rig],
+) -> None:
+    rig = rig_factory(FakeSummarizer(roster=ROSTER, chunks={0: analysis(claims=(claim("c", "Alice"),))}))
+
+    rig.run()
+
+    assert rig.latest().speakers_coerced == 0
 
 
 # ---------------------------------------------------------------- idempotency

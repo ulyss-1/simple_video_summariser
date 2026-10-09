@@ -248,6 +248,8 @@ class Analysis:
     output_tokens: int = 0
     cost_usd: float | None = None
     duration_ms: int | None = None
+    #: Speakers the analyzer coerced to ``unknown`` (#60); ``None`` = not recorded.
+    speakers_coerced: int | None = None
     topics: tuple[Topic, ...] = ()
     claims: tuple[Claim, ...] = ()
     quotes: tuple[Quote, ...] = ()

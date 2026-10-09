@@ -1406,3 +1406,136 @@ def test_retry_dead_racing_an_enqueue_leaves_exactly_one_active_job(
             "SELECT state FROM jobs WHERE id = %s", (job_id,)
         ).fetchone()
     assert dead_state == ("dead",)
+
+
+# ---------------------------------------------------------------------------
+# started_at (#60)
+# ---------------------------------------------------------------------------
+
+
+def _backdate_start(conn: psycopg.Connection[Any], job_id: int) -> datetime:
+    """Move ``started_at`` into the past, so a later change is visible without sleeping."""
+    past = datetime(2020, 1, 1, tzinfo=UTC)
+    _set(conn, job_id, started_at=past)
+    return past
+
+
+def test_a_new_job_has_no_start_time_until_it_is_claimed(
+    queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    job_id = queue.enqueue("ingest", "v1")
+    assert job_id is not None
+    assert _row(conn, job_id)["started_at"] is None
+
+
+def test_claim_sets_started_at_together_with_locked_at_and_exposes_it_on_the_job(
+    queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    job_id = queue.enqueue("ingest", "v1")
+    assert job_id is not None
+
+    with queue.claim(["ingest"], worker="w1") as job:
+        assert job is not None
+        assert job.started_at is not None
+        assert job.started_at == job.locked_at
+
+    assert _row(conn, job_id)["started_at"] is not None
+
+
+def test_started_at_survives_done(queue: PostgresQueue, conn: psycopg.Connection[Any]) -> None:
+    job_id = queue.enqueue("ingest", "v1")
+    assert job_id is not None
+    with queue.claim(["ingest"], worker="w1") as job:
+        assert job is not None
+        past = _backdate_start(conn, job_id)
+
+    row = _row(conn, job_id)
+    assert row["state"] == "done"
+    assert row["started_at"] == past
+
+
+def test_started_at_survives_dead(queue: PostgresQueue, conn: psycopg.Connection[Any]) -> None:
+    job_id = queue.enqueue("ingest", "v1")
+    assert job_id is not None
+    with queue.claim(["ingest"], worker="w1") as job:
+        assert job is not None
+        past = _backdate_start(conn, job_id)
+        raise PermanentSourceError("removed")
+
+    row = _row(conn, job_id)
+    assert row["state"] == "dead"
+    assert row["started_at"] == past
+
+
+def test_started_at_survives_retry_and_a_reclaim_moves_it_to_the_latest_claim(
+    queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    job_id = queue.enqueue("ingest", "v1")
+    assert job_id is not None
+    with queue.claim(["ingest"], worker="w1") as job:
+        assert job is not None
+        past = _backdate_start(conn, job_id)
+        raise TransientNetworkError("dns")
+
+    row = _row(conn, job_id)
+    assert row["state"] == "pending"
+    assert row["started_at"] == past
+
+    _set(conn, job_id, run_after=datetime(2020, 1, 1, tzinfo=UTC))
+    with queue.claim(["ingest"], worker="w2") as job:
+        assert job is not None
+        assert job.attempts == 2
+        assert job.started_at is not None
+        assert job.started_at > past
+
+
+def test_started_at_survives_defer_and_cancellation(
+    queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    job_id = queue.enqueue("ingest", "v1")
+    assert job_id is not None
+    with queue.claim(["ingest"], worker="w1") as job:
+        assert job is not None
+        past = _backdate_start(conn, job_id)
+        raise Defer(until=datetime.now(UTC) + timedelta(hours=1))
+    assert _row(conn, job_id)["started_at"] == past
+
+    _set(conn, job_id, run_after=datetime(2020, 1, 1, tzinfo=UTC))
+    with pytest.raises(Cancelled), queue.claim(["ingest"], worker="w1") as job:
+        assert job is not None
+        past = _backdate_start(conn, job_id)
+        raise Cancelled()
+    assert _row(conn, job_id)["started_at"] == past
+
+
+def test_started_at_survives_reap(queue: PostgresQueue, conn: psycopg.Connection[Any]) -> None:
+    job_id = queue.enqueue("ingest", "v1")
+    assert job_id is not None
+    past = datetime(2020, 1, 1, tzinfo=UTC)
+    _set(
+        conn,
+        job_id,
+        state="running",
+        locked_by="w1",
+        locked_at=past,
+        started_at=past,
+        heartbeat_at=past,
+        attempts=1,
+    )
+
+    assert queue.reap_stale(older_than_sec=300) == 1
+
+    row = _row(conn, job_id)
+    assert row["state"] == "pending"
+    assert row["started_at"] == past
+
+
+def test_started_at_survives_retry_dead(queue: PostgresQueue, conn: psycopg.Connection[Any]) -> None:
+    job_id = queue.enqueue("ingest", "v1")
+    assert job_id is not None
+    past = datetime(2020, 1, 1, tzinfo=UTC)
+    _set(conn, job_id, state="dead", started_at=past, finished_at=past)
+
+    assert queue.retry_dead(job_id).status == "retried"
+
+    assert _row(conn, job_id)["started_at"] == past

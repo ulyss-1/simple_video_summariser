@@ -34,7 +34,7 @@ from typing import Any, cast
 import structlog
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from common.config import get_settings
@@ -144,8 +144,10 @@ def _safe_loc(error: Any) -> list[Any]:
     return loc
 
 
-async def _database_unavailable(request: Request, exc: Exception) -> JSONResponse:
+async def _database_unavailable(request: Request, exc: Exception) -> Response:
     _log.error("database unavailable", exc_info=exc)
+    if request.url.path == routes_ops.METRICS_PATH:
+        return routes_ops.metrics_unavailable()
     read = isinstance(exc, ReadDatabaseUnavailable) or routes_read.is_read_request(request)
     return JSONResponse(
         status_code=503, content=READ_UNAVAILABLE_BODY if read else UNAVAILABLE_BODY

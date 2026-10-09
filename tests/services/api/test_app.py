@@ -69,7 +69,12 @@ def _app_operations(app: FastAPI) -> list[tuple[str, str]]:
 def test_three_router_modules_are_all_included_and_healthz_is_an_ops_route(
     write_probe_route: None, logs: LogSink
 ) -> None:
-    ops_paths = {r.path for r in routes_ops.router.routes if isinstance(r, APIRoute)}
+    # /metrics is plain text for Prometheus and kept out of the OpenAPI schema (#60).
+    ops_paths = {
+        r.path
+        for r in routes_ops.router.routes
+        if isinstance(r, APIRoute) and r.include_in_schema
+    }
     assert "/healthz" in ops_paths
 
     app = api_main.create_app()

@@ -82,8 +82,8 @@ _JITTER_FRACTION = 0.10
 _REAP_LAST_ERROR = "worker lost: heartbeat stale"
 
 _CLAIM_SQL = """
-    UPDATE jobs SET state='running', locked_at=now(), heartbeat_at=now(),
-                    locked_by=%(worker)s, attempts=attempts+1
+    UPDATE jobs SET state='running', locked_at=now(), started_at=now(),
+                    heartbeat_at=now(), locked_by=%(worker)s, attempts=attempts+1
     WHERE id = (
         SELECT id FROM jobs
         WHERE state='pending' AND kind = ANY(%(kinds)s) AND run_after <= now()
@@ -143,6 +143,9 @@ class Job:
     heartbeat_at: datetime | None
     finished_at: datetime | None
     created_at: datetime
+    #: Latest claim (#60); ``NULL`` for rows from before the column existed.
+    #: No transition clears it.
+    started_at: datetime | None = None
 
 
 def _job_from_row(row: dict[str, Any]) -> Job:

@@ -274,6 +274,7 @@ def make_analyze_handler(
             prompt_version=settings.PROMPT_VERSION,
             tldr="",
             speaker_roster=Roster(()).to_json(),
+            speakers_coerced=0,
         )
         if not chunks:
             empty_ms = elapsed_ms()
@@ -341,6 +342,7 @@ def make_analyze_handler(
                 input_tokens=tally.input_tokens,
                 output_tokens=tally.output_tokens,
                 duration_ms=duration_ms,
+                speakers_coerced=coerced,
                 topics=tuple(replace(t, seq=i) for i, t in enumerate(topics)),
                 claims=tuple(kept_claims),
                 quotes=tuple(kept_quotes),

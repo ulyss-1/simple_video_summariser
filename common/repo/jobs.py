@@ -13,6 +13,8 @@ from typing import Any, Final
 import psycopg
 from psycopg.rows import dict_row
 
+from common.metrics import DURATION_BUCKETS, DurationHistogram
+
 
 class _Unset:
     """Sentinel distinguishing "no filter" from an explicit ``None`` (#44)."""
@@ -169,3 +171,34 @@ def get_job(conn: psycopg.Connection[Any], job_id: int) -> JobRow | None:
         )
         row = cur.fetchone()
     return None if row is None else JobRow(**row)
+
+
+def duration_histograms(conn: psycopg.Connection[Any]) -> dict[str, DurationHistogram]:
+    """Duration histogram per job kind for ``job_duration_seconds`` (#60), one statement.
+
+    Over ``done`` jobs with a recorded ``started_at`` (older rows are excluded,
+    not counted as 0 s): ``finished_at - started_at`` of the last attempt, in
+    exact numeric seconds, so 60 s is in ``le="60"`` and 60.001 s is not. The
+    ``FILTER`` counts are cumulative, as the exposition format wants. Only
+    kinds with at least one such job appear.
+    """
+    filters = ", ".join(f"count(*) FILTER (WHERE s <= {bound})" for bound in DURATION_BUCKETS)
+    rows = conn.execute(
+        f"""
+        WITH d AS (
+            SELECT kind, extract(epoch FROM finished_at - started_at) AS s
+            FROM jobs
+            WHERE state = 'done' AND started_at IS NOT NULL AND finished_at IS NOT NULL
+              AND finished_at >= started_at
+        )
+        SELECT kind, {filters}, count(*), COALESCE(sum(s), 0)::float8
+        FROM d GROUP BY kind
+        """
+    ).fetchall()
+    n = len(DURATION_BUCKETS)
+    return {
+        str(row[0]): DurationHistogram(
+            tuple(int(c) for c in row[1 : 1 + n]), int(row[1 + n]), float(row[2 + n])
+        )
+        for row in rows
+    }

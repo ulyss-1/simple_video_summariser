@@ -27,8 +27,8 @@ def save_analysis(conn: psycopg.Connection[Any], analysis: Analysis) -> int:
         INSERT INTO analyses
             (video_id, transcript_id, chunk_strategy, model, prompt_version,
              tldr, speaker_roster, input_tokens, output_tokens, cost_usd,
-             duration_ms)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             duration_ms, speakers_coerced)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
         (
@@ -43,6 +43,7 @@ def save_analysis(conn: psycopg.Connection[Any], analysis: Analysis) -> int:
             analysis.output_tokens,
             analysis.cost_usd,
             analysis.duration_ms,
+            analysis.speakers_coerced,
         ),
     ).fetchone()
     assert row is not None
@@ -132,7 +133,8 @@ def latest_analysis(conn: psycopg.Connection[Any], video_id: str) -> Analysis | 
         """
         SELECT id, video_id, transcript_id, chunk_strategy, model,
                prompt_version, tldr, speaker_roster, input_tokens,
-               output_tokens, cost_usd, duration_ms, created_at
+               output_tokens, cost_usd, duration_ms, created_at,
+               speakers_coerced
         FROM analyses
         WHERE video_id = %s
         ORDER BY created_at DESC, id DESC
@@ -157,6 +159,7 @@ def latest_analysis(conn: psycopg.Connection[Any], video_id: str) -> Analysis | 
         cost_usd,
         duration_ms,
         created_at,
+        speakers_coerced,
     ) = row
 
     topics = conn.execute(
@@ -194,6 +197,7 @@ def latest_analysis(conn: psycopg.Connection[Any], video_id: str) -> Analysis | 
         output_tokens=output_tokens,
         cost_usd=float(cost_usd) if cost_usd is not None else None,
         duration_ms=duration_ms,
+        speakers_coerced=speakers_coerced,
         created_at=created_at,
         topics=tuple(_topic(item) for item in topics),
         claims=tuple(_claim(item) for item in claims),
@@ -242,7 +246,7 @@ def _quote(row: tuple[Any, ...]) -> Quote:
 _RUN_COLUMNS = """
     a.id, a.video_id, a.transcript_id, a.chunk_strategy, a.model, a.prompt_version,
     a.tldr, a.speaker_roster, a.input_tokens, a.output_tokens, a.cost_usd,
-    a.duration_ms, a.created_at, t.source
+    a.duration_ms, a.created_at, a.speakers_coerced, t.source
 """
 
 
@@ -314,9 +318,9 @@ def _runs(
             quotes[int(row[0])].append(_quote(row[1:]))
     return tuple(
         AnalysisRun(
-            analysis=_analysis(row[:13], topics[int(row[0])], claims[int(row[0])],
+            analysis=_analysis(row[:14], topics[int(row[0])], claims[int(row[0])],
                                quotes[int(row[0])]),
-            transcript_source=row[13],
+            transcript_source=row[14],
         )
         for row in rows
     )
@@ -328,6 +332,7 @@ def _analysis(
     (
         analysis_id, video_id, transcript_id, chunk_strategy, model, prompt_version, tldr,
         speaker_roster, input_tokens, output_tokens, cost_usd, duration_ms, created_at,
+        speakers_coerced,
     ) = row
     return Analysis(
         id=int(analysis_id),
@@ -342,8 +347,55 @@ def _analysis(
         output_tokens=output_tokens,
         cost_usd=float(cost_usd) if cost_usd is not None else None,
         duration_ms=duration_ms,
+        speakers_coerced=speakers_coerced,
         created_at=created_at,
         topics=tuple(topics),
         claims=tuple(claims),
         quotes=tuple(quotes),
     )
+
+
+def token_usage_by_model(conn: psycopg.Connection[Any]) -> dict[str, tuple[int, int]]:
+    """``model -> (SUM(input_tokens), SUM(output_tokens))`` over all analyses (#60)."""
+    rows = conn.execute(
+        "SELECT model, SUM(input_tokens), SUM(output_tokens) FROM analyses GROUP BY model"
+    ).fetchall()
+    return {str(model): (int(inp), int(out)) for model, inp, out in rows}
+
+
+def total_cost_usd(conn: psycopg.Connection[Any]) -> float | None:
+    """``SUM(cost_usd)`` over analyses with a known price; ``None`` when there are none (#60)."""
+    row = conn.execute("SELECT SUM(cost_usd) FROM analyses WHERE cost_usd IS NOT NULL").fetchone()
+    assert row is not None
+    return None if row[0] is None else float(row[0])
+
+
+def total_speaker_coercions(conn: psycopg.Connection[Any]) -> int:
+    """``SUM(speakers_coerced)`` over analyses that recorded it; 0 when none (#60)."""
+    row = conn.execute(
+        "SELECT COALESCE(SUM(speakers_coerced), 0) FROM analyses WHERE speakers_coerced IS NOT NULL"
+    ).fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+def reanalysis_backlog_count(conn: psycopg.Connection[Any], prompt_version: str) -> int:
+    """Videos with a non-blank transcript and no analysis at ``prompt_version`` (#60).
+
+    The first two predicates of the planner sweep's candidate query
+    (``services/planner/sweep.py``), as a count; jobs are not considered.
+    """
+    row = conn.execute(
+        r"""
+        SELECT count(*) FROM videos v
+        WHERE EXISTS (
+                SELECT 1 FROM transcripts t
+                WHERE t.video_id = v.video_id AND t.full_text ~ '\S')
+          AND NOT EXISTS (
+                SELECT 1 FROM analyses a
+                WHERE a.video_id = v.video_id AND a.prompt_version = %s)
+        """,
+        (prompt_version,),
+    ).fetchone()
+    assert row is not None
+    return int(row[0])

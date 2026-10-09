@@ -313,3 +313,29 @@ def best_transcript_page(
         for i, start, end, text, speaker in rows
     )
     return TranscriptPage(video_id=video_id, info=info, segments=segments)
+
+
+def latest_whisper_rtf(conn: psycopg.Connection[Any]) -> float | None:
+    """``engine_meta.rtf`` of the newest ``whisper`` transcript with a usable ``rtf`` (#60).
+
+    Usable means a positive, finite JSON number; missing, null, non-numeric,
+    zero or negative values are skipped. ``None`` when no transcript qualifies.
+    """
+    row = conn.execute(
+        """
+        SELECT rtf FROM (
+            SELECT id, created_at,
+                   CASE WHEN jsonb_typeof(engine_meta) = 'object'
+                         AND jsonb_typeof(engine_meta->'rtf') = 'number'
+                        THEN (engine_meta->>'rtf')::numeric
+                   END AS rtf
+            FROM transcripts
+            WHERE source = 'whisper'
+        ) t
+        WHERE rtf > %s AND rtf < %s
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        (_MIN_RTF, _MAX_RTF),
+    ).fetchone()
+    return None if row is None else float(row[0])
