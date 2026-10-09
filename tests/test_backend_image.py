@@ -245,12 +245,15 @@ def test_migrate_runs_alembic_upgrade_head() -> None:
 
 
 def test_migrate_environment_has_database_url_and_json_logs() -> None:
-    block = _migrate()
+    # #58: `migrate` takes the shared x-backend-env anchor, which carries both.
+    assert "environment: *backend-env" in _migrate()
+    text = (REPO_ROOT / "compose.yml").read_text()
+    anchor = text.split("x-backend-env: &backend-env\n", 1)[1].split("\n\n", 1)[0]
     assert (
         "DATABASE_URL: postgresql://ytdigest:${POSTGRES_PASSWORD}@db:5432/ytdigest"
-        in block
+        in anchor
     )
-    assert "LOG_FORMAT: json" in block
+    assert "LOG_FORMAT: json" in anchor
 
 
 def test_migrate_waits_for_a_healthy_db() -> None:

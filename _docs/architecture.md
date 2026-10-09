@@ -1103,6 +1103,16 @@ client-side.
 ```yaml
 name: ytdigest
 
+# The whole v1 stack (architecture.md 11.4-11.6): `db`, the one-shot
+# `migrate`, `api`, `planner`, `analyzer`, `transcriber` and `web`.
+# `migrate` builds and tags the backend image that `api`, `planner` and
+# `analyzer` reuse; `transcriber` and `web` build their own images.
+# Production deploys use `docker compose -f compose.yml up -d --build`
+# explicitly, so `compose.override.yml` (dev-only) is never applied by
+# accident.
+
+# Exactly the keys architecture.md 11.4 lists. Service-specific variables go
+# on the service; `ANTHROPIC_API_KEY` is on `analyzer` only, never here.
 x-backend-env: &backend-env
   DATABASE_URL: postgresql://ytdigest:${POSTGRES_PASSWORD}@db:5432/ytdigest
   SUMMARIZER: ${SUMMARIZER:-ollama}
@@ -1118,12 +1128,17 @@ x-logging: &logging
 
 services:
   db:
-    image: postgres:18-alpine   # >=18.6 (see 16.1)
+    image: postgres:18-alpine   # >=18.6 (architecture.md 16.1)
     environment:
       POSTGRES_USER: ytdigest
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
       POSTGRES_DB: ytdigest
-    volumes: [pgdata:/var/lib/postgresql/data]
+    # postgres:18's image moved PGDATA under /var/lib/postgresql/<major>/docker
+    # and declares VOLUME /var/lib/postgresql (not .../data as in older
+    # images and architecture.md's literal example): mounting at .../data
+    # makes the entrypoint refuse to start, seeing "unused" data there.
+    volumes:
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ytdigest -d ytdigest"]
       interval: 10s
@@ -1133,6 +1148,9 @@ services:
     logging: *logging
     restart: unless-stopped
 
+  # One-shot: runs `alembic upgrade head` and exits. Migrations never run on
+  # service startup (AGENTS.md -> Rules); the long-running services wait for
+  # this to exit 0. It owns the only build of the backend image.
   migrate:
     build: {context: ., dockerfile: ops/Dockerfile.backend}
     image: ytdigest-backend:latest
@@ -1141,6 +1159,7 @@ services:
     depends_on: {db: {condition: service_healthy}}
     networks: [internal]
     restart: "no"
+    logging: *logging
 
   api:
     image: ytdigest-backend:latest
@@ -1160,6 +1179,7 @@ services:
 
   web:
     build: {context: ., dockerfile: ops/Dockerfile.frontend}
+    image: ytdigest-web:latest
     ports: ["127.0.0.1:8080:80"]      # loopback only (D13)
     depends_on: {api: {condition: service_healthy}}
     networks: [edge]
@@ -1174,11 +1194,25 @@ services:
       POLL_INTERVAL_SEC: ${POLL_INTERVAL_SEC:-3600}
       AUDIO_TTL_DAYS: ${AUDIO_TTL_DAYS:-30}
       AUDIO_MAX_GB: ${AUDIO_MAX_GB:-20}
+      AUDIO_KEEP: ${AUDIO_KEEP:-1}
     depends_on:
       migrate: {condition: service_completed_successfully}
     volumes: [audio:/data/audio]        # needs it to unlink purged files
-    deploy: {replicas: 1}               # hard constraint — see §1
-    networks: [internal]
+    # The loop touches /tmp/heartbeat each pass and sleeps in slices of at
+    # most 30 s (#38), so it fits the same 180 s test as the other workers.
+    # Dollar signs are doubled so Compose leaves them for the shell.
+    healthcheck: &worker-health
+      test: ["CMD-SHELL", "test $$(( $$(date +%s) - $$(stat -c %Y /tmp/heartbeat) )) -lt 180"]
+      interval: 60s
+      retries: 3
+      start_period: 60s
+      start_interval: 5s    # so `up --wait` does not wait a full interval
+    # Hard constraint: exactly one planner - see architecture.md section 1.
+    deploy: {replicas: 1}
+    # Must stay above WORKER_SHUTDOWN_GRACE_SEC (default 20 s, not set here);
+    # Docker's own default of 10 s would SIGKILL a worker mid-drain.
+    stop_grace_period: 30s
+    networks: [internal, egress]
     logging: *logging
     restart: unless-stopped
 
@@ -1188,28 +1222,44 @@ services:
     environment:
       <<: *backend-env
       OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:4b}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-4-5}
+      # The only service that gets the key. From .env or the deploy shell's
+      # environment; a Docker secret file is #136.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     depends_on:
       migrate: {condition: service_completed_successfully}
-    healthcheck: &worker-health
-      test: ["CMD-SHELL", "test $(( $(date +%s) - $(stat -c %Y /tmp/heartbeat) )) -lt 180"]
-      interval: 60s
-      retries: 3
-      start_period: 60s
-    networks: [internal]
+    extra_hosts: ["host.docker.internal:host-gateway"]   # host Ollama (11.5)
+    healthcheck: *worker-health
+    stop_grace_period: 30s              # above WORKER_SHUTDOWN_GRACE_SEC
+    networks: [internal, egress]
     logging: *logging
     restart: unless-stopped
 
   transcriber:
-    build: {context: ., dockerfile: ops/Dockerfile.whisper}
+    build:
+      context: .
+      dockerfile: ops/Dockerfile.whisper
+      # ops/Dockerfile.whisper is `FROM ytdigest-backend:latest`. Naming that
+      # image as a build context from the `migrate` service makes Compose
+      # build `migrate` first and use the result, so the whisper image is
+      # never built on a stale or missing backend image.
+      additional_contexts:
+        "ytdigest-backend:latest": "service:migrate"
     image: ytdigest-whisper:latest
     command: python -m services.transcriber.main
     environment:
       <<: *backend-env
       WHISPER_MODEL: ${WHISPER_MODEL:-large-v3}
       WHISPER_COMPUTE: ${WHISPER_COMPUTE:-int8}
-      WHISPER_THREADS: ${WHISPER_THREADS:-4}
+      # Moves together with TRANSCRIBER_CPUS below: threads above the CPU
+      # quota only oversubscribe it. 3 threads for the default 3.0 CPUs.
+      WHISPER_THREADS: ${WHISPER_THREADS:-3}
+      PREFER_WHISPER: ${PREFER_WHISPER:-0}
+      AUTO_CAPTION_FALLBACK: ${AUTO_CAPTION_FALLBACK:-1}
+      MAX_ATTEMPTS_TRANSCRIBE: ${MAX_ATTEMPTS_TRANSCRIBE:-2}
       AUDIO_KEEP: ${AUDIO_KEEP:-1}
+      AUDIO_MAX_GB: ${AUDIO_MAX_GB:-20}
     volumes:
       - audio:/data/audio
       - whisper-models:/models
@@ -1219,7 +1269,8 @@ services:
     deploy:
       resources:
         limits: {cpus: "${TRANSCRIBER_CPUS:-3.0}", memory: 6G}
-    networks: [internal]
+    stop_grace_period: 30s              # above WORKER_SHUTDOWN_GRACE_SEC
+    networks: [internal, egress]
     logging: *logging
     restart: unless-stopped
 
@@ -1228,10 +1279,27 @@ volumes:
   audio:
   whisper-models:
 
+# `internal: true` has no route to the internet or the host. The transcriber
+# must reach YouTube and Hugging Face, the planner YouTube RSS, and the
+# analyzer Ollama on the host or the Anthropic API, so those three also sit
+# on `egress`, an ordinary bridge. `db` and `migrate` never do.
 networks:
-  internal: {internal: true}    # no egress path to the host network
+  internal:
+    internal: true
   edge: {}
+  egress: {}
 ```
+
+Corrections to the earlier listing, all shipped in #58: `db` mounts
+`pgdata:/var/lib/postgresql` (#7); `planner`, `analyzer` and `transcriber`
+also join a new ordinary `egress` network, because an `internal: true`
+network has no route to YouTube, Hugging Face, the Anthropic API or the host
+Ollama; `analyzer` gets `extra_hosts` for `host.docker.internal`; `planner`
+gets the heartbeat healthcheck; the workers get `stop_grace_period: 30s`
+(above `WORKER_SHUTDOWN_GRACE_SEC`'s 20 s); the healthcheck escapes `$` as
+`$$` and adds `start_interval`; `WHISPER_THREADS` defaults to `3` to match
+`TRANSCRIBER_CPUS=3.0`; and the whisper build names `ytdigest-backend:latest`
+as an additional context from `migrate`, so it never builds on a stale base.
 
 ### 11.5 Deployment mechanics worth calling out
 
@@ -1248,9 +1316,9 @@ heartbeat in C2 — that one detects a dead worker holding a job; this one tells
 Docker to restart a wedged process. Both are needed; neither substitutes for
 the other.
 
-**Network segmentation.** `internal: true` means the database and workers have
-no route off the compose bridge except through explicitly attached networks.
-Only `api` sits on both, and only `web` publishes a port — bound to `127.0.0.1`
+**Network segmentation.** `internal: true` means the database and `migrate`
+have no route off the compose bridge. The workers also sit on `egress`.
+Only `api` sits on `internal` and `edge`, and only `web` publishes a port — bound to `127.0.0.1`
 so it is reachable solely through the host's existing reverse proxy (D13).
 
 **Transcriber resource limits.** `cpus` prevents Whisper from starving the rest
