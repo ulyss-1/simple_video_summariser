@@ -62,6 +62,12 @@ Activate `.venv` first; all Python commands assume it.
   (added by #55/#58; not yet part of `compose.yml`)
 - `docker compose up -d --build` - bring the stack up
 - `npm ci && npm run build` - in `web/`, frontend only
+- `npm test` - in `web/`; runs Vitest once (no watch, Node environment)
+- `npm run dev` - in `web/`; Vite dev server on `:5173`, proxying `/api/` to
+  the backend (prefix stripped, like nginx). The target is the non-`VITE_` env
+  var `API_PROXY_TARGET`, default `http://localhost:8000`
+- All `npm` commands need a login shell for nvm, e.g.
+  `bash -lc 'cd web && npm test'`
 
 If your shell is on the Windows side rather than in the distro, wrap the
 command instead of running it directly:
