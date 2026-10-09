@@ -1,4 +1,5 @@
 import type { RouteObject } from 'react-router'
+import { PlayerProvider } from '../components/PlayerContext'
 import { Compare } from './Compare'
 import { Library } from './Library'
 import { NotFound } from './NotFound'
@@ -20,7 +21,14 @@ export const routes: RouteObject[] = [
       { index: true, element: <Library /> },
       { path: 'videos/:videoId', element: <VideoDetail /> },
       { path: 'videos/:videoId/transcript', element: <Transcript /> },
-      { path: 'videos/:videoId/compare', element: <Compare /> },
+      {
+        path: 'videos/:videoId/compare',
+        element: (
+          <PlayerProvider>
+            <Compare />
+          </PlayerProvider>
+        ),
+      },
       { path: 'search', element: <Search /> },
       { path: 'ops', element: <Ops /> },
       { path: '*', element: <NotFound /> },

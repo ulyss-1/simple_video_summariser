@@ -5,6 +5,7 @@ import { AnalysisView } from '../components/AnalysisView'
 import { Player } from '../components/Player'
 import { buildWatchUrl } from '../components/player/youtubeTransport'
 import { formatTimestamp } from '../components/Timestamp'
+import { useAnalysisTotal } from '../hooks/useAnalyses'
 import { useVideo, VideoApiError } from '../hooks/useVideo'
 import { parseVideoId } from '../lib/videoId'
 
@@ -66,6 +67,8 @@ export function VideoDetail() {
 
 function VideoPage({ videoId }: { videoId: string }) {
   const query = useVideo(videoId)
+  // Only the count is needed for the Compare link; a failure just hides it.
+  const analysisTotal = useAnalysisTotal(videoId).data
   const video = query.data
   const heading = video ? video.title || videoId : null
 
@@ -124,6 +127,12 @@ function VideoPage({ videoId }: { videoId: string }) {
           <>
             {' · '}
             <Link to={`/videos/${videoId}/transcript`}>Transcript</Link>
+          </>
+        )}
+        {analysisTotal !== undefined && analysisTotal >= 2 && (
+          <>
+            {' · '}
+            <Link to={`/videos/${videoId}/compare`}>Compare analyses</Link>
           </>
         )}
         {analysis !== null && (

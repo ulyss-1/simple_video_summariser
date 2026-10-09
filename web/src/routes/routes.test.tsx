@@ -26,7 +26,7 @@ describe('route table', () => {
   it.each([
     ['/', 'Library'],
     [`/videos/${ID}/transcript`, ID],
-    [`/videos/${ID}/compare`, 'Compare'],
+    [`/videos/${ID}/compare`, ID],
     ['/search', 'Search'],
     ['/ops', 'Ops'],
   ])('%s renders the view with heading %s', (path, name) => {
@@ -92,8 +92,6 @@ describe('route table', () => {
   })
 
   it.each([
-    [`/videos/${ID}/compare?x=1`, '?x=1'],
-    ['/ops?state=dead&before=100', '?state=dead&amp;before=100'],
   ])('%s shows its search string unchanged', (path, shown) => {
     expect(render(path).html).toContain(shown)
   })
@@ -103,6 +101,34 @@ describe('search string on the Search view', () => {
   // Search (#52) reads its query from the URL instead of printing the string.
   it('/search?q=hello%20world&page=3 reaches the view: the box shows the decoded query', () => {
     expect(render('/search?q=hello%20world&page=3').html).toContain('value="hello world"')
+  })
+})
+
+describe('compare route query string', () => {
+  // The Compare view (#53) no longer prints its query string, so the router
+  // state is what proves the query reaches the view unchanged.
+  it.each([`?x=1`, `?a=3&b=7`, `?a=1&a=2&b=%E0%A4%A`])('%s reaches the compare route unchanged', (search) => {
+    const { html, router } = render(`/videos/${ID}/compare${search}`)
+    expect(router.state.location.search).toBe(search)
+    expect(router.state.location.pathname).toBe(`/videos/${ID}/compare`)
+    expect(heading(html)).toBe(ID)
+  })
+})
+
+describe('search string on the Ops view', () => {
+  // Ops (#54) reads its filters from the URL instead of printing the string:
+  // the selects show them. (The cursor reaches the request: Ops.dom.test.tsx.)
+  it('/ops?state=pending&kind=ingest&error_class=none&before=100 reaches the view: the selects show the filters', () => {
+    const { html } = render('/ops?state=pending&kind=ingest&error_class=none&before=100')
+    expect(html).toContain('<option value="pending" selected="">')
+    expect(html).toContain('<option value="ingest" selected="">')
+    expect(html).toContain('<option value="none" selected="">')
+  })
+
+  it('/ops?state=bogus falls back to the default filter and does not echo the value', () => {
+    const { html } = render('/ops?state=bogus')
+    expect(html).toContain('<option value="dead" selected="">')
+    expect(html).not.toContain('bogus')
   })
 })
 

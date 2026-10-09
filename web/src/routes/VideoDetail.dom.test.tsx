@@ -66,6 +66,9 @@ function stubFetch(respond: Responder) {
   requests = []
   const fn = vi.fn((input: RequestInfo | URL) => {
     const url = new URL(String(input), 'http://localhost')
+    // The "Compare analyses" count request (#53) is covered in
+    // VideoDetail.compareLink.dom.test.tsx; here it only has to fail quietly.
+    if (url.pathname.endsWith('/analyses')) return Promise.resolve(json({ detail: 'not under test' }, 404))
     requests.push(url)
     return Promise.resolve(respond(url, requests.length))
   })
