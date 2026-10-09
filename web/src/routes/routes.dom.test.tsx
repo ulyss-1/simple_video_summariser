@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider, type RouteObject } from 'react-router'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { routes } from './index'
 
 
@@ -69,5 +69,84 @@ describe('error boundary', () => {
     expect(screen.getByText('Something went wrong')).toBeTruthy()
     expect(document.body.textContent).not.toContain('secret-internal-detail')
     expect(screen.getByRole('link', { name: 'Back to Library' }).getAttribute('href')).toBe('/')
+  })
+})
+
+// Query strings must survive routing (#122). This block mounts the SHARED
+// `routes` table, the only thing that proves the registered route lets the
+// query reach the view; the view tests (Library.dom, VideoDetail.dom,
+// Transcript.dom) build their own local router tables and only prove each view
+// reads its param. Issues #49, #50 and #51 each deleted one query-string row
+// from the shared tests, believing the view tests covered it, and the coverage
+// silently vanished (a useEffect stripping the query left every test green).
+//
+// Do NOT delete a row here when a view replaces its placeholder. REWRITE the
+// row: keep the same URL and assert the search string is unchanged after the
+// view has rendered and its effects have run. #52 (Search), #53 (Compare) and
+// #54 (Ops) must do the same for their rows.
+describe('query strings survive the shared route table', () => {
+  let requests: URL[]
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    requests = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        requests.push(new URL(String(input), 'http://localhost'))
+        return new Response('{}', { status: 500, headers: { 'content-type': 'application/json' } })
+      }),
+    )
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  // Let mount effects, the first fetch and any redirect they cause run. Plain
+  // act + advanceTimersByTimeAsync: waitFor is not needed to wait for "nothing
+  // changed", and it does not detect Vitest's fake timers anyway.
+  async function settle() {
+    for (let i = 0; i < 3; i++) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50)
+      })
+    }
+  }
+
+  it.each([
+    ['/?page=2&status=failed', '?page=2&status=failed'],
+    ['/videos/-wNyEUrxzFU?t=3723', '?t=3723'],
+    ['/videos/-wNyEUrxzFU/transcript?page=3', '?page=3'],
+  ])('%s keeps its search string after effects have run', async (entry, search) => {
+    const router = mount(entry)
+    await settle()
+    expect(router.state.location.search).toBe(search)
+    expect(router.state.location.pathname).toBe(entry.split('?')[0])
+  })
+
+  it('the transcript route delivers page 3 to the request as offset=400', async () => {
+    mount('/videos/-wNyEUrxzFU/transcript?page=3')
+    await settle()
+    const transcript = requests.filter((u) => u.pathname.endsWith('/transcript'))
+    expect(transcript.length).toBeGreaterThan(0)
+    expect(transcript[0]?.searchParams.get('offset')).toBe('400')
+  })
+})
+
+describe('trailing slash on a video id', () => {
+  // The SSR trailing-slash table in routes.test.tsx compares heading(), which is
+  // '' for VideoDetail on both sides (it renders no <h1> while loading), so it
+  // only proves "not Page not found". Assert the real marker on both forms.
+  it.each(['/videos/-wNyEUrxzFU', '/videos/-wNyEUrxzFU/'])('%s renders VideoDetail', (entry) => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})))
+    try {
+      mount(entry)
+      expect(screen.getByText(/Loading video/)).toBeTruthy()
+      expect(screen.queryByText('Page not found')).toBeNull()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

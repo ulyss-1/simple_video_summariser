@@ -124,6 +124,11 @@ describe("speakerLabels", () => {
     expect(sp("", "A", "  ", "A")).toEqual([null, "A", null, "A"]);
   });
 
+  it("keeps a speaker name as stored, whitespace included", () => {
+    // Names are shown as stored, so "A" and "  A  " are different speakers.
+    expect(sp("  A  ", "  A  ", "A")).toEqual(["  A  ", null, "A"]);
+  });
+
   it("handles an empty page", () => {
     expect(sp()).toEqual([]);
   });
