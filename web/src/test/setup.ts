@@ -12,6 +12,12 @@ import { afterEach, beforeEach, expect, vi } from 'vitest'
 // because no component needs one yet. The issue that first needs one adds it
 // to this file, with a comment naming the component that needs it.
 
+// jsdom does not implement window.scrollTo; react-router's <ScrollRestoration />
+// (routes/Shell.tsx) calls it on every navigation.
+beforeEach(() => {
+  vi.stubGlobal('scrollTo', () => {})
+})
+
 class UnexpectedNetworkAccessError extends Error {
   override name = 'UnexpectedNetworkAccessError'
 }
