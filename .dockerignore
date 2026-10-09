@@ -31,3 +31,6 @@ scripts/
 # Windows download markers left by copying from NTFS
 *:Zone.Identifier
 **/*:Zone.Identifier
+
+# Frontend build output (issue #57): a stale local build never enters the context.
+web/dist
