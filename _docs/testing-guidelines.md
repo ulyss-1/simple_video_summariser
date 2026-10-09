@@ -35,6 +35,37 @@ Per-layer approach is in architecture.md §13 — follow it. These rules apply o
 - Test via public interfaces; prefer fakes over mocking internals.
 - `tests/` mirrors the package layout; name tests after the behaviour.
 
+## Frontend
+
+The rules above (test first, cover boundaries, treat untrusted input at trust
+boundaries, no network, deterministic, no repeat-run loops) apply unchanged to
+`web/`. Only the frontend specifics are listed here.
+
+- **Naming picks the environment.** A test that renders DOM is named
+  `*.dom.test.tsx` (or `.ts`) and runs in jsdom with `src/test/setup.ts`.
+  Everything else stays `*.test.ts(x)` and runs in Node. The extension never
+  decides: `App.test.tsx` is a `.tsx` file that runs in Node.
+- **Running.** `npm test` runs once and exits (`vitest run`), from `web/`, in
+  a login shell: `bash -lc 'cd ~/projects/simple_video_summary/web && npm test'`.
+  Never bare `vitest`, no watch mode.
+- **Time.** Use `vi.useFakeTimers()` and advance explicitly instead of
+  waiting. Testing Library's `waitFor` only detects Jest's fake timers, so
+  advance with `vi.advanceTimersByTimeAsync` first, start `waitFor`, then
+  advance by 0 so its trailing `setTimeout(0)` fires (see
+  `src/test/render.dom.test.tsx`).
+- **Network.** The default `fetch` throws. Stub it per test with
+  `vi.stubGlobal('fetch', ...)`; the setup restores it after each test. Never
+  call the network. Prefer a small fake over mocking a module's internals.
+- **jsdom gaps.** jsdom lacks `matchMedia`, `ResizeObserver`,
+  `IntersectionObserver`, `scrollIntoView` and `Element.animate`. The issue
+  that first needs one adds the stub to `src/test/setup.ts`, with a comment
+  naming the component that needs it.
+- **Time zone.** The Vitest config pins `TZ=America/Los_Angeles` for every
+  project, so date code that only works in UTC fails. Do not set `TZ` per test.
+- **Cleanup.** `globals` is off, so the setup calls `cleanup()` itself and
+  resets the document, storage, stubs and timers after every test. Leave
+  `process.env` and module singletons as you found them.
+
 ## Flaky or racy behaviour: find the cause, don't loop the test
 
 Running a test 20 or 50 times "to prove it's not flaky" is not evidence and
