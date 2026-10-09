@@ -59,7 +59,7 @@ def _zero_filled(depth: dict[tuple[str, str], int]) -> QueueDepth:
     return queue
 
 
-@router.get("/healthz", response_model=None)
+@router.get("/healthz", response_model=schemas.HealthOut)
 def healthz(
     conn: Annotated[psycopg.Connection[Any], Depends(get_conn)],
 ) -> dict[str, object] | JSONResponse:
@@ -116,7 +116,7 @@ def _gate(model: type[BaseModel]) -> Callable[[Request], None]:
     return gate
 
 
-@router.get("/ops/jobs", response_model=None)
+@router.get("/ops/jobs", response_model=schemas.JobListOut)
 def get_ops_jobs(
     _: Annotated[None, Depends(_gate(JobsQuery))],
     params: Annotated[JobsQuery, Query()],

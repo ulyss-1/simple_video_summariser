@@ -25,6 +25,13 @@ UtcDatetime = Annotated[datetime, AfterValidator(lambda value: value.astimezone(
 VideoStatus = Literal["done", "processing", "unavailable", "failed", "idle"]
 
 
+class HealthOut(BaseModel):
+    """``GET /healthz`` 200 body: liveness plus queue depth by kind and state."""
+
+    status: str
+    queue: dict[str, dict[str, int]]
+
+
 class ActiveJobOut(BaseModel):
     id: int
     kind: str
