@@ -58,9 +58,23 @@ Activate `.venv` first; all Python commands assume it.
   against the dev DB on `127.0.0.1:5432` (`compose.override.yml`); needs
   `DATABASE_URL` set in the shell, since `common/config.py` reads only the
   process environment, never `.env` (task #7)
-- `docker compose run --rm migrate` - apply migrations in the deployed stack
-  (added by #55/#58; not yet part of `compose.yml`)
-- `docker compose up -d --build` - bring the stack up
+- `docker compose run --rm migrate` - apply migrations in the stack (the
+  one-shot `migrate` service in `compose.yml`, #55/#58); in dev, `./migrations`
+  is mounted read-only, so a new revision needs no rebuild
+- `docker compose up -d --build` - bring the stack up. Locally this merges
+  `compose.override.yml` (#59), the dev loop:
+  - the app is at `http://localhost:5173` (Vite dev server with hot module
+    reload, proxying `/api` to `api`), not 8080 (that is nginx, production
+    only); the first `up` runs `npm ci` inside the `web` container, so it is
+    slow
+  - `./common`, `./adapters` and `./services` are mounted read-only into
+    `api`, `planner`, `analyzer` and `transcriber`; `api` runs
+    `uvicorn --reload` and picks up an edit on save
+  - the workers do not reload: after an edit run
+    `docker compose restart <service>` (no rebuild; automatic restart is #142)
+  - Postgres is on `127.0.0.1:5432` (see `alembic upgrade head` above)
+  - the transcriber uses the `tiny` Whisper model unless `WHISPER_MODEL` is
+    set (for example `WHISPER_MODEL=base docker compose up -d`)
 - `npm ci && npm run build` - in `web/`, frontend only
 - `npm test` - in `web/`; runs Vitest once (no watch, Node environment)
 - `npm run dev` - in `web/`; Vite dev server on `:5173`, proxying `/api/` to

@@ -484,3 +484,242 @@ def test_alembic_ini_carries_no_database_url_or_credentials() -> None:
 def test_alembic_ini_names_revisions_sequentially_via_file_template() -> None:
     text = (REPO_ROOT / "alembic.ini").read_text()
     assert "file_template = %%(rev)s_%%(slug)s" in text
+
+
+# --- development overlay (issue #59) ---------------------------------------
+
+
+def _override_block(service: str) -> str:
+    return _service_block(COMPOSE_OVERRIDE_YML.read_text(), service)
+
+
+def _code_lines(text: str) -> list[str]:
+    return [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
+
+
+SOURCE_MOUNTS = [
+    "- ./common:/app/common:ro",
+    "- ./adapters:/app/adapters:ro",
+    "- ./services:/app/services:ro",
+]
+BACKEND_SERVICES = ["api", "planner", "analyzer", "transcriber"]
+
+
+@pytest.mark.parametrize("service", BACKEND_SERVICES)
+def test_overlay_mounts_backend_source_read_only(service: str) -> None:
+    block = _override_block(service)
+    for mount in SOURCE_MOUNTS:
+        assert mount in block, (service, mount)
+    # Read-only is the point (uid 10001 would write __pycache__ otherwise).
+    assert not any(
+        ln.strip().startswith("- ./") and not ln.rstrip().endswith(":ro")
+        for ln in block.splitlines()
+    )
+
+
+def test_overlay_adds_mounts_and_does_not_redeclare_the_named_volumes() -> None:
+    # Compose merges `volumes` by mount target, so listing only the bind
+    # mounts adds to `audio` / `whisper-models`; redeclaring them here would
+    # be redundant and invites a typo that silently moves the target.
+    text = COMPOSE_OVERRIDE_YML.read_text()
+    for name in ("planner", "transcriber"):
+        block = _override_block(name)
+        assert "audio:" not in block and "whisper-models:" not in block
+    # ... and compose.yml still has them where #58 put them.
+    assert "audio:/data/audio" in _block("planner")
+    assert "audio:/data/audio" in _block("transcriber")
+    assert "whisper-models:/models" in _block("transcriber")
+    assert "volumes: [" not in text.replace("volumes: [audio", "")
+
+
+def test_overlay_migrate_mounts_migrations_read_only() -> None:
+    block = _override_block("migrate")
+    assert "- ./migrations:/app/migrations:ro" in block
+    assert "command:" not in block  # still `alembic upgrade head`, on demand
+    assert "restart" not in block and "depends_on" not in block
+
+
+def test_overlay_mounts_nothing_else_from_the_repo() -> None:
+    mounts = {
+        ln.strip()[2:].split(":")[0]
+        for ln in _code_lines(COMPOSE_OVERRIDE_YML.read_text())
+        if ln.strip().startswith("- ./")
+    }
+    assert mounts == {
+        "./common",
+        "./adapters",
+        "./services",
+        "./migrations",
+        "./web",
+    }
+    for forbidden in ("tests", ".env", ".git", "_docs", "scripts"):
+        assert f"./{forbidden}" not in mounts
+
+
+def test_overlay_api_runs_uvicorn_reload_limited_to_the_mounted_dirs() -> None:
+    block = _override_block("api")
+    command = next(ln for ln in block.splitlines() if "command:" in ln)
+    assert command.strip().startswith(
+        "command: uvicorn services.api.main:app --host 0.0.0.0 --port 8000 --reload"
+    )
+    for directory in ("common", "adapters", "services"):
+        assert f"--reload-dir /app/{directory}" in command
+    # Only the three; nothing like --reload-dir /app, which would watch
+    # migrations, __pycache__ and the venv's parent.
+    assert command.count("--reload-dir") == 3
+
+
+def test_reload_appears_in_the_overlay_and_never_in_compose_yml() -> None:
+    assert "--reload" not in COMPOSE_YML.read_text()
+    assert "--reload" in COMPOSE_OVERRIDE_YML.read_text()
+    for name in ("migrate", "planner", "analyzer", "transcriber", "web", "db"):
+        assert "--reload" not in _override_block(name)
+
+
+def test_overlay_workers_keep_their_commands() -> None:
+    for name in WORKERS:
+        assert "command:" not in _override_block(name)
+
+
+def test_overlay_adds_no_extra_reloader_package() -> None:
+    text = COMPOSE_OVERRIDE_YML.read_text()
+    assert "watchfiles" not in text and "uvicorn[standard]" not in text
+
+
+def test_overlay_web_runs_the_vite_dev_server_from_the_node_image() -> None:
+    block = _override_block("web")
+    assert "image: node:24-alpine" in block
+    assert "- ./web:/src" in block
+    assert "working_dir: /src" in block
+    assert "npm ci" in block and "npm run dev" in block
+    assert "--host 0.0.0.0" in block and "--port 5173" in block
+    assert "--strictPort" in block
+    assert "API_PROXY_TARGET: http://api:8000" in block
+
+
+def test_overlay_web_drops_the_nginx_build_with_reset() -> None:
+    block = _override_block("web")
+    assert "build: !reset null" in block
+    assert "dockerfile" not in block
+    # compose.yml itself keeps the build and its tag.
+    assert "ops/Dockerfile.frontend" in _block("web")
+    assert "image: ytdigest-web:latest" in _block("web")
+
+
+def test_overlay_web_replaces_the_8080_publish_with_loopback_5173() -> None:
+    block = _override_block("web")
+    assert "ports: !override" in block
+    assert '- "127.0.0.1:5173:5173"' in block
+    assert "8080" not in block
+    assert block.count("127.0.0.1:") == 1
+
+
+def test_overlay_web_stays_off_the_internal_network() -> None:
+    block = _override_block("web")
+    assert "networks" not in block  # inherits [edge] from compose.yml
+    assert "networks: [edge]" in _block("web")
+
+
+def test_overlay_web_node_modules_is_a_named_volume_not_the_host_dir() -> None:
+    block = _override_block("web")
+    assert "- web-node-modules:/src/node_modules" in block
+    assert "./web/node_modules" not in block
+    assert "web-node-modules:" in _top_level_section(
+        COMPOSE_OVERRIDE_YML.read_text(), "volumes"
+    )
+
+
+def test_overlay_web_hands_the_volume_to_node_and_drops_root() -> None:
+    # A named volume at a path the image lacks is created root-owned; `npm
+    # ci` as `node` would get EACCES, and running it as root would leave
+    # root-owned files in ./web.
+    block = _override_block("web")
+    assert "chown node:node /src/node_modules" in block
+    assert "su node -c" in block
+
+
+def test_overlay_publishes_exactly_two_loopback_ports() -> None:
+    text = COMPOSE_OVERRIDE_YML.read_text()
+    ports = re.findall(r'^\s+- "([\d.:]+)"$', text, flags=re.MULTILINE)
+    assert sorted(ports) == ["127.0.0.1:5173:5173", "127.0.0.1:5432:5432"]
+    assert all(p.startswith("127.0.0.1:") for p in ports)
+
+
+def test_overlay_db_publish_and_network_are_unchanged_from_7() -> None:
+    block = _override_block("db")
+    assert "networks: [internal, devhost]" in block
+    assert '"127.0.0.1:5432:5432"' in block
+
+
+def test_overlay_transcriber_whisper_model_defaults_to_tiny() -> None:
+    assert "      WHISPER_MODEL: ${WHISPER_MODEL:-tiny}" in _override_block(
+        "transcriber"
+    )
+    assert "tiny.en" not in "\n".join(_code_lines(COMPOSE_OVERRIDE_YML.read_text()))
+    assert "WHISPER_MODEL: ${WHISPER_MODEL:-large-v3}" in _block("transcriber")
+
+
+def test_overlay_only_new_environment_values_are_whisper_model_and_proxy() -> None:
+    text = COMPOSE_OVERRIDE_YML.read_text()
+    keys = re.findall(
+        r"^\s+([A-Z][A-Z0-9_]+):", "\n".join(_code_lines(text)), re.MULTILINE
+    )
+    assert sorted(keys) == ["API_PROXY_TARGET", "WHISPER_MODEL"]
+    for secret in ("ANTHROPIC", "SUMMARIZER", "PASSWORD", "POSTGRES"):
+        assert secret not in "\n".join(_code_lines(text))
+
+
+def test_overlay_header_says_dev_only_and_names_the_prod_command() -> None:
+    header = COMPOSE_OVERRIDE_YML.read_text().split("\nservices:", 1)[0]
+    assert "DEVELOPMENT ONLY" in header
+    assert "automatically" in header
+    assert "never used on the server" in header
+    assert "docker compose -f compose.yml up -d" in header
+    assert "seed of the dev overlay" not in header
+
+
+def test_overlay_defines_only_the_services_it_merges_onto() -> None:
+    lines = COMPOSE_OVERRIDE_YML.read_text().splitlines()
+    names = set()
+    for ln in lines[lines.index("services:") + 1 :]:
+        if (
+            ln.startswith("  ")
+            and not ln.startswith("   ")
+            and ln.strip().endswith(":")
+        ):
+            names.add(ln.strip()[:-1])
+        elif ln and not ln.startswith(" "):
+            break
+    assert names == set(SERVICES)
+
+
+def test_compose_yml_has_no_dev_only_content() -> None:
+    code = "\n".join(_code_lines(COMPOSE_YML.read_text()))
+    for needle in (
+        "5173",
+        "node:24-alpine",
+        "API_PROXY_TARGET",
+        "tiny",
+        "devhost",
+        "5432:",
+        "./common",
+        "./web",
+        "!reset",
+        "!override",
+    ):
+        assert needle not in code, needle
+    assert not re.search(r"^\s*(include|extends):", code, re.MULTILINE)
+    assert "override" not in code
+
+
+def test_env_example_sets_no_compose_selection_variables() -> None:
+    for line in (REPO_ROOT / ".env.example").read_text().splitlines():
+        if line.startswith("#"):
+            continue
+        name = line.split("=", 1)[0].strip()
+        assert name not in {
+            "COMPOSE_FILE",
+            "COMPOSE_PROFILES",
+            "COMPOSE_PATH_SEPARATOR",
+        }
+        assert not name.startswith("COMPOSE_")

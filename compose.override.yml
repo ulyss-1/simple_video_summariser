@@ -1,12 +1,33 @@
-# Auto-merged by `docker compose` locally; never used for the server deploy,
-# which runs `docker compose -f compose.yml up -d` explicitly (AGENTS.md).
+# DEVELOPMENT ONLY. `docker compose` merges this file into compose.yml
+# automatically on a developer machine (architecture.md 11.7; task #59).
+# It is never used on the server: deployment runs
+# `docker compose -f compose.yml up -d` explicitly, which skips this file, so
+# nothing below can reach production. compose.yml does not reference it.
 #
-# This is the seed of the dev overlay that #59 completes (bind mounts,
-# `uvicorn --reload`, the Vite dev server). For now it only publishes
-# Postgres so the host venv's `alembic` and `psql` can reach it directly
-# (architecture.md 11.7; task #7).
+# What it does, per service:
+#   - api, planner, analyzer, transcriber: bind-mount ./common, ./adapters and
+#     ./services read-only over the copies baked into the image, so a code
+#     edit needs no rebuild. Read-only because the containers run as uid
+#     10001 (#55): a writable mount would let Python drop `__pycache__` files
+#     owned by 10001 into the WSL tree, where the developer cannot delete
+#     them. Compose merges `volumes` by mount target, so these ADD to the
+#     `audio` and `whisper-models` mounts from compose.yml.
+#   - api: `uvicorn --reload`, watching only the mounted source directories
+#     (uvicorn's own stat reloader; no extra package).
+#   - planner, analyzer, transcriber keep their compose.yml commands. After a
+#     source edit, run `docker compose restart <service>` (automatic restart
+#     is #142).
+#   - migrate: bind-mounts ./migrations read-only so a new revision runs with
+#     `docker compose run --rm migrate` and no rebuild. Still only on demand.
+#   - web: the Vite dev server (HMR) from node:24-alpine instead of nginx, on
+#     127.0.0.1:5173. The compose.yml `build:` is removed (`!reset`) so
+#     `docker compose build` cannot build the nginx image and tag it
+#     node:24-alpine, and the 8080 publish is replaced (`!override`).
+#   - transcriber: WHISPER_MODEL defaults to `tiny` (not `tiny.en`: episodes
+#     can be non-English) so local iteration does not take hours.
+#   - db: published on 127.0.0.1:5432 for `psql` and the host venv's `alembic`.
 #
-# `db` lives on `internal` only in compose.yml (architecture.md 11.4 —
+# `db` lives on `internal` only in compose.yml (architecture.md 11.4 -
 # "no route off the compose bridge except through explicitly attached
 # networks"), and Docker never forwards a published port for a container
 # whose only network is `internal: true`, no matter what the port mapping
@@ -14,14 +35,76 @@
 # the host on any machine (QA on #7). So, dev-only: attach `db` to a
 # second, ordinary bridge network (`devhost`, defined below) alongside
 # `internal`, purely so the published port has a non-internal network to
-# forward through. `docker compose -f compose.yml config` — the production
-# path — never sees this network or the port publish.
+# forward through. `docker compose -f compose.yml config` - the production
+# path - never sees this network or the port publish.
+#
+# No secrets and no keys here. The only new environment values are
+# WHISPER_MODEL on `transcriber` and API_PROXY_TARGET on `web`.
 
 services:
   db:
     networks: [internal, devhost]
     ports:
       - "127.0.0.1:5432:5432"
+
+  migrate:
+    volumes:
+      - ./migrations:/app/migrations:ro
+
+  api:
+    # Replaces the compose.yml command (a string is replaced, not merged).
+    command: uvicorn services.api.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/common --reload-dir /app/adapters --reload-dir /app/services
+    volumes:
+      - ./common:/app/common:ro
+      - ./adapters:/app/adapters:ro
+      - ./services:/app/services:ro
+
+  planner:
+    volumes:
+      - ./common:/app/common:ro
+      - ./adapters:/app/adapters:ro
+      - ./services:/app/services:ro
+
+  analyzer:
+    volumes:
+      - ./common:/app/common:ro
+      - ./adapters:/app/adapters:ro
+      - ./services:/app/services:ro
+
+  transcriber:
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-tiny}
+    volumes:
+      - ./common:/app/common:ro
+      - ./adapters:/app/adapters:ro
+      - ./services:/app/services:ro
+
+  web:
+    build: !reset null
+    image: node:24-alpine
+    # Starts as root only to hand the (root-created) node_modules volume to
+    # `node` (uid 1000, normally the WSL user), then drops to `node` for npm,
+    # so nothing in ./web ends up root-owned. `--strictPort` fails instead of
+    # moving to another port.
+    command:
+      - sh
+      - -c
+      - >-
+        chown node:node /src/node_modules &&
+        exec su node -c 'npm ci && npm run dev -- --host 0.0.0.0 --port 5173 --strictPort'
+    working_dir: /src
+    environment:
+      API_PROXY_TARGET: http://api:8000
+    ports: !override
+      - "127.0.0.1:5173:5173"
+    volumes:
+      - ./web:/src
+      # Keeps the container's musl-built packages apart from the host's
+      # glibc-built web/node_modules.
+      - web-node-modules:/src/node_modules
+
+volumes:
+  web-node-modules:
 
 networks:
   devhost: {}

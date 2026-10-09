@@ -1408,6 +1408,30 @@ production):
 - publishes Postgres on `127.0.0.1:5432` for direct `psql` access
 - sets `WHISPER_MODEL=tiny` so local iteration doesn't take hours
 
+Decided in #59, beyond the list above:
+
+- The source mounts are read-only (`:ro`). The containers run as uid 10001
+  (#55), and a writable mount would let Python write `__pycache__` files owned
+  by 10001 into the developer's tree. `api` reloads with uvicorn's built-in
+  reloader, `--reload-dir` limited to the three mounted directories; no
+  `watchfiles` or other package is added.
+- `migrate` gets `./migrations` mounted read-only, so a new revision runs with
+  `docker compose run --rm migrate` and no rebuild. Migrations still never run
+  on startup.
+- Vite runs on `127.0.0.1:5173` (from `node:24-alpine`, `./web` mounted), not
+  8080: the overlay removes `web`'s `build:` (`!reset`) so the nginx image
+  cannot be tagged `node:24-alpine`, and replaces the 8080 publish
+  (`!override`). `API_PROXY_TARGET=http://api:8000` points its `/api` proxy at
+  the API. Exactly two ports are published in dev, both on `127.0.0.1`:
+  `db` 5432 and `web` 5173.
+- The container's `node_modules` is a named volume (`web-node-modules`), not
+  the host's, because host packages are built for glibc and the Alpine image
+  is musl. The `web` command starts as root only to give that volume to
+  `node`, then runs `npm ci` and the dev server as `node`.
+- The workers (`planner`, `analyzer`, `transcriber`) get the same mounts but
+  keep their commands; after an edit, `docker compose restart <service>`
+  picks it up. Restarting them automatically is #142.
+
 Production deployment uses `docker compose -f compose.yml up -d` explicitly, so
 the override is never applied by accident.
 

@@ -160,3 +160,200 @@ def test_config_fails_naming_postgres_password_when_unset(
     result = _run("-f", "compose.yml", "config")
     assert result.returncode != 0
     assert "POSTGRES_PASSWORD" in result.stderr
+
+
+# --- development overlay (issue #59) ---------------------------------------
+#
+# Resolved-config checks: only the `docker compose` CLI, no build, no running
+# stack. Hermetic: an empty --env-file (so the developer's .env is ignored)
+# and COMPOSE_* / WHISPER_MODEL cleared from the environment.
+
+Config = dict[str, dict[str, object]]
+SOURCE_DIRS = ("common", "adapters", "services")
+BACKEND_SERVICES = ("api", "planner", "analyzer", "transcriber")
+
+
+def _hermetic(monkeypatch: pytest.MonkeyPatch, **env: str) -> None:
+    for name in (
+        "WHISPER_MODEL",
+        "COMPOSE_FILE",
+        "COMPOSE_PROFILES",
+        "COMPOSE_PATH_SEPARATOR",
+        "COMPOSE_PROJECT_NAME",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("POSTGRES_PASSWORD", "integration-test-password")
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+
+def _config(tmp_path: Path, *, prod: bool) -> tuple[Config, str]:
+    env_file = tmp_path / "empty.env"
+    env_file.write_text("")
+    args = ["--env-file", str(env_file)]
+    if prod:
+        args += ["-f", "compose.yml"]
+    result = _run(*args, "config", "--format", "json")
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    services: Config = data["services"]
+    return services, result.stdout
+
+
+def _dev(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **env: str) -> Config:
+    _hermetic(monkeypatch, **env)
+    return _config(tmp_path, prod=False)[0]
+
+
+def _binds(service: dict[str, object]) -> dict[str, tuple[str, bool]]:
+    """target -> (source, read_only) for every bind mount of a service."""
+    out: dict[str, tuple[str, bool]] = {}
+    volumes = service.get("volumes", [])
+    assert isinstance(volumes, list)
+    for vol in volumes:
+        if vol["type"] == "bind":
+            out[vol["target"]] = (vol["source"], bool(vol.get("read_only")))
+    return out
+
+
+def _volumes(service: dict[str, object]) -> dict[str, str]:
+    volumes = service.get("volumes", [])
+    assert isinstance(volumes, list)
+    return {v["target"]: v["type"] for v in volumes}
+
+
+def _env_of(service: dict[str, object]) -> dict[str, str]:
+    env = service["environment"]
+    assert isinstance(env, dict)
+    return env
+
+
+@pytest.mark.parametrize("name", BACKEND_SERVICES)
+def test_dev_config_mounts_backend_source_read_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, name: str
+) -> None:
+    binds = _binds(_dev(monkeypatch, tmp_path)[name])
+    assert binds == {f"/app/{d}": (str(REPO_ROOT / d), True) for d in SOURCE_DIRS}
+
+
+def test_dev_config_migrate_mounts_migrations_read_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    services = _dev(monkeypatch, tmp_path)
+    assert _binds(services["migrate"]) == {
+        "/app/migrations": (str(REPO_ROOT / "migrations"), True)
+    }
+    assert services["migrate"]["command"] == ["alembic", "upgrade", "head"]
+
+
+def test_dev_config_mounts_nothing_else_and_keeps_named_volumes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    services = _dev(monkeypatch, tmp_path)
+    sources = {src for svc in services.values() for src, _ in _binds(svc).values()}
+    assert sources == {str(REPO_ROOT / d) for d in (*SOURCE_DIRS, "migrations", "web")}
+    assert _volumes(services["planner"])["/data/audio"] == "volume"
+    assert _volumes(services["transcriber"])["/data/audio"] == "volume"
+    assert _volumes(services["transcriber"])["/models"] == "volume"
+    assert _volumes(services["db"]) == {"/var/lib/postgresql": "volume"}
+
+
+def test_dev_config_api_runs_uvicorn_reload_workers_keep_commands(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    services = _dev(monkeypatch, tmp_path)
+    assert services["api"]["command"] == [
+        "uvicorn", "services.api.main:app", "--host", "0.0.0.0", "--port", "8000",
+        "--reload",
+        "--reload-dir", "/app/common",
+        "--reload-dir", "/app/adapters",
+        "--reload-dir", "/app/services",
+    ]  # fmt: skip
+    assert services["planner"]["command"] == ["python", "-m", "services.planner.main"]
+    assert services["analyzer"]["command"] == ["python", "-m", "services.analyzer.main"]
+    assert services["transcriber"]["command"] == [
+        "python", "-m", "services.transcriber.main"
+    ]  # fmt: skip
+
+
+def test_dev_config_web_is_the_vite_dev_server_without_a_build(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    web = _dev(monkeypatch, tmp_path)["web"]
+    assert web["image"] == "node:24-alpine"
+    assert "build" not in web
+    command = " ".join(web["command"])  # type: ignore[arg-type]
+    assert "npm ci" in command and "npm run dev" in command
+    assert "--host 0.0.0.0" in command and "--port 5173" in command
+    assert "--strictPort" in command
+    assert web["working_dir"] == "/src"
+    assert _env_of(web)["API_PROXY_TARGET"] == "http://api:8000"
+    assert list(web["networks"]) == ["edge"]  # type: ignore[call-overload]
+    assert _binds(web) == {"/src": (str(REPO_ROOT / "web"), False)}
+    assert _volumes(web)["/src/node_modules"] == "volume"
+
+
+def test_dev_config_publishes_exactly_db_5432_and_web_5173_on_loopback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    services = _dev(monkeypatch, tmp_path)
+    published = {
+        (name, str(p["published"]), p["target"], p.get("host_ip"))
+        for name, svc in services.items()
+        for p in svc.get("ports", [])  # type: ignore[attr-defined]
+    }
+    assert published == {
+        ("db", "5432", 5432, "127.0.0.1"),
+        ("web", "5173", 5173, "127.0.0.1"),
+    }
+    assert list(services["db"]["networks"]) == ["internal", "devhost"]  # type: ignore[call-overload]
+
+
+def test_dev_config_whisper_model_defaults_to_tiny_and_follows_the_variable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    unset = _dev(monkeypatch, tmp_path)
+    assert _env_of(unset["transcriber"])["WHISPER_MODEL"] == "tiny"
+    base = _dev(monkeypatch, tmp_path, WHISPER_MODEL="base")
+    assert _env_of(base["transcriber"])["WHISPER_MODEL"] == "base"
+
+
+def test_dev_config_adds_no_secrets_or_new_env_keys(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    dev = _dev(monkeypatch, tmp_path)
+    _hermetic(monkeypatch)
+    prod, _ = _config(tmp_path, prod=True)
+    for name, svc in dev.items():
+        added = set(_env_of(svc)) - set(prod[name].get("environment", {}))  # type: ignore[call-overload]
+        assert added <= {"API_PROXY_TARGET"}, name
+    assert "ANTHROPIC_API_KEY" not in _env_of(dev["transcriber"])
+    assert _env_of(dev["transcriber"]).keys() == _env_of(prod["transcriber"]).keys()
+
+
+def test_prod_config_has_none_of_the_dev_overlay(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _hermetic(monkeypatch)
+    services, raw = _config(tmp_path, prod=True)
+    for needle in (
+        '"type": "bind"',
+        "--reload",
+        "node:24-alpine",
+        "5173",
+        "devhost",
+        "API_PROXY_TARGET",
+    ):
+        assert needle not in raw, needle
+    assert '"published": "5432"' not in raw
+    for svc in services.values():
+        assert not _binds(svc)
+    assert _env_of(services["transcriber"])["WHISPER_MODEL"] == "large-v3"
+    web = services["web"]
+    assert web["image"] == "ytdigest-web:latest"
+    assert "build" in web
+    ports = web["ports"]
+    assert isinstance(ports, list) and len(ports) == 1
+    assert (ports[0]["host_ip"], str(ports[0]["published"]), ports[0]["target"]) == (
+        "127.0.0.1", "8080", 80
+    )  # fmt: skip
