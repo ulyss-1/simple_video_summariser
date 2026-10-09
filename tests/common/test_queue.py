@@ -1390,7 +1390,7 @@ def test_retry_dead_racing_an_enqueue_leaves_exactly_one_active_job(
             finally:
                 racer_conn.close()
 
-        assert outcome[0].status == "superseded"
+        assert outcome[0] == RetryOutcome("superseded", newer_job_id=new_job_id[0])
     finally:
         holder.rollback()
         holder.close()

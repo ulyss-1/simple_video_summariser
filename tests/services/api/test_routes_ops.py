@@ -535,6 +535,9 @@ def test_retry_success_end_to_end(
     assert log_line["video_id"] == "v1"
     assert log_line["kind"] == "ingest"
     assert log_line["prev_attempts"] == 4
+    assert log_line["prev_error_class"] == "BUG"
+    assert log_line["level"] == "warning"
+    assert log_line["request_id"]
 
 
 @pytest.mark.integration

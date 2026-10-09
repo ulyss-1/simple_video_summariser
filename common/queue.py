@@ -160,9 +160,9 @@ class RetryOutcome:
     - ``"not_found"``: no job has that id.
     - ``"not_dead"``: the job exists but is ``state`` (not ``dead``).
     - ``"superseded"``: a newer job exists for the same
-      ``(video_id, kind, dedupe_key)``; ``newer_job_id`` is its id, or
-      ``None`` if the race (not the initial check) is what caught it and the
-      newer job could not be identified by that key alone.
+      ``(video_id, kind, dedupe_key)``; ``newer_job_id`` is its id
+      (always set, whether the initial check or a lost race against a
+      concurrent ``enqueue`` caught it).
     """
 
     status: Literal["retried", "not_found", "not_dead", "superseded"]
@@ -409,14 +409,19 @@ class PostgresQueue:
         (as in ``enqueue``'s own ``UniqueViolation`` case) before this method
         catches it: a concurrent ``enqueue`` that still wins the race raises
         ``UniqueViolation``, reported the same way as a pre-existing newer
-        job, never a 500.
+        job (including its id), never a 500. If no newer job can be found at
+        all, ``RuntimeError`` is raised rather than a ``superseded`` outcome
+        with no id.
         """
         try:
             with self._conn.transaction(), self._conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(_RETRY_DEAD_SQL, {"id": job_id})
                 row = cur.fetchone()
         except psycopg.errors.UniqueViolation:
-            return RetryOutcome("superseded")
+            # Lost the race to a concurrent enqueue. The transaction rolled
+            # back, so the job is still ``dead``; fall through to the same
+            # lookup the pre-existing-newer-job path uses to name the winner.
+            row = None
 
         if row is not None:
             prev_attempts = row.pop("prev_attempts")
@@ -442,7 +447,16 @@ class PostgresQueue:
             """,
             {"video_id": video_id, "kind": kind, "dedupe_key": dedupe_key, "id": job_id},
         ).fetchone()
-        return RetryOutcome("superseded", newer_job_id=None if newer is None else int(newer[0]))
+        if newer is None:
+            # "superseded" without a newer job to name would be a lie (and a
+            # ``job_id: null`` in the 409). The only unique index on jobs is
+            # the active-key one, so this means the winner vanished (e.g. a
+            # cascade delete) between the failure and this lookup: fail loudly
+            # rather than invent an answer.
+            raise RuntimeError(
+                f"retry_dead({job_id}): superseded but no newer job found"
+            )
+        return RetryOutcome("superseded", newer_job_id=int(newer[0]))
 
     # -- heartbeat -----------------------------------------------------------
 
