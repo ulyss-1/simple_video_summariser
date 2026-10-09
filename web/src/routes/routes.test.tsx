@@ -92,11 +92,17 @@ describe('route table', () => {
   })
 
   it.each([
-    ['/search?q=hello%20world&page=3', '?q=hello%20world&amp;page=3'],
     [`/videos/${ID}/compare?x=1`, '?x=1'],
     ['/ops?state=dead&before=100', '?state=dead&amp;before=100'],
   ])('%s shows its search string unchanged', (path, shown) => {
     expect(render(path).html).toContain(shown)
+  })
+})
+
+describe('search string on the Search view', () => {
+  // Search (#52) reads its query from the URL instead of printing the string.
+  it('/search?q=hello%20world&page=3 reaches the view: the box shows the decoded query', () => {
+    expect(render('/search?q=hello%20world&page=3').html).toContain('value="hello world"')
   })
 })
 
