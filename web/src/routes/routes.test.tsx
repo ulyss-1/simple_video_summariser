@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToString } from 'react-dom/server'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { describe, expect, it } from 'vitest'
@@ -7,7 +8,12 @@ const ID = '-wNyEUrxzFU'
 
 function render(entry: string) {
   const router = createMemoryRouter(routes, { initialEntries: [entry] })
-  const html = renderToString(<RouterProvider router={router} />)
+  // The Library view (#49) uses TanStack Query; SSR renders its loading state.
+  const html = renderToString(
+    <QueryClientProvider client={new QueryClient()}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  )
   return { html, router }
 }
 
@@ -86,7 +92,6 @@ describe('route table', () => {
   })
 
   it.each([
-    ['/?page=2&status=failed', '?page=2&amp;status=failed'],
     ['/search?q=hello%20world&page=3', '?q=hello%20world&amp;page=3'],
     [`/videos/${ID}?t=3723`, '?t=3723'],
     [`/videos/${ID}/transcript?page=3`, '?page=3'],

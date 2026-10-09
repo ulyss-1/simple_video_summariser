@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider, type RouteObject } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
@@ -7,7 +8,11 @@ const ID = '-wNyEUrxzFU'
 
 function mount(entry: string, table: RouteObject[] = routes) {
   const router = createMemoryRouter(table, { initialEntries: [entry] })
-  render(<RouterProvider router={router} />)
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  )
   return router
 }
 
