@@ -127,6 +127,7 @@ describe('parseLibraryParams', () => {
   it.each([
     'UC' + 'a'.repeat(21), 'UC' + 'a'.repeat(23), 'XX' + 'a'.repeat(22), 'uc' + 'a'.repeat(22),
     'UC' + 'a'.repeat(21) + '!', 'UC' + 'a'.repeat(22) + '\n', '', 'UC' + 'é'.repeat(22),
+    'X' + UC, '<img src=x>' + UC, ' ' + UC, '\n' + UC,
   ])('drops channel %j', (c) => {
     const r = parse(`channel=${encodeURIComponent(c)}`)
     expect(r.state.channel).toBeNull()
