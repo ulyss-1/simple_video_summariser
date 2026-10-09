@@ -238,18 +238,42 @@ def test_layer_order_keeps_npm_ci_cached_when_a_source_file_changes(
 def test_lockfile_is_authoritative(tmp_path: Path) -> None:
     ctx = _scratch_context(tmp_path)
     package = ctx / "web" / "package.json"
-    text = package.read_text()
-    assert '"react": "19.3.0"' in text
-    package.write_text(text.replace('"react": "19.3.0"', '"react": "19.2.0"'))
+    manifest = json.loads(package.read_text())
+    # Perturb one exactly-pinned runtime dependency, derived from the committed
+    # package.json so no version is hardcoded here.
+    name, version = next(
+        (n, v)
+        for n, v in manifest["dependencies"].items()
+        if re.fullmatch(r"\d+\.\d+\.\d+", v)
+    )
+    major, minor, patch = version.split(".")
+    other = f"{major}.{minor}.{int(patch) + 1}"
+    manifest["dependencies"][name] = other
+    package.write_text(json.dumps(manifest, indent=2) + "\n")
     tag = f"ytdigest-web-lock-test:{uuid.uuid4().hex[:8]}"
     try:
         result = _docker(
-            "build", "-f", "ops/Dockerfile.frontend", "-t", tag, ".",
+            "build", "--progress=plain", "-f", "ops/Dockerfile.frontend", "-t", tag, ".",
             cwd=ctx, timeout=1800,
         )  # fmt: skip
         assert result.returncode != 0
-        assert "npm ci" in result.stderr
-        assert "package-lock.json" in result.stderr
+        out = result.stdout + result.stderr
+        # npm ci's sync check, which runs before any download. Expected text
+        # (npm 10/11): "`npm ci` can only install packages when your
+        # package.json and package-lock.json or npm-shrinkwrap.json are in
+        # sync" followed by "Invalid: lock file's <name>@<locked> does not
+        # satisfy <name>@<other>". Not asserted from a real run (no Docker
+        # here): if npm rewords it, update these two patterns.
+        assert re.search(
+            r"can only install packages when your package\.json and "
+            r"package-lock\.json",
+            out,
+        ), out[-3000:]
+        assert re.search(
+            rf"Invalid: lock file's {re.escape(name)}@\S+ does not satisfy "
+            rf"{re.escape(name)}@{re.escape(other)}",
+            out,
+        ), out[-3000:]
     finally:
         _docker("image", "rm", "-f", tag)
 
@@ -566,6 +590,35 @@ def test_prefix_is_stripped_and_the_query_arrives_byte_for_byte(
     assert resp.status == 200
     assert echoed["path"] == upstream
     assert echoed["method"] == "GET"
+
+
+def test_metrics_is_not_published_but_the_rest_of_the_api_is(stack: Stack) -> None:
+    # #60 grooming: /api/metrics must be a 404 from nginx itself, never the
+    # API's route and never the SPA; its neighbours still proxy normally.
+    for path in ("/api/metrics", "/api/metrics?x=1"):
+        resp = stack.get(path)
+        assert resp.status == 404
+        assert b'<div id="root">' not in resp.body
+        assert b"stub" not in resp.body and b'"method"' not in resp.body
+        assert resp.one("Content-Security-Policy") == CSP
+        assert resp.one("X-Content-Type-Options") == "nosniff"
+        assert resp.one("Referrer-Policy") == "no-referrer"
+    ok, echoed = stack.echo("/api/healthz")
+    assert ok.status == 200
+    assert echoed["path"] == "/healthz"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="#186 (follow-up to #57): the prefix-strip map reads the raw $request_uri "
+    "while location matching uses the normalized URI",
+)
+@pytest.mark.parametrize("client", ["/%61pi/healthz", "/x/../api/healthz"])
+def test_non_canonical_api_prefixes_reach_the_same_upstream_path(
+    stack: Stack, client: str
+) -> None:
+    _, echoed = stack.echo(client)
+    assert echoed["path"] == "/healthz"
 
 
 def test_api_without_slash_is_never_the_spa(stack: Stack) -> None:

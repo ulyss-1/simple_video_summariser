@@ -111,8 +111,21 @@ def _parse_csp(value: str) -> dict[str, list[str]]:
     return parsed
 
 
-# Locations nginx answers itself (everything but the proxy).
-OWN_LOCATIONS = ["/assets/", "= /assets", "/", "= /api"]
+def _all_locations() -> list[str]:
+    """Every `location` header in the server block, e.g. "= /api/metrics"."""
+    found = [
+        " ".join(m.group(1).split())
+        for m in re.finditer(r"location\s+([^{]+?)\s*\{", _server())
+    ]
+    assert found, "no location blocks parsed from nginx.conf"
+    return found
+
+
+# Derived from nginx.conf, so a location added later is checked automatically:
+# the proxy is the one with a proxy_pass, every other location nginx answers
+# itself and must carry the security headers.
+PROXY_LOCATIONS = [h for h in _all_locations() if "proxy_pass" in _location(h)]
+OWN_LOCATIONS = [h for h in _all_locations() if h not in PROXY_LOCATIONS]
 
 
 # ---- Dockerfile ----
@@ -354,6 +367,25 @@ def test_security_headers_are_sent_once_and_with_always(header: str, name: str) 
     ]
     assert len(found) == 1
     assert found[0][1], f"{name} lacks `always` in location {header}"
+
+
+def test_locations_are_derived_and_include_the_known_ones() -> None:
+    assert PROXY_LOCATIONS == ["/api/"]
+    assert {"/assets/", "= /assets", "/", "= /api", "= /api/metrics"} <= set(
+        OWN_LOCATIONS
+    )
+
+
+def test_metrics_is_blocked_before_the_proxy_location() -> None:
+    text = _server()
+    assert text.index("location = /api/metrics") < text.index("location /api/ ")
+    assert "return 404;" in _location("= /api/metrics")
+    assert "proxy_pass" not in _location("= /api/metrics")
+
+
+def test_proxy_locations_carry_no_security_header() -> None:
+    for header in PROXY_LOCATIONS:
+        assert _add_headers(_location(header)) == []
 
 
 def test_static_security_header_values() -> None:
