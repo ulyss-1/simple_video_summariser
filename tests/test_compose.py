@@ -550,7 +550,12 @@ def test_overlay_mounts_nothing_else_from_the_repo() -> None:
         "./adapters",
         "./services",
         "./migrations",
-        "./web",
+        "./web/src",
+        "./web/index.html",
+        "./web/package.json",
+        "./web/package-lock.json",
+        "./web/tsconfig.json",
+        "./web/vite.config.ts",
     }
     for forbidden in ("tests", ".env", ".git", "_docs", "scripts"):
         assert f"./{forbidden}" not in mounts
@@ -559,14 +564,18 @@ def test_overlay_mounts_nothing_else_from_the_repo() -> None:
 def test_overlay_api_runs_uvicorn_reload_limited_to_the_mounted_dirs() -> None:
     block = _override_block("api")
     command = next(ln for ln in block.splitlines() if "command:" in ln)
-    assert command.strip().startswith(
-        "command: uvicorn services.api.main:app --host 0.0.0.0 --port 8000 --reload"
-    )
-    for directory in ("common", "adapters", "services"):
-        assert f"--reload-dir /app/{directory}" in command
+    tokens = command.split()[1:]  # drop the "command:" key
+    assert tokens[:7] == [
+        "uvicorn", "services.api.main:app", "--host", "0.0.0.0", "--port", "8000",
+        "--reload",
+    ]  # fmt: skip
+    # The bare `--reload` token, not a prefix: `--reload-dir` starts with it,
+    # so a startswith check passes with reload switched off.
+    assert tokens.count("--reload") == 1
     # Only the three; nothing like --reload-dir /app, which would watch
     # migrations, __pycache__ and the venv's parent.
-    assert command.count("--reload-dir") == 3
+    dirs = [tokens[i + 1] for i, t in enumerate(tokens) if t == "--reload-dir"]
+    assert dirs == ["/app/common", "/app/adapters", "/app/services"]
 
 
 def test_reload_appears_in_the_overlay_and_never_in_compose_yml() -> None:
@@ -589,11 +598,16 @@ def test_overlay_adds_no_extra_reloader_package() -> None:
 def test_overlay_web_runs_the_vite_dev_server_from_the_node_image() -> None:
     block = _override_block("web")
     assert "image: node:24-alpine" in block
-    assert "- ./web:/src" in block
-    assert "working_dir: /src" in block
-    assert "npm ci" in block and "npm run dev" in block
-    assert "--host 0.0.0.0" in block and "--port 5173" in block
-    assert "--strictPort" in block
+    assert "working_dir: /home/node/app" in block
+    # Check the command's own lines: a comment in the block mentions
+    # --strictPort too, so a whole-block substring check cannot catch its removal.
+    command = " ".join(
+        ln.strip()
+        for ln in _code_lines(block.split("command:", 1)[1].split("working_dir:")[0])
+    )
+    assert "npm ci" in command and "npm run dev" in command
+    assert "--host 0.0.0.0" in command and "--port 5173" in command
+    assert re.search(r"--strictPort(?=\s|'|$)", command)
     assert "API_PROXY_TARGET: http://api:8000" in block
 
 
@@ -620,22 +634,85 @@ def test_overlay_web_stays_off_the_internal_network() -> None:
     assert "networks: [edge]" in _block("web")
 
 
-def test_overlay_web_node_modules_is_a_named_volume_not_the_host_dir() -> None:
+def test_overlay_web_binds_only_source_files_so_node_modules_stays_in_the_container() -> (
+    None
+):
     block = _override_block("web")
-    assert "- web-node-modules:/src/node_modules" in block
-    assert "./web/node_modules" not in block
-    assert "web-node-modules:" in _top_level_section(
-        COMPOSE_OVERRIDE_YML.read_text(), "volumes"
+    code = "\n".join(_code_lines(block))
+    assert "/node_modules" not in code
+    assert "./web:" not in code  # never the whole directory
+    assert "web-node-modules" not in COMPOSE_OVERRIDE_YML.read_text()
+    assert not _mounts(COMPOSE_OVERRIDE_YML.read_text(), "web", named_only=True)
+
+
+def test_overlay_web_hands_its_workdir_to_node_and_drops_root() -> None:
+    # The working_dir is created root-owned by the daemon; `npm ci` as `node`
+    # would get EACCES, and running it as root would be needlessly privileged.
+    block = _override_block("web")
+    assert "chown node:node /home/node/app" in block
+    assert "su node -c" in block
+
+
+def _mounts(
+    text: str, service: str, *, named_only: bool = False
+) -> list[tuple[str, str]]:
+    """(source, target) of every `- src:target[:opts]` volume entry of a service."""
+    out: list[tuple[str, str]] = []
+    in_volumes = False
+    for ln in _code_lines(_service_block(text, service)):
+        if re.match(r"^    volumes:", ln):
+            in_volumes = True
+            continue
+        if in_volumes and re.match(r"^    \S", ln):
+            in_volumes = False
+        m = re.match(r"^      - (\S+?):(/[^:\s]*)", ln)
+        if in_volumes and m:
+            src, target = m.groups()
+            if not named_only or not src.startswith((".", "/")):
+                out.append((src, target))
+    return out
+
+
+def _nested_volume_mounts(compose_text: str, override_text: str) -> list[str]:
+    """Named-volume targets that sit inside a host bind-mount's target path."""
+    found: list[str] = []
+    for service in re.findall(
+        r"^  (\w+):\n", _top_level_section(override_text, "services"), re.MULTILINE
+    ):
+        mounts: list[tuple[str, str]] = []
+        for text in (compose_text, override_text):
+            try:
+                mounts += _mounts(text, service)
+            except StopIteration, ValueError, AssertionError:
+                pass  # service absent from that file
+        binds = [t for s, t in mounts if s.startswith((".", "/"))]
+        for src, target in mounts:
+            if src.startswith((".", "/")):
+                continue
+            for bind in binds:
+                if target.startswith(bind.rstrip("/") + "/"):
+                    found.append(f"{service}: {src} at {target} inside bind {bind}")
+    return found
+
+
+def test_no_named_volume_is_mounted_inside_a_host_bind_mount() -> None:
+    # On a fresh checkout the daemon creates the nested mountpoint inside the
+    # bind SOURCE as root, so the developer ends up with a root-owned directory
+    # in the working tree (#59 QA: web/node_modules).
+    assert (
+        _nested_volume_mounts(COMPOSE_YML.read_text(), COMPOSE_OVERRIDE_YML.read_text())
+        == []
     )
 
 
-def test_overlay_web_hands_the_volume_to_node_and_drops_root() -> None:
-    # A named volume at a path the image lacks is created root-owned; `npm
-    # ci` as `node` would get EACCES, and running it as root would leave
-    # root-owned files in ./web.
-    block = _override_block("web")
-    assert "chown node:node /src/node_modules" in block
-    assert "su node -c" in block
+def test_the_nested_volume_check_catches_the_old_web_layout() -> None:
+    old = (
+        "services:\n  web:\n    volumes:\n"
+        "      - ./web:/src\n      - web-node-modules:/src/node_modules\n"
+    )
+    assert _nested_volume_mounts("services:\n  web:\n    image: x\n", old) == [
+        "web: web-node-modules at /src/node_modules inside bind /src"
+    ]
 
 
 def test_overlay_publishes_exactly_two_loopback_ports() -> None:

@@ -1424,10 +1424,14 @@ Decided in #59, beyond the list above:
   (`!override`). `API_PROXY_TARGET=http://api:8000` points its `/api` proxy at
   the API. Exactly two ports are published in dev, both on `127.0.0.1`:
   `db` 5432 and `web` 5173.
-- The container's `node_modules` is a named volume (`web-node-modules`), not
-  the host's, because host packages are built for glibc and the Alpine image
-  is musl. The `web` command starts as root only to give that volume to
-  `node`, then runs `npm ci` and the dev server as `node`.
+- `web` binds only the files Vite needs (`web/src`, `index.html`, `package.json`,
+  `package-lock.json`, `tsconfig.json`, `vite.config.ts`), read-only, into
+  `/home/node/app`; `node_modules` is created there in the container's own layer
+  (host packages are glibc, the Alpine image is musl). No volume is mounted
+  inside a bind source: on a fresh checkout the daemon would create that
+  mountpoint in the host tree as root. The `web` command starts as root only
+  to give `/home/node/app` to `node`, then runs `npm ci` and the dev server as
+  `node`. A new top-level file Vite needs must be added to the list.
 - The workers (`planner`, `analyzer`, `transcriber`) get the same mounts but
   keep their commands; after an edit, `docker compose restart <service>`
   picks it up. Restarting them automatically is #142.

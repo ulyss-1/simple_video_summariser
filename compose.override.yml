@@ -82,29 +82,36 @@ services:
   web:
     build: !reset null
     image: node:24-alpine
-    # Starts as root only to hand the (root-created) node_modules volume to
-    # `node` (uid 1000, normally the WSL user), then drops to `node` for npm,
-    # so nothing in ./web ends up root-owned. `--strictPort` fails instead of
-    # moving to another port.
+    # Layout (the #59 QA failure): ./web is NOT bind-mounted as a whole, and no
+    # volume is mounted inside a bind source. A volume at ./web/node_modules
+    # makes the daemon create that mountpoint in the host tree as root on a
+    # fresh checkout, which needs sudo to delete. Instead only the source
+    # files are bound, read-only, into /home/node/app, and node_modules is
+    # created there in the container's own layer, never in the WSL tree. A
+    # new top-level file that Vite or tsc needs must be added to this list.
+    # `:ro` also means nothing the container does can leave a file in ./web.
+    # Starts as root only to hand /home/node/app (root-created as the
+    # working_dir) to `node` (uid 1000), then drops to `node` for npm, which
+    # also keeps musl-built packages apart from the host's glibc ones.
+    # `--strictPort` fails instead of moving to another port.
     command:
       - sh
       - -c
       - >-
-        chown node:node /src/node_modules &&
+        chown node:node /home/node/app &&
         exec su node -c 'npm ci && npm run dev -- --host 0.0.0.0 --port 5173 --strictPort'
-    working_dir: /src
+    working_dir: /home/node/app
     environment:
       API_PROXY_TARGET: http://api:8000
     ports: !override
       - "127.0.0.1:5173:5173"
     volumes:
-      - ./web:/src
-      # Keeps the container's musl-built packages apart from the host's
-      # glibc-built web/node_modules.
-      - web-node-modules:/src/node_modules
-
-volumes:
-  web-node-modules:
+      - ./web/src:/home/node/app/src:ro
+      - ./web/index.html:/home/node/app/index.html:ro
+      - ./web/package.json:/home/node/app/package.json:ro
+      - ./web/package-lock.json:/home/node/app/package-lock.json:ro
+      - ./web/tsconfig.json:/home/node/app/tsconfig.json:ro
+      - ./web/vite.config.ts:/home/node/app/vite.config.ts:ro
 
 networks:
   devhost: {}

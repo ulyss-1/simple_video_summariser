@@ -174,6 +174,11 @@ def test_config_fails_naming_postgres_password_when_unset(
 
 Config = dict[str, dict[str, object]]
 SOURCE_DIRS = ("common", "adapters", "services")
+# The web files the dev overlay binds (read-only) into /home/node/app.
+WEB_SOURCE_FILES = (
+    "src", "index.html", "package.json", "package-lock.json", "tsconfig.json",
+    "vite.config.ts",
+)  # fmt: skip
 BACKEND_SERVICES = ("api", "planner", "analyzer", "transcriber")
 
 
@@ -255,7 +260,9 @@ def test_dev_config_mounts_nothing_else_and_keeps_named_volumes(
 ) -> None:
     services = _dev(monkeypatch, tmp_path)
     sources = {src for svc in services.values() for src, _ in _binds(svc).values()}
-    assert sources == {str(REPO_ROOT / d) for d in (*SOURCE_DIRS, "migrations", "web")}
+    assert sources == {str(REPO_ROOT / d) for d in (*SOURCE_DIRS, "migrations")} | {
+        str(REPO_ROOT / "web" / n) for n in WEB_SOURCE_FILES
+    }
     assert _volumes(services["planner"])["/data/audio"] == "volume"
     assert _volumes(services["transcriber"])["/data/audio"] == "volume"
     assert _volumes(services["transcriber"])["/models"] == "volume"
@@ -290,11 +297,16 @@ def test_dev_config_web_is_the_vite_dev_server_without_a_build(
     assert "npm ci" in command and "npm run dev" in command
     assert "--host 0.0.0.0" in command and "--port 5173" in command
     assert "--strictPort" in command
-    assert web["working_dir"] == "/src"
+    assert web["working_dir"] == "/home/node/app"
     assert _env_of(web)["API_PROXY_TARGET"] == "http://api:8000"
     assert list(web["networks"]) == ["edge"]  # type: ignore[call-overload]
-    assert _binds(web) == {"/src": (str(REPO_ROOT / "web"), False)}
-    assert _volumes(web)["/src/node_modules"] == "volume"
+    # Only source files, read-only; node_modules lives in the container layer,
+    # so there is no volume at all (nothing nested in a bind source).
+    assert _binds(web) == {
+        f"/home/node/app/{n}": (str(REPO_ROOT / "web" / n), True)
+        for n in WEB_SOURCE_FILES
+    }
+    assert _volumes(web) == {f"/home/node/app/{n}": "bind" for n in WEB_SOURCE_FILES}
 
 
 def test_dev_config_publishes_exactly_db_5432_and_web_5173_on_loopback(
