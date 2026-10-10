@@ -79,8 +79,10 @@ def test_an_empty_database_gives_zero_filled_metrics(api: TestClient) -> None:
     assert _sample(body, "speaker_coercions_total") == "0"
     assert _sample(body, "audio_bytes_used") == "0"
     assert _sample(body, "reanalysis_backlog_videos") == "0"
-    assert "whisper_rtf " not in body
-    assert "llm_tokens_total{" not in body
+    # Samples only: the "# HELP"/"# TYPE" lines of an empty family are valid
+    # exposition, so anchor to the start of a line.
+    assert re.search(r"^whisper_rtf ", body, re.MULTILINE) is None
+    assert re.search(r"^llm_tokens_total\{", body, re.MULTILINE) is None
 
 
 def test_every_metric_is_derived_from_the_seeded_rows(

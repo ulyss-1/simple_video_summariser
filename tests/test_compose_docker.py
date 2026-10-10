@@ -148,11 +148,15 @@ def test_planner_has_one_replica_and_worker_healthcheck_keeps_its_dollars(
     assert isinstance(deploy, dict) and deploy["replicas"] == 1
     health = services["planner"]["healthcheck"]
     assert isinstance(health, dict)
-    # UNVERIFIED (no Docker when written): Compose may re-escape "$" as "$$"
-    # in `config --format json`, which would make this literal assertion
-    # fail. Whoever first runs this with Docker should check the actual
-    # output before trusting or "fixing" the assertion.
-    assert "$(( $(date +%s) - $(stat -c %Y /tmp/heartbeat) ))" in health["test"][1]
+    # Verified against Docker Compose v2.40.3: `config --format json`
+    # re-escapes every "$" as "$$" (the compose.yml escape for a literal "$").
+    # The container still receives single dollars; the doubled form in the
+    # resolved config is expected, not a bug. A single "$" in compose.yml
+    # would be interpolated by Compose and fail this assertion.
+    assert (
+        "test $$(( $$(date +%s) - $$(stat -c %Y /tmp/heartbeat) )) -lt 180"
+        in health["test"][1]
+    )
     assert services["planner"]["healthcheck"] == services["analyzer"]["healthcheck"]
     assert services["planner"]["healthcheck"] == services["transcriber"]["healthcheck"]
 
@@ -322,7 +326,8 @@ def test_dev_config_publishes_exactly_db_5432_and_web_5173_on_loopback(
         ("db", "5432", 5432, "127.0.0.1"),
         ("web", "5173", 5173, "127.0.0.1"),
     }
-    assert list(services["db"]["networks"]) == ["internal", "devhost"]  # type: ignore[call-overload]
+    # Compose returns networks sorted alphabetically, not in declaration order.
+    assert set(services["db"]["networks"]) == {"internal", "devhost"}  # type: ignore[call-overload]
 
 
 def test_dev_config_whisper_model_defaults_to_tiny_and_follows_the_variable(
