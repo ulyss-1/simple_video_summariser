@@ -60,6 +60,7 @@ services:
 
   api:
     image: ytdigest-backend:latest
+    pull_policy: never    # local tag built by `migrate`; never a registry pull
     command: uvicorn services.api.main:app --host 0.0.0.0 --port 8000
     environment: *backend-env
     depends_on:
@@ -85,6 +86,7 @@ services:
 
   planner:
     image: ytdigest-backend:latest
+    pull_policy: never    # local tag built by `migrate`; never a registry pull
     command: python -m services.planner.main
     environment:
       <<: *backend-env
@@ -115,6 +117,7 @@ services:
 
   analyzer:
     image: ytdigest-backend:latest
+    pull_policy: never    # local tag built by `migrate`; never a registry pull
     command: python -m services.analyzer.main
     environment:
       <<: *backend-env
@@ -140,9 +143,12 @@ services:
       # ops/Dockerfile.whisper is `FROM ytdigest-backend:latest`. Naming that
       # image as a build context from the `migrate` service makes Compose
       # build `migrate` first and use the result, so the whisper image is
-      # never built on a stale or missing backend image.
+      # never built on a stale or missing backend image. The key is the
+      # image name WITHOUT the tag: verified on Compose 2.40 / BuildKit
+      # 0.26, the tagged form "ytdigest-backend:latest" is silently ignored
+      # and the FROM is pulled from Docker Hub instead.
       additional_contexts:
-        "ytdigest-backend:latest": "service:migrate"
+        ytdigest-backend: "service:migrate"
     image: ytdigest-whisper:latest
     command: python -m services.transcriber.main
     environment:

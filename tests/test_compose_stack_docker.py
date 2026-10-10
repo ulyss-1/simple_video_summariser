@@ -168,7 +168,9 @@ def _health_command(stack: Stack, service: str) -> str:
     config = json.loads(stack.compose("config", "--format", "json").stdout)
     test = config["services"][service]["healthcheck"]["test"]
     assert test[0] == "CMD-SHELL"
-    command: str = test[1]
+    # `config --format json` keeps Compose's `$$` escape; Compose turns it
+    # back into `$` when it creates the container, so do the same here.
+    command: str = test[1].replace("$$", "$")
     return command
 
 
@@ -191,7 +193,8 @@ def test_worker_healthcheck_command_cases(stack: Stack, service: str) -> None:
 def test_migrate_run_rm_works_alone_and_logs_json(stack: Stack) -> None:
     result = stack.compose("run", "--rm", "-T", "migrate", timeout=300)
     assert result.returncode == 0, result.stderr
-    lines = [ln for ln in (result.stdout + result.stderr).splitlines() if ln.strip()]
+    # The container's output is on stdout; stderr is Compose's own progress.
+    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
     assert lines
     for line in lines:
         assert isinstance(json.loads(line), dict), line

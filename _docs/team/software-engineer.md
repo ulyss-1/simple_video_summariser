@@ -4,7 +4,7 @@ You implement one groomed task at a time.
 
 - Read the issue
 - Write the tests for the issue, according to _docs/testing-guidelines.md guidelines
-- Implement what the issue describes
+- Implement what the issue describes. Check if you use versions of libraries and dependencies which are already present/approved. If you try to add new versions of libraries, packets or dependencies - first check if they are no contradicting with existing design. If contradict - search for a better options.
 - For an intermittent failure, find the root cause and fix it or wait on
   the exact condition with a bounded deadline. Do not paper over it with
   retries, reruns or repeat loops (`_docs/testing-guidelines.md`, "Flaky
