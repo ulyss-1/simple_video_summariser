@@ -239,16 +239,12 @@ def test_lockfile_is_authoritative(tmp_path: Path) -> None:
     ctx = _scratch_context(tmp_path)
     package = ctx / "web" / "package.json"
     manifest = json.loads(package.read_text())
-    # Perturb one exactly-pinned runtime dependency, derived from the committed
-    # package.json so no version is hardcoded here.
-    name, version = next(
-        (n, v)
-        for n, v in manifest["dependencies"].items()
-        if re.fullmatch(r"\d+\.\d+\.\d+", v)
-    )
-    major, minor, patch = version.split(".")
-    other = f"{major}.{minor}.{int(patch) + 1}"
-    manifest["dependencies"][name] = other
+    # Add a dependency the lockfile has never heard of. Unlike bumping a pin to
+    # a version that may not exist (npm then fails with ETARGET, a registry
+    # lookup, proving nothing about the lockfile), this can only be caught by
+    # npm ci's sync check, which runs before any registry access.
+    name, version = "left-pad", "1.3.0"
+    manifest["dependencies"][name] = version
     package.write_text(json.dumps(manifest, indent=2) + "\n")
     tag = f"ytdigest-web-lock-test:{uuid.uuid4().hex[:8]}"
     try:
@@ -258,22 +254,19 @@ def test_lockfile_is_authoritative(tmp_path: Path) -> None:
         )  # fmt: skip
         assert result.returncode != 0
         out = result.stdout + result.stderr
-        # npm ci's sync check, which runs before any download. Expected text
-        # (npm 10/11): "`npm ci` can only install packages when your
-        # package.json and package-lock.json or npm-shrinkwrap.json are in
-        # sync" followed by "Invalid: lock file's <name>@<locked> does not
-        # satisfy <name>@<other>". Not asserted from a real run (no Docker
-        # here): if npm rewords it, update these two patterns.
+        # npm ci's sync check, text captured from a real run (npm 11.19.0 in
+        # the image): "npm error code EUSAGE", then "`npm ci` can only install
+        # packages when your package.json and package-lock.json or
+        # npm-shrinkwrap.json are in sync ..." and "Missing: left-pad@1.3.0
+        # from lock file". If npm rewords it, update these patterns.
+        assert "ETARGET" not in out, out[-3000:]
+        assert "npm error code EUSAGE" in out, out[-3000:]
         assert re.search(
             r"can only install packages when your package\.json and "
-            r"package-lock\.json",
+            r"package-lock\.json or npm-shrinkwrap\.json are in sync",
             out,
         ), out[-3000:]
-        assert re.search(
-            rf"Invalid: lock file's {re.escape(name)}@\S+ does not satisfy "
-            rf"{re.escape(name)}@{re.escape(other)}",
-            out,
-        ), out[-3000:]
+        assert f"Missing: {name}@{version} from lock file" in out, out[-3000:]
     finally:
         _docker("image", "rm", "-f", tag)
 
@@ -717,6 +710,23 @@ def test_nginx_follows_the_api_to_a_new_address(
     assert stack.wait_for_api(), stack.logs()
     old_ip = stack.ip_of(first)
     assert _docker("rm", "-f", first).returncode == 0
-    second = stack.start_api()
-    assert stack.ip_of(second) != old_ip
-    assert stack.wait_for_api(deadline=30), stack.logs()
+    # Docker hands the freed address straight back to the next container, which
+    # would make this test assert nothing. Hold it with a throwaway container
+    # (no alias, so it never answers for `api`) until the replacement is up.
+    squatter = f"ytdigest-squat-{uuid.uuid4().hex[:8]}"
+    try:
+        held = _docker(
+            "run", "-d", "--name", squatter, "--network", stack.network,
+            "--ip", old_ip, STUB_IMAGE, "sleep", "300",
+        )  # fmt: skip
+        if held.returncode != 0:
+            pytest.fail(f"could not occupy {old_ip}: {held.stderr}")
+        second = stack.start_api()
+        new_ip = stack.ip_of(second)
+        assert new_ip and new_ip != old_ip, (
+            f"replacement api got {new_ip}, the old address {old_ip}: this test "
+            "proves nothing about re-resolution"
+        )
+        assert stack.wait_for_api(deadline=30), stack.logs()
+    finally:
+        _docker("rm", "-f", squatter)
