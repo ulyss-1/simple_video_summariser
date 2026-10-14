@@ -1,6 +1,6 @@
 /*
  * Global stylesheet. Tokens come from _docs/design-system.md section 11
- * (#124, Option C: Hybrid). Plain CSS, no dependency. Light only for v1.
+ * (#124, Option C: Hybrid). Plain CSS, no dependency. Light + dark (#211).
  *
  * Base rules (body, headings, links, focus) apply app-wide. Component classes
  * (.card, .btn, .input, .badge, .alert, ...) are opt-in, so a view that has
@@ -27,6 +27,9 @@
   --color-warning-bg: #fffbeb;
   --color-danger-bg: #fef2f2;
   --color-th-bg: #f3f4f6;
+  --color-card: #ffffff;
+  --color-hover: #f9fafb;
+  --color-on-link: #ffffff;
 
   --space-xs: 0.25rem;
   --space-sm: 0.5rem;
@@ -43,6 +46,65 @@
 
   --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: monospace;
+}
+
+/*
+ * Dark theme (#211). The OS preference applies unless the viewer chose light;
+ * an explicit [data-theme="dark"] wins regardless of the OS. The two blocks
+ * must stay identical. Only tokens are redefined here.
+ */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+
+    --color-text: #f3f4f6;
+    --color-muted: #9ca3af;
+    --color-bg: #111827;
+    --color-surface: #1f2937;
+    --color-border: #4b5563;
+    --color-link: #a78bfa;
+    --color-link-visited: #c4b5fd;
+    --color-link-hover: #ddd6fe;
+    --color-focus: #a78bfa;
+    --color-success: #34d399;
+    --color-warning: #fbbf24;
+    --color-danger: #f87171;
+    --color-highlight: #713f12;
+    --color-success-bg: #0f2e26;
+    --color-warning-bg: #33270a;
+    --color-danger-bg: #3a1517;
+    --color-th-bg: #273449;
+    --color-card: #1f2937;
+    --color-hover: #374151;
+    --color-on-link: #111827;
+    --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.5);
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --color-text: #f3f4f6;
+  --color-muted: #9ca3af;
+  --color-bg: #111827;
+  --color-surface: #1f2937;
+  --color-border: #4b5563;
+  --color-link: #a78bfa;
+  --color-link-visited: #c4b5fd;
+  --color-link-hover: #ddd6fe;
+  --color-focus: #a78bfa;
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --color-danger: #f87171;
+  --color-highlight: #713f12;
+  --color-success-bg: #0f2e26;
+  --color-warning-bg: #33270a;
+  --color-danger-bg: #3a1517;
+  --color-th-bg: #273449;
+  --color-card: #1f2937;
+  --color-hover: #374151;
+  --color-on-link: #111827;
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.5);
 }
 
 /* ---- Base ---- */
@@ -215,7 +277,7 @@ a:focus {
 
 .card {
   padding: var(--space-md);
-  background: var(--color-bg);
+  background: var(--color-card);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-card);
 }
@@ -278,12 +340,12 @@ a:focus {
 }
 
 .btn:hover:not(:disabled) {
-  background: var(--color-surface);
+  background: var(--color-hover);
 }
 
 .btn--primary {
   background: var(--color-link);
-  color: #ffffff;
+  color: var(--color-on-link);
   border-color: var(--color-link);
 }
 
@@ -447,4 +509,31 @@ a:focus {
 
 .catalog-table {
   min-width: 48rem;
+}
+
+/* ---- Theme toggle ---- */
+
+.theme-toggle {
+  min-height: var(--touch-target);
+  padding: 0 var(--space-sm);
+  background: transparent;
+  color: var(--color-muted);
+  border: 0;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.theme-toggle:hover {
+  color: var(--color-link-hover);
+}
+
+/* Any future colour swap animation stops under reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
 }

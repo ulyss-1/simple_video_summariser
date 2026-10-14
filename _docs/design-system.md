@@ -141,8 +141,7 @@ In print (`@media print`), links take the text colour and lose their underline.
   (100% wide, 16:9). There is no max width, so lines run the full window width.
 - **Responsive:** no media queries. Wide tables (Ops jobs: 10 columns; Compare:
   3 columns) can overflow on a phone. The styling issues own this.
-- **Dark mode:** none. There is no `color-scheme` meta or CSS property, so the
-  page renders light even when the OS is dark. The printable page hard-codes
+- **Dark mode:** none at the time of this audit; since #211 the SPA is light + dark (§11). The printable page hard-codes
   `background: #fff`.
 
 ---
@@ -362,7 +361,7 @@ the bar for styled views is the one the styling issues set (from #120's acceptan
 meaningful borders and fills 3:1, visible focus at 3:1, touch targets at least
 44×44px, no horizontal page scroll at 360px wide or at 200% zoom on 1280px,
 any animation stopped under `prefers-reduced-motion: reduce`, and no state
-told apart by colour alone. Light only for v1 (§11).
+told apart by colour alone. Light + dark (§11).
 
 ---
 
@@ -481,14 +480,60 @@ via react-router `NavLink`, class `active` plus `aria-current="page"`) and
 `.shell-main` (max width `--content-width`, centred). Only existing tokens are
 used; no new token was added.
 
-### Dark mode
+### Dark mode (#211)
 
-Light only for v1 (no `prefers-color-scheme` meta or CSS support). If dark mode is added later, invert the palette:
-- Text: `#f3f4f6`
-- Background: `#111827`
-- Surface: `#1f2937`
-- Border: `#374151`
-- Keep accent colours (link, success, warning) as-is or adjust slightly
+The SPA is light + dark. Light values live once on bare `:root`; the dark
+blocks only redefine tokens (`color-scheme: dark` included), so no component
+rule hard-codes a colour.
+
+Behaviour:
+
+- **Default from the OS.** With no stored choice, `@media (prefers-color-scheme: dark)`
+  applies `:root:not([data-theme="light"])`. Light remains the default when the
+  OS has no dark preference.
+- **Toggle.** A button in the shell header ("Switch to dark theme" / "Switch to
+  light theme", so its name reflects the state) sets `data-theme` on `<html>`
+  to `light` or `dark`. `:root[data-theme="dark"]` and the `:not([data-theme="light"])`
+  guard make the explicit choice win both ways (OS light + dark chosen, OS dark
+  + light chosen). `color-scheme` follows, so native controls, scrollbars and
+  date pickers match.
+- **Persistence, no flash.** The choice is kept in `localStorage` under `theme`
+  (reads/writes are try/catch guarded). `public/theme-init.js` is a classic
+  script in `<head>` that sets `data-theme` before first paint. It is a file,
+  not an inline script, because the production CSP is `script-src 'self'`.
+  `src/theme.ts` (`useTheme`) owns the toggle state and follows live OS changes
+  while no choice is stored.
+- **Motion.** Nothing is animated; a `prefers-reduced-motion: reduce` rule
+  disables transitions and animations in case one is added.
+
+Dark token table (contrast on `#111827` bg unless noted; text on tints measured
+with primary text):
+
+| Use | Light | Dark | Notes (dark) |
+|---|---|---|---|
+| Text | `#1f2937` | `#f3f4f6` | 16.1:1 on bg, 13.3:1 on surface |
+| Muted | `#6b7280` | `#9ca3af` | 7.0:1 on bg, 5.8:1 on surface |
+| Background | `#ffffff` | `#111827` | |
+| Surface | `#f9fafb` | `#1f2937` | |
+| Border | `#e5e7eb` | `#4b5563` | 2.3:1 on bg, divider only |
+| Link | `#7c3aed` | `#a78bfa` | 6.5:1 on bg, 5.4:1 on surface |
+| Link (visited) | `#a855f7` | `#c4b5fd` | 9.6:1 |
+| Link (hover/focus) | `#6d28d9` | `#ddd6fe` | 12.8:1 |
+| Focus ring | `#7c3aed` | `#a78bfa` | 3px solid, 6.5:1 on bg |
+| Success | `#10b981` | `#34d399` | 9.2:1, border only |
+| Warning | `#f59e0b` | `#fbbf24` | 10.6:1, border only |
+| Danger | `#ef4444` | `#f87171` | 6.4:1, border only |
+| Highlight | `#fef3c7` | `#713f12` | 7.9:1 with text |
+| Success tint | `#ecfdf5` | `#0f2e26` | text 13.3:1 |
+| Warning tint | `#fffbeb` | `#33270a` | text 13.3:1 |
+| Danger tint | `#fef2f2` | `#3a1517` | text 14.7:1 |
+| Table header | `#f3f4f6` | `#273449` | text 11.4:1 |
+| Card | `#ffffff` | `#1f2937` | new token; the shadow is invisible on dark, so the card lifts via surface |
+| Hover fill | `#f9fafb` | `#374151` | new token; button hover |
+| Text on link fill | `#ffffff` | `#111827` | new token; primary button text, 6.5:1 on the dark link |
+
+Status badges and alerts keep the left border as the non-colour cue. The
+printable page (`services/api/render.py`) keeps its own light print styles.
 
 ### CSS approach
 
