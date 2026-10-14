@@ -12,14 +12,15 @@ tokens as-is; do not invent new colours, spacing or typography without asking.
 
 ---
 
-## 1. Ground rules for UI work right now
+## 1. Ground rules for UI work
 
-1. **Do not add visual styling to a view.** No stylesheet, no `className`
-   with rules, no `style={{…}}` beyond the layout-safety cases listed in §3.
-   Each view's header comment says this ("Plain semantic HTML on purpose:
-   styling is #1xx").
-2. **Do not invent tokens.** No colour, font, spacing or radius value enters
-   `web/src/` until #124 fills in §11 of this document.
+1. **Style views through the shared stylesheet.** Visual styling lives in
+   `web/index.css` (imported by `main.tsx`) and is applied with class names.
+   No per-view stylesheet, and `style={{...}}` only for the layout-safety
+   cases listed in §3.
+2. **Use the §11 tokens, do not invent values.** Colour, font, spacing and
+   radius come from the CSS custom properties in `index.css` (`var(--...)`).
+   A genuinely missing token is added to both `index.css` and §11.
 3. **Do not add a CSS framework, component library, icon set or font
    package** without asking the owner (AGENTS.md -> Rules). Tailwind,
    shadcn, MUI and so on are all new npm dependencies. Vite can import plain
@@ -56,10 +57,10 @@ paragraphs and lists, and no table borders.
 
 ## 3. Inline styles and class hooks in the SPA
 
-### Inline styles (the only allowed kind, until #124)
+### Inline styles (layout-safety only)
 
-Each one stops content from breaking the layout, not decoration. Keep them
-when styling arrives, or move them into the stylesheet unchanged.
+Each one stops content from breaking the layout, not decoration. Keep them,
+or move them into the stylesheet unchanged.
 
 | File | Element | Style | Why |
 |---|---|---|---|
@@ -81,8 +82,8 @@ Inline styles are allowed by the production CSP (`style-src 'self' 'unsafe-inlin
 | `speaker` | speaker label `<span>` in a transcript segment | `routes/Transcript.tsx` |
 
 The `player--error` modifier shows a BEM-style naming habit
-(`block--modifier`). It is the only precedent, not a decided convention: #124
-picks the CSS approach.
+(`block--modifier`). It is the only precedent; the CSS approach was decided in #124 (§11: one
+global stylesheet).
 
 ---
 
@@ -93,7 +94,7 @@ picks the CSS approach.
 inline `<style>`, no script and no external resources. The SPA links to it as
 "Printable version" from the video detail view. It is the only place in the
 repo with chosen colours and type. It is **not** the SPA design system, but
-it is the one existing precedent #124 can adopt or reject.
+it seeded nothing: #124 chose its own tokens (§11).
 
 ### Colours
 
@@ -357,12 +358,11 @@ The stripes use the existing `--color-bg` and `--color-th-bg` tokens (light them
 | Nothing relies on colour; status, matches and errors are all text | everywhere (trivially, since there is no colour) |
 
 Contrast, focus indicators and target sizes are the browser defaults today, so
-they cannot be judged until styling exists. The bar the styling issues already
-set (from #120's acceptance criteria): body and status text 4.5:1 (WCAG AA),
+the bar for styled views is the one the styling issues set (from #120's acceptance criteria): body and status text 4.5:1 (WCAG AA),
 meaningful borders and fills 3:1, visible focus at 3:1, touch targets at least
 44×44px, no horizontal page scroll at 360px wide or at 200% zoom on 1280px,
 any animation stopped under `prefers-reduced-motion: reduce`, and no state
-told apart by colour alone. Check in both themes if #124 defines two.
+told apart by colour alone. Light only for v1 (§11).
 
 ---
 
@@ -374,7 +374,7 @@ told apart by colour alone. Check in both themes if #124 defines two.
   font or CSS CDN (fonts fall under `default-src 'self'` and must be
   self-hosted and bundled); images only from our origin, YouTube thumbnails or
   `data:` URIs; inline `style` attributes are fine.
-- **Thumbnails**, if #124 wants them: built only from a `video_id` matching
+- **Thumbnails**, if a view wants them: built only from a `video_id` matching
   `^[A-Za-z0-9_-]{11}$`, as `https://i.ytimg.com/vi/<id>/mqdefault.jpg`, with
   `alt=""`, `loading="lazy"` and a fixed size (detail in #120).
 - **No new npm dependency without asking** (AGENTS.md -> Rules).
@@ -425,19 +425,19 @@ Owner decision: **Option C — Hybrid**, a modern, balanced direction.
 
 | Use | Value | Notes |
 |---|---|---|
-| Text (primary) | `#1f2937` | WCAG AAA on white (18:1) |
-| Text (secondary/muted) | `#6b7280` | WCAG AA on white (7.5:1) |
+| Text (primary) | `#1f2937` | 14.7:1 on white |
+| Text (secondary/muted) | `#6b7280` | 4.8:1 on white |
 | Background (main) | `#ffffff` | |
 | Background (surface, cards) | `#f9fafb` | Soft lift from main |
 | Border | `#e5e7eb` | Divides regions and table cells |
-| Link | `#7c3aed` | Purple, WCAG AA on white (6.9:1) |
-| Link (visited) | `#a855f7` | Lighter purple |
+| Link | `#7c3aed` | Purple, 5.7:1 on white |
+| Link (visited) | `#a855f7` | Lighter purple, 4.0:1 on white (below AA for body text; visited state only) |
 | Link (hover/focus) | `#6d28d9` | Darker purple |
-| Focus ring | `#7c3aed` | 3px outset, no outline-offset needed (visibility ≥3:1) |
-| Success | `#10b981` | Green (9.2:1 on white) |
-| Warning | `#f59e0b` | Amber (7.3:1 on white) |
-| Danger | `#ef4444` | Red (6.5:1 on white) |
-| Highlight | `#fef3c7` | Yellow (11:1 on white) |
+| Focus ring | `#7c3aed` | 3px solid, 2px offset (5.7:1 on white) |
+| Success | `#10b981` | Green, 2.5:1 on white: border/fill only, never text |
+| Warning | `#f59e0b` | Amber, 2.2:1 on white: border/fill only, never text |
+| Danger | `#ef4444` | Red, 3.8:1 on white: border/fill only, never text |
+| Highlight | `#fef3c7` | Yellow, a background fill under dark text |
 
 ### Typography
 
@@ -496,7 +496,7 @@ Light only for v1 (no `prefers-color-scheme` meta or CSS support). If dark mode 
 
 1. Base styles on `body`, headings, links
 2. Component classes for `.card`, `.btn`, `.input`, `.badge`, `.alert`
-3. Utility classes for spacing: `.mt-*`, `.mb-*`, `.gap-*` (optional, for layout only)
+3. Layout helpers: `.page`, `.row`, `.filters`, `.field`, `.table-scroll`, `.pagination` (no `.mt-*` style utilities exist)
 4. **No CSS-in-JS, no Tailwind, no new dependency** (unless owner approves)
 5. Keep semantic HTML intact; styling must not replace role, aria-* or label conventions
 
@@ -509,10 +509,11 @@ Light only for v1 (no `prefers-color-scheme` meta or CSS support). If dark mode 
 
 ### Badge & label treatment
 
-Status badges use text + background:
-- Success: `#10b981` text on `#ecfdf5` background
-- Warning: `#f59e0b` text on `#fffbeb` background
-- Danger: `#ef4444` text on `#fef2f2` background
+Coloured text on the tints fails WCAG AA (amber on its tint is about 2:1, green about 2.4:1), so badges keep the primary text colour and carry status in a 4px left border:
+- Success: `#10b981` left border on `#ecfdf5` background
+- Warning: `#f59e0b` left border on `#fffbeb` background
+- Danger: `#ef4444` left border on `#fef2f2` background
+- Default: `#6b7280` left border on `#f9fafb`
 - All: `4px` border-radius, `0.25rem 0.5rem` padding, font-size `14px`
 
 ### Responsive behavior
@@ -523,7 +524,7 @@ Status badges use text + background:
 
 ### Focus and touch targets
 
-- **Focus ring:** `3px solid #7c3aed`, `2px offset` (rings don't clip)
+- **Focus ring:** `3px solid #7c3aed`, `2px` offset
 - **Touch targets:** minimum `44×44px` for all interactive elements (buttons, links, inputs)
 - **Visible focus:** maintained at all zoom levels
 
@@ -537,5 +538,3 @@ font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, s
 This is cross-platform, built-in, and complies with CSP (`default-src 'self'`).
 
 ---
-
-**Styling is now unblocked.** Views must follow these tokens. Update §1 to allow styling work.
