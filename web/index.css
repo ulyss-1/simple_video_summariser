@@ -126,6 +126,66 @@ a:focus {
   outline-offset: 2px;
 }
 
+/* ---- App shell ---- */
+
+.shell-header {
+  margin: calc(-1 * var(--space-md)) calc(-1 * var(--space-md)) var(--space-lg);
+  padding: 0 var(--space-md);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.shell-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-md);
+  max-width: var(--content-width);
+  margin: 0 auto;
+}
+
+.shell-nav__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--touch-target);
+  padding: 0 var(--space-sm);
+  border-bottom: 3px solid transparent;
+  color: var(--color-text);
+  font-weight: 500;
+}
+
+.shell-nav__link:visited {
+  color: var(--color-text);
+}
+
+.shell-nav__link:hover,
+.shell-nav__link:focus {
+  color: var(--color-link-hover);
+}
+
+/* Active page: purple text plus a bottom bar and aria-current, not colour alone. */
+.shell-nav__link.active,
+.shell-nav__link.active:visited {
+  color: var(--color-link);
+  border-bottom-color: var(--color-link);
+}
+
+.shell-nav__link--aside {
+  margin-left: auto;
+  color: var(--color-muted);
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.shell-nav__link--aside:visited {
+  color: var(--color-muted);
+}
+
+.shell-main {
+  max-width: var(--content-width);
+  margin: 0 auto;
+}
+
 /* ---- Layout ---- */
 
 .page {

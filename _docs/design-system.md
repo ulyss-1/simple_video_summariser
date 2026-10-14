@@ -1,16 +1,14 @@
 # Design System
 
-**Status:** the visual direction is still open. The SPA ships deliberately
-unstyled, and the owner has not chosen a look yet (#124: options A editorial,
-B dense tool, C hybrid, D media-first). This document records what the code
-does today (audited 2026-10-11), the conventions every view already follows,
-and the constraints that whoever styles the app must respect. It does **not**
-define colour, type or spacing tokens for the SPA, because none exist yet and
-inventing them is #124's job.
+**Status:** design direction chosen (#124). The visual direction is **C: Hybrid**
+(modern, purple accents, soft rounded corners, balanced spacing). This document
+records what the code does today (audited 2026-10-11), the conventions every
+view already follows, the design tokens decided in #124 (§11), and the
+constraints that whoever styles the app must respect.
 
-Read this before touching anything in `web/src/`. If you are styling a view
-(#120 Library, #130 Transcript, #131 Search, #132 Ops) and #124 is not done
-yet, stop: those issues are blocked on it.
+**Styling is unblocked.** Views may now use the tokens in §11. Styling work on
+#120 Library, #130 Transcript, #131 Search, #132 Ops can proceed. Use the
+tokens as-is; do not invent new colours, spacing or typography without asking.
 
 ---
 
@@ -419,23 +417,125 @@ Not design decisions, just drift to fix or settle when styling lands:
 
 ---
 
-## 11. Decisions owed by #124
+## 11. Design tokens: Hybrid direction (#124)
 
-These are open. Until the owner decides, a view must not pick its own answer.
+Owner decision: **Option C — Hybrid**, a modern, balanced direction.
 
-- Visual direction: A editorial, B dense tool, C hybrid, D media-first
-- Colour tokens (text, muted, background, surface, border, link, focus,
-  success, warning, danger, highlight), and whether the printable page's
-  `#1a1a1a` / `#555` / `#0b57d0` / `#ccc` seed them
-- Light only, or light and dark (and whether to set `color-scheme`)
-- Font stack (system stack like the printable page, or a self-hosted face) and
-  the type scale
-- Spacing scale, radius, content max width (the printable page uses `48rem`)
-- CSS approach: global stylesheet, CSS modules, or a framework (a framework
-  needs owner approval as a new dependency)
-- Button variants, status badge or label treatment, row density, thumbnails
-- Phone layout for wide tables; where the player sits on the Transcript page
-- Focus ring style and minimum touch-target size
+### Colour tokens
 
-When #124 is done, replace this section with the tokens, and update §1 so
-styling is allowed.
+| Use | Value | Notes |
+|---|---|---|
+| Text (primary) | `#1f2937` | WCAG AAA on white (18:1) |
+| Text (secondary/muted) | `#6b7280` | WCAG AA on white (7.5:1) |
+| Background (main) | `#ffffff` | |
+| Background (surface, cards) | `#f9fafb` | Soft lift from main |
+| Border | `#e5e7eb` | Divides regions and table cells |
+| Link | `#7c3aed` | Purple, WCAG AA on white (6.9:1) |
+| Link (visited) | `#a855f7` | Lighter purple |
+| Link (hover/focus) | `#6d28d9` | Darker purple |
+| Focus ring | `#7c3aed` | 3px outset, no outline-offset needed (visibility ≥3:1) |
+| Success | `#10b981` | Green (9.2:1 on white) |
+| Warning | `#f59e0b` | Amber (7.3:1 on white) |
+| Danger | `#ef4444` | Red (6.5:1 on white) |
+| Highlight | `#fef3c7` | Yellow (11:1 on white) |
+
+### Typography
+
+| Element | Font | Size | Weight | Line-height |
+|---|---|---|---|---|
+| `body` | system-ui, sans-serif | 16px | 400 | 1.5 |
+| `h1` | system-ui, sans-serif | 1.875rem (30px) | 600 | 1.2 |
+| `h2` | system-ui, sans-serif | 1.5rem (24px) | 600 | 1.3 |
+| `h3` | system-ui, sans-serif | 1.25rem (20px) | 600 | 1.4 |
+| `label` | system-ui, sans-serif | 14px | 500 | 1.4 |
+| `small`, `.muted` | system-ui, sans-serif | 14px | 400 | 1.4 |
+| code, pre | monospace | 14px | 400 | 1.5 |
+
+### Spacing scale
+
+All values in rem (16px base).
+
+| Name | Value | Uses |
+|---|---|---|
+| xs | 0.25rem | Gaps in tight layouts |
+| sm | 0.5rem | Input padding, close items |
+| md | 1rem | Standard padding, gaps |
+| lg | 1.5rem | Section spacing, major gaps |
+| xl | 2rem | Page-level breaks |
+| 2xl | 3rem | Full-page breaks |
+
+Applied: body padding `1rem`; section margin `1.5rem 0 0.5rem`; input padding `0.5rem 0.75rem`; card padding `1rem`; list item margin `0.5rem 0`.
+
+### Layout
+
+- **Max width:** `48rem` (768px) for text-heavy pages (Library, Transcript, Search results)
+- **Content padding:** `1rem` on sides; `1.5rem` vertical between sections
+- **Card styling:** white background, `1rem` padding, `6px` border-radius, `0 2px 8px rgba(0,0,0,0.08)` shadow
+- **Table styling:** `th` background `#f3f4f6`, `border-bottom 2px solid #e5e7eb`; `td` padding `0.75rem`, `border-bottom 1px solid #e5e7eb`
+- **Form inputs:** `1rem` width, `0.5rem 0.75rem` padding, `1px solid #e5e7eb` border, `4px` border-radius, focus ring on focus
+
+### App shell
+
+`Shell.tsx` uses `.shell-header`, `.shell-nav`, `.shell-nav__link` (active state
+via react-router `NavLink`, class `active` plus `aria-current="page"`) and
+`.shell-main` (max width `--content-width`, centred). Only existing tokens are
+used; no new token was added.
+
+### Dark mode
+
+Light only for v1 (no `prefers-color-scheme` meta or CSS support). If dark mode is added later, invert the palette:
+- Text: `#f3f4f6`
+- Background: `#111827`
+- Surface: `#1f2937`
+- Border: `#374151`
+- Keep accent colours (link, success, warning) as-is or adjust slightly
+
+### CSS approach
+
+**Global stylesheet** (`web/index.css`). Rules:
+
+1. Base styles on `body`, headings, links
+2. Component classes for `.card`, `.btn`, `.input`, `.badge`, `.alert`
+3. Utility classes for spacing: `.mt-*`, `.mb-*`, `.gap-*` (optional, for layout only)
+4. **No CSS-in-JS, no Tailwind, no new dependency** (unless owner approves)
+5. Keep semantic HTML intact; styling must not replace role, aria-* or label conventions
+
+### Button variants
+
+- **Primary:** purple background (`#7c3aed`), white text, `0.5rem 1rem` padding, `4px` radius, hover darker
+- **Secondary:** white background, `#1f2937` text, `1px solid #e5e7eb` border, `4px` radius, hover `#f9fafb`
+- **Disabled:** `opacity: 0.5`, `cursor: not-allowed` (native `disabled` attribute)
+- **No icon buttons:** every button has visible text
+
+### Badge & label treatment
+
+Status badges use text + background:
+- Success: `#10b981` text on `#ecfdf5` background
+- Warning: `#f59e0b` text on `#fffbeb` background
+- Danger: `#ef4444` text on `#fef2f2` background
+- All: `4px` border-radius, `0.25rem 0.5rem` padding, font-size `14px`
+
+### Responsive behavior
+
+- **Tables on mobile:** stack columns vertically at `<640px`, or scroll horizontally with `overflow-x: auto`
+- **Player on Transcript:** full-width at top, `16:9` aspect ratio (inline style already set)
+- **No horizontal scroll** at 360px or at 200% zoom on 1280px
+
+### Focus and touch targets
+
+- **Focus ring:** `3px solid #7c3aed`, `2px offset` (rings don't clip)
+- **Touch targets:** minimum `44×44px` for all interactive elements (buttons, links, inputs)
+- **Visible focus:** maintained at all zoom levels
+
+### Fonts
+
+System stack only (no new dependency):
+```
+font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+```
+
+This is cross-platform, built-in, and complies with CSP (`default-src 'self'`).
+
+---
+
+**Styling is now unblocked.** Views must follow these tokens. Update §1 to allow styling work.
