@@ -84,7 +84,7 @@ async function typeCases(): Promise<void> {
   const channel = await api.post('/channels', { body: { url: 'UCabc' } })
   expectTypeOf(channel).toEqualTypeOf<components['schemas']['ChannelRegistration']>()
   // @ts-expect-error a field the schema does not have
-  health.nope
+  void health.nope
 
   // -- channel catalog (#242) ----------------------------------------------------------
   const catalog = await api.get('/channels/{channel_id}/catalog', {

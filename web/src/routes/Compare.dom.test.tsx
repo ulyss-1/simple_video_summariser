@@ -477,7 +477,8 @@ describe('page states', () => {
     [
       'a missing usage key',
       () => {
-        const { calls: _calls, ...rest } = run()
+        const rest: Record<string, unknown> = { ...run() }
+        delete rest.calls
         return json({ items: [rest], limit: 50, offset: 0, total: 1 })
       },
     ],

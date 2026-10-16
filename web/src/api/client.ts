@@ -11,9 +11,10 @@ import type { paths } from './index'
 type HttpMethod = 'get' | 'put' | 'post' | 'delete' | 'patch'
 type SuccessStatus = 200 | 201 | 202 | 203 | 204 | 205 | 206 | 207 | 208 | 226
 
-declare const notJson: unique symbol
 /** Stands in for a success response that has content, none of it `application/json`. */
-type NotJson = typeof notJson
+interface NotJson {
+  readonly __notJson: never
+}
 
 type OperationOf<Paths, P extends keyof Paths, M extends HttpMethod> = M extends keyof Paths[P]
   ? NonNullable<Paths[P][M]>
@@ -70,7 +71,7 @@ type BodyPart<Op> = [JsonBodyOf<Op>] extends [never]
     ? { body: JsonBodyOf<Op> }
     : { body?: JsonBodyOf<Op> }
 
-type ParamsField<Op> = {} extends ParamsFor<Op> ? { params?: ParamsFor<Op> } : { params: ParamsFor<Op> }
+type ParamsField<Op> = Record<never, never> extends ParamsFor<Op> ? { params?: ParamsFor<Op> } : { params: ParamsFor<Op> }
 
 export type RequestOptions<Paths, P extends keyof Paths, M extends HttpMethod> = ParamsField<
   OperationOf<Paths, P, M>
@@ -78,7 +79,7 @@ export type RequestOptions<Paths, P extends keyof Paths, M extends HttpMethod> =
   BodyPart<OperationOf<Paths, P, M>> & { signal?: AbortSignal }
 
 export type RequestArgs<Paths, P extends keyof Paths, M extends HttpMethod> =
-  {} extends RequestOptions<Paths, P, M>
+  Record<never, never> extends RequestOptions<Paths, P, M>
     ? [options?: RequestOptions<Paths, P, M>]
     : [options: RequestOptions<Paths, P, M>]
 

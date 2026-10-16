@@ -99,6 +99,8 @@ Activate `.venv` first; all Python commands assume it.
   - the transcriber uses the `tiny` Whisper model unless `WHISPER_MODEL` is
     set (for example `WHISPER_MODEL=base docker compose up -d`)
 - `npm ci && npm run build` - in `web/`, frontend only
+- `npm run lint` - in `web/`; ESLint (react-hooks + React Compiler rules),
+  fails on any warning; `bash -lc 'cd web && npm run lint'`
 - `npm test` - in `web/`; runs Vitest once (no watch, Node environment)
 - `npm run dev` - in `web/`; Vite dev server on `:5173`, proxying `/api/` to
   the backend (prefix stripped, like nginx). The target is the non-`VITE_` env
