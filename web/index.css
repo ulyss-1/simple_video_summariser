@@ -462,6 +462,8 @@ a:focus {
 
 .pagination {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-sm);
 }
 
@@ -512,6 +514,38 @@ a:focus {
 
 .catalog-table {
   min-width: 48rem;
+}
+
+/* ---- Transcript (#130) ----
+ * Built from .page, .card, .alert, .btn, .pagination and .muted; only what
+ * those do not cover lives here. Timestamps keep the shared .timestamp rule. */
+
+.transcript {
+  overflow-wrap: anywhere;
+}
+
+.transcript__back {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--touch-target);
+}
+
+.transcript__segments {
+  margin: 0;
+  padding-left: calc(var(--space-md) + var(--space-lg));
+}
+
+.transcript__segments li + li {
+  margin-top: var(--space-sm);
+}
+
+.transcript__segments li::marker {
+  color: var(--color-muted);
+}
+
+.speaker {
+  color: var(--color-muted);
+  font-weight: 500;
 }
 
 /* ---- Theme toggle ---- */
