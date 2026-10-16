@@ -8,6 +8,7 @@ import { buildWatchUrl } from '../components/player/youtubeTransport'
 import { formatTimestamp } from '../components/Timestamp'
 import { useAnalysisTotal } from '../hooks/useAnalyses'
 import { deleteErrorMessage, useDeleteVideo } from '../hooks/useDeleteVideo'
+import { reanalyzeErrorMessage, useReanalyze } from '../hooks/useReanalyze'
 import { useVideo, VideoApiError } from '../hooks/useVideo'
 import { parseVideoId } from '../lib/videoId'
 
@@ -140,6 +141,7 @@ function VideoPage({ videoId }: { videoId: string }) {
   // removing their cache entries cannot make them fetch the video again.
   const [gone, setGone] = useState(false)
   const query = useVideo(gone ? null : videoId)
+  const reanalyze = useReanalyze(videoId)
   // Only the count is needed for the Compare link; a failure just hides it.
   const analysisTotal = useAnalysisTotal(gone ? null : videoId).data
   const video = query.data
@@ -218,6 +220,23 @@ function VideoPage({ videoId }: { videoId: string }) {
           </>
         )}
       </p>
+      {video.transcript !== null && (
+        <p>
+          <button
+            className="btn btn--primary"
+            type="button"
+            disabled={reanalyze.isPending || video.active_job !== null}
+            onClick={() => reanalyze.mutate()}
+          >
+            Re-analyse
+          </button>
+        </p>
+      )}
+      {reanalyze.isError && (
+        <p className="alert alert--danger" role="alert">
+          {reanalyzeErrorMessage(reanalyze.error)}
+        </p>
+      )}
       <Player videoId={videoId} title={heading ?? undefined} />
       {video.unavailable !== null && analysis !== null && <p className="alert">{UNAVAILABLE_NOTE}</p>}
       {analysis !== null && video.active_job !== null && <p className="alert">Re-analysis in progress</p>}

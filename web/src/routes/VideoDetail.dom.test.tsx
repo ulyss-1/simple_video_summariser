@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { setupUser } from '../test/user'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -756,5 +756,93 @@ describe('transcription progress (#245)', () => {
   it('shows no figures without progress', async () => {
     await mountWith(transcribing({ progress: null }))
     expect(document.querySelector('progress')).toBeNull()
+  })
+})
+
+describe('Re-analyse button (#126)', () => {
+  const summary = { id: 3, source: 'whisper', language: 'en', segment_count: 10, speaker_source: 'none' }
+  const button = () => screen.getByRole('button', { name: 'Re-analyse' }) as HTMLButtonElement
+  const posts = () => requests.filter((u) => u.pathname.endsWith('/reanalyze'))
+  const submission = (created: boolean) => ({ video_id: ID, job_id: 9, state: 'pending', created })
+
+  /** Serves the video, and `post` for the reanalyze POST. */
+  async function mountPosting(v: VideoDetailOut, post: () => Response | Promise<Response>) {
+    const fn = stubFetch((url) => (url.pathname.endsWith('/reanalyze') ? post() : json(v)))
+    await mount()
+    return fn
+  }
+
+  it('is absent without a transcript', async () => {
+    await mountWith(video({ transcript: null }))
+    expect(screen.queryByRole('button', { name: 'Re-analyse' })).toBeNull()
+  })
+
+  it('is an enabled button with a transcript and no active job', async () => {
+    await mountWith(video({ transcript: summary }))
+    expect(button().type).toBe('button')
+    expect(button().disabled).toBe(false)
+  })
+
+  it('POSTs to the video reanalyze endpoint without a body and refetches the video', async () => {
+    const fn = await mountPosting(video({ transcript: summary }), () => json(submission(true), 202))
+    const before = requests.length
+    fireEvent.click(button())
+    await settle()
+    expect(posts().map((u) => u.pathname)).toEqual([`/api/videos/${ID}/reanalyze`])
+    const init = fn.mock.calls.map((c) => c as unknown[]).find((c) => String(c[0]).endsWith('/reanalyze'))
+    expect(((init?.[1] ?? {}) as RequestInit).method).toBe('POST')
+    expect(requests.length).toBeGreaterThan(before + 1) // the POST and a video refetch
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('also treats 200 (reused job) as success', async () => {
+    await mountPosting(video({ transcript: summary }), () => json(submission(false), 200))
+    fireEvent.click(button())
+    await settle()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('is disabled while the request is in flight, so a double click sends one request', async () => {
+    let release: (r: Response) => void = () => {}
+    await mountPosting(
+      video({ transcript: summary }),
+      () => new Promise<Response>((r) => { release = r }),
+    )
+    fireEvent.click(button())
+    await settle()
+    expect(button().disabled).toBe(true)
+    fireEvent.click(button())
+    await settle()
+    expect(posts()).toHaveLength(1)
+    release(json(submission(true), 202))
+    await settle()
+  })
+
+  it('is disabled while a job is active, next to the in-progress line', async () => {
+    await mountWith(video({ transcript: summary, active_job: { id: 2, kind: 'analyze', state: 'running' } }))
+    expect(button().disabled).toBe(true)
+    expect(body()).toContain('Re-analysis in progress')
+  })
+
+  it.each([
+    [409, 'An analysis is already running for this video.'],
+    [429, 'Too many requests. Try again in a moment.'],
+    [500, 'Could not start the re-analysis. Try again.'],
+  ])('shows a fixed alert for %i and never echoes the body', async (status, message) => {
+    await mountPosting(video({ transcript: summary }), () => json({ detail: 'SECRET server text' }, status))
+    fireEvent.click(button())
+    await settle()
+    expect(screen.getByRole('alert').textContent).toBe(message)
+    expect(body()).not.toContain('SECRET')
+    expect(button().disabled).toBe(false)
+    expect(posts()).toHaveLength(1) // no automatic retry
+  })
+
+  it('shows a fixed alert on a network failure', async () => {
+    await mountPosting(video({ transcript: summary }), () => Promise.reject(new TypeError('boom')))
+    fireEvent.click(button())
+    await settle()
+    expect(screen.getByRole('alert').textContent).toBe('Could not start the re-analysis. Try again.')
+    expect(posts()).toHaveLength(1)
   })
 })
