@@ -531,6 +531,81 @@ a:focus {
   color: var(--color-link-hover);
 }
 
+/* ---- Player ---- */
+
+.player {
+  max-width: 100%;
+  margin: var(--space-md) 0;
+  overflow: hidden;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.player iframe {
+  display: block;
+  max-width: 100%;
+  border: 0;
+}
+
+.player--error {
+  padding: var(--space-md);
+  background: var(--color-danger-bg);
+  color: var(--color-text);
+  border-left: 4px solid var(--color-danger);
+  overflow-wrap: anywhere;
+}
+
+.player--error > :first-child {
+  margin-top: 0;
+}
+
+.player--error > :last-child {
+  margin-bottom: 0;
+}
+
+/* ---- Timestamp seek button (inline control, only inside a PlayerProvider) ---- */
+
+.timestamp {
+  position: relative;
+  display: inline;
+  margin: 0;
+  padding: 0 var(--space-xs);
+  background: transparent;
+  color: var(--color-link);
+  border: 0;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-family: var(--font-mono);
+  text-decoration: underline dotted;
+  text-underline-offset: 0.2em;
+  cursor: pointer;
+}
+
+/* Expands the hit area to the touch target without growing the line box. */
+.timestamp::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  min-width: var(--touch-target);
+  min-height: var(--touch-target);
+  width: 100%;
+  height: var(--touch-target);
+  transform: translate(-50%, -50%);
+}
+
+.timestamp:hover {
+  background: var(--color-hover);
+  color: var(--color-link-hover);
+  text-decoration-style: solid;
+}
+
+.timestamp:active {
+  background: var(--color-highlight);
+  color: var(--color-link-hover);
+}
+
 /* Any future colour swap animation stops under reduced motion. */
 @media (prefers-reduced-motion: reduce) {
   *,
