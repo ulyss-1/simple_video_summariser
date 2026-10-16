@@ -158,7 +158,8 @@ label {
 }
 
 small,
-.muted {
+.muted,
+.video-detail > footer {
   color: var(--color-muted);
   font-size: 14px;
   font-weight: 400;
@@ -606,9 +607,6 @@ a:focus {
 }
 
 .video-detail > footer {
-  color: var(--color-muted);
-  font-size: 14px;
-  line-height: 1.4;
   overflow-wrap: anywhere;
 }
 
