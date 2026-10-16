@@ -755,3 +755,53 @@ mark {
   text-decoration-thickness: 2px;
   text-underline-offset: 0.2em;
 }
+
+/* ---- Ops (#132) ----
+ * Built from .page, .card, .filters, .field, .input, .btn, .badge, .alert,
+ * .table, .table-scroll, .pagination and .muted; only what those do not cover
+ * lives here. */
+
+.ops {
+  overflow-wrap: anywhere;
+}
+
+.ops__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.ops__section > h2,
+.ops__section > p {
+  margin: 0;
+}
+
+/* Nine columns need more room than the shared .table minimum before they scroll. */
+.ops__jobs {
+  min-width: 64rem;
+}
+
+.ops__depth {
+  min-width: 24rem;
+}
+
+.ops .table th[scope='row'] {
+  background: transparent;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.ops .alert {
+  margin: 0;
+}
+
+.ops__confirm > p {
+  margin: 0 0 var(--space-sm);
+}
+
+.ops__confirm .btn + .btn {
+  margin-left: var(--space-sm);
+}
+
+.ops .table pre {
+  margin: var(--space-sm) 0;
+}
