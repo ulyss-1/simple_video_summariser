@@ -85,7 +85,7 @@ export function Ops() {
         {table !== null && (
           <>
             <p className="muted">{table.deadTotal === 0 ? 'No dead jobs' : `${table.deadTotal} dead ${table.deadTotal === 1 ? 'job' : 'jobs'}`}</p>
-            <div className="card card--flush table-scroll">
+            <div className="card card--flush table-scroll" role="region" aria-label="Queue depth by kind" tabIndex={0}>
             <table className="table ops__depth">
               <thead>
                 <tr>
@@ -176,7 +176,7 @@ export function Ops() {
               </p>
             )}
             {data.items.length > 0 && (
-              <div className="card card--flush table-scroll">
+              <div className="card card--flush table-scroll" role="region" aria-label="Jobs list" tabIndex={0}>
               <table className="table ops__jobs">
                 <thead>
                   <tr>

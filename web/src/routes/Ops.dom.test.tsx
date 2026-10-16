@@ -1033,7 +1033,14 @@ describe('accessibility and source', () => {
     expect(select('State').labels?.length).toBe(1)
     expect(select('Kind').labels?.length).toBe(1)
     expect(select('Error class').labels?.length).toBe(1)
-    expect(document.querySelector('[onclick], [tabindex]')).toBeNull()
+    expect(document.querySelector('[onclick]')).toBeNull()
+    // Library precedent: tabIndex={0} on a labelled role="region" is the accessible
+    // pattern for a wide, horizontally scrolling table. Any other tabindex is stray.
+    for (const el of document.querySelectorAll('[tabindex]')) {
+      expect(el.getAttribute('tabindex')).toBe('0')
+      expect(el.getAttribute('role')).toBe('region')
+      expect(el.getAttribute('aria-label')).toBeTruthy()
+    }
   })
 })
 
