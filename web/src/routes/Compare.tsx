@@ -41,7 +41,7 @@ function NotFound() {
     document.title = 'Video not found'
   }, [])
   return (
-    <section>
+    <section className="page">
       <h1>Video not found</h1>
       <p>
         <Link to="/">Back to Library</Link>
@@ -63,10 +63,11 @@ function ComparePage({ videoId }: { videoId: string }) {
     if (analyses.isError) {
       if (analyses.error instanceof AnalysesApiError && analyses.error.status === 404) return <NotFound />
       return (
-        <section>
+        <section className="page">
           <h1>{heading}</h1>
-          <p role="alert">Could not load the analyses</p>
+          <p className="alert alert--danger" role="alert">Could not load the analyses</p>
           <button
+            className="btn"
             type="button"
             onClick={() => {
               void analyses.refetch()
@@ -78,31 +79,31 @@ function ComparePage({ videoId }: { videoId: string }) {
       )
     }
     return (
-      <section>
+      <section className="page">
         <h1>{heading}</h1>
-        <p role="status">Loading analyses…</p>
+        <p className="muted" role="status">Loading analyses…</p>
       </section>
     )
   }
 
   const { runs, total, capped } = analyses.data
   return (
-    <article>
+    <article className="page compare">
       <h1>{heading}</h1>
       {runs.length === 0 ? (
         <>
           <p>This video has no analyses yet.</p>
-          <p>
+          <p className="compare__links">
             <Link to={`/videos/${videoId}`}>Video details</Link>
           </p>
         </>
       ) : (
         <>
-          <p>
+          <p className="compare__links">
             <Link to={`/videos/${videoId}`}>Video details</Link>
           </p>
           <Player videoId={videoId} title={heading === videoId ? undefined : heading} />
-          {capped && <p>{`Showing the newest ${runs.length} of ${total} analyses`}</p>}
+          {capped && <p className="alert">{`Showing the newest ${runs.length} of ${total} analyses`}</p>}
           <Comparison runs={runs} />
         </>
       )}
@@ -155,8 +156,8 @@ function Comparison({ runs }: { runs: AnalysisRun[] }) {
   if (runB === undefined) {
     return (
       <>
-        {showNotice && <p>{NOT_FOUND_NOTICE}</p>}
-        <p>Only one analysis exists for this video, so there is nothing to compare yet.</p>
+        {showNotice && <p className="alert">{NOT_FOUND_NOTICE}</p>}
+        <p className="alert">Only one analysis exists for this video, so there is nothing to compare yet.</p>
         <Picker name="Analysis A" runs={runs} value={runA.id} blocked={null} onChange={(raw) => pick('a', raw)} />
         <AnalysisView analysis={runA} />
       </>
@@ -165,12 +166,13 @@ function Comparison({ runs }: { runs: AnalysisRun[] }) {
 
   return (
     <>
-      {showNotice && <p>{NOT_FOUND_NOTICE}</p>}
+      {showNotice && <p className="alert">{NOT_FOUND_NOTICE}</p>}
       <Notices a={runA} b={runB} />
-      <div>
+      <div className="row">
         <Picker name="Analysis A" runs={runs} value={runA.id} blocked={runB.id} onChange={(raw) => pick('a', raw)} />{' '}
         <Picker name="Analysis B" runs={runs} value={runB.id} blocked={runA.id} onChange={(raw) => pick('b', raw)} />{' '}
         <button
+          className="btn"
           type="button"
           onClick={() => {
             choose(runB.id, runA.id)
@@ -239,9 +241,10 @@ function Picker({
 }) {
   const id = useId()
   return (
-    <>
-      <label htmlFor={id}>{name}</label>{' '}
+    <div className="field">
+      <label htmlFor={id}>{name}</label>
       <select
+        className="input"
         id={id}
         value={String(value)}
         onChange={(e) => {
@@ -254,7 +257,7 @@ function Picker({
           </option>
         ))}
       </select>
-    </>
+    </div>
   )
 }
 
@@ -262,17 +265,17 @@ function Notices({ a, b }: { a: AnalysisRun; b: AnalysisRun }) {
   return (
     <>
       {a.transcript_id !== b.transcript_id && (
-        <p>
+        <p className="alert">
           {`These runs used different transcripts (${a.transcript_source} vs ${b.transcript_source}), so differences may come from the transcript rather than the model or prompt.`}
         </p>
       )}
       {a.chunk_strategy !== b.chunk_strategy && (
-        <p>
+        <p className="alert">
           {`These runs used different chunk strategies (${a.chunk_strategy} vs ${b.chunk_strategy}), so differences may come from how the transcript was split.`}
         </p>
       )}
       {a.model === b.model && a.prompt_version === b.prompt_version && (
-        <p>Same model and prompt version: differences show run-to-run variation.</p>
+        <p className="alert">Same model and prompt version: differences show run-to-run variation.</p>
       )}
     </>
   )
@@ -314,15 +317,17 @@ function SideBySide({
 }) {
   return (
     <Section title={title}>
-      <table>
-        <Heads a={a} b={b} />
-        <tbody>
-          <tr>
-            <td>{children(a)}</td>
-            <td>{children(b)}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div className="table-scroll" role="region" aria-label={`${title} comparison`} tabIndex={0}>
+        <table className="table">
+          <Heads a={a} b={b} />
+          <tbody>
+            <tr>
+              <td>{children(a)}</td>
+              <td>{children(b)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </Section>
   )
 }
@@ -360,18 +365,20 @@ function Aligned<T extends { start_sec: number | null }>({
       {rows.length === 0 ? (
         <p>{`No ${noun} extracted in either analysis.`}</p>
       ) : (
-        <table>
-          <Heads a={a} b={b} first="Time window" />
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.window ?? 'none'}>
-                <th scope="row">{row.label}</th>
-                <td>{cell(row.a)}</td>
-                <td>{cell(row.b)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="table-scroll" role="region" aria-label={`${title} comparison`} tabIndex={0}>
+          <table className="table">
+            <Heads a={a} b={b} first="Time window" />
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.window ?? 'none'}>
+                  <th scope="row">{row.label}</th>
+                  <td>{cell(row.a)}</td>
+                  <td>{cell(row.b)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </Section>
   )
@@ -405,21 +412,23 @@ function Details({ a, b }: { a: AnalysisRun; b: AnalysisRun }) {
   ]
   return (
     <Section title="Run details">
-      <table>
-        <Heads a={a} b={b} first="Field" />
-        <tbody>
-          {rows.map(([field, va, vb]) => (
-            <tr key={field}>
-              <th scope="row">
-                {field}
-                {va !== vb && <> (differs)</>}
-              </th>
-              <td>{va}</td>
-              <td>{vb}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="table-scroll" role="region" aria-label="Run details table" tabIndex={0}>
+        <table className="table">
+          <Heads a={a} b={b} first="Field" />
+          <tbody>
+            {rows.map(([field, va, vb]) => (
+              <tr key={field}>
+                <th scope="row">
+                  {field}
+                  {va !== vb && <> (differs)</>}
+                </th>
+                <td>{va}</td>
+                <td>{vb}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </Section>
   )
 }

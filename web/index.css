@@ -159,7 +159,8 @@ label {
 
 small,
 .muted,
-.video-detail > footer {
+.video-detail > footer,
+.compare > footer {
   color: var(--color-muted);
   font-size: 14px;
   font-weight: 400;
@@ -570,17 +571,20 @@ a:focus {
  * AnalysisView and ClaimItem are shared with Compare, so their sections are
  * styled only as direct children of .video-detail. */
 
-.video-detail > h1 {
+.video-detail > h1,
+.compare > h1 {
   overflow-wrap: anywhere;
 }
 
-.video-detail__links a {
+.video-detail__links a,
+.compare__links a {
   display: inline-flex;
   align-items: center;
   min-height: var(--touch-target);
 }
 
-.video-detail > section {
+.video-detail > section,
+.compare > section {
   padding: var(--space-md);
   background: var(--color-card);
   border-radius: var(--radius-md);
@@ -588,25 +592,31 @@ a:focus {
   overflow-wrap: anywhere;
 }
 
-.video-detail > section > h2 {
+.video-detail > section > h2,
+.compare > section > h2 {
   margin: 0 0 var(--space-sm);
 }
 
-.video-detail > section > :last-child {
+.video-detail > section > :last-child,
+.compare > section > :last-child {
   margin-bottom: 0;
 }
 
 .video-detail > section ul,
-.video-detail > section ol {
+.video-detail > section ol,
+.compare > section ul,
+.compare > section ol {
   margin: 0;
   padding-left: var(--space-lg);
 }
 
-.video-detail > section li + li {
+.video-detail > section li + li,
+.compare > section li + li {
   margin-top: var(--space-sm);
 }
 
-.video-detail > footer {
+.video-detail > footer,
+.compare > footer {
   overflow-wrap: anywhere;
 }
 
