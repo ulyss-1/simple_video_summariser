@@ -51,10 +51,12 @@ function NotFound() {
     document.title = 'Video not found'
   }, [])
   return (
-    <section>
+    <section className="page">
       <h1>Video not found</h1>
       <p>
-        <Link to="/">Back to Library</Link>
+        <Link className="btn" to="/">
+          Back to Library
+        </Link>
       </p>
     </section>
   )
@@ -151,10 +153,11 @@ function VideoPage({ videoId }: { videoId: string }) {
     if (query.isError) {
       if (query.error instanceof VideoApiError && query.error.status === 404) return <NotFound />
       return (
-        <section>
+        <section className="page">
           <h1>Could not load this video</h1>
-          <p>Something went wrong. Try again.</p>
+          <p className="alert alert--danger">Something went wrong. Try again.</p>
           <button
+            className="btn btn--primary"
             type="button"
             onClick={() => {
               void query.refetch()
@@ -165,7 +168,7 @@ function VideoPage({ videoId }: { videoId: string }) {
         </section>
       )
     }
-    return <p role="status">Loading video…</p>
+    return <p className="muted" role="status">Loading video…</p>
   }
 
   const channel = video.channel_title || video.channel_id
@@ -178,10 +181,10 @@ function VideoPage({ videoId }: { videoId: string }) {
   ].filter((x): x is string => x !== null && x !== '')
 
   return (
-    <article>
+    <article className="page video-detail">
       <h1>{heading}</h1>
       {meta.length > 0 && (
-        <p>
+        <p className="muted">
           {meta.map((m, i) => (
             <Fragment key={i}>
               {i > 0 && ' · '}
@@ -190,7 +193,7 @@ function VideoPage({ videoId }: { videoId: string }) {
           ))}
         </p>
       )}
-      <p>
+      <p className="row video-detail__links">
         <a href={buildWatchUrl(videoId)} target="_blank" rel="noopener noreferrer">
           Open on YouTube
         </a>
@@ -216,9 +219,9 @@ function VideoPage({ videoId }: { videoId: string }) {
         )}
       </p>
       <Player videoId={videoId} title={heading ?? undefined} />
-      {video.unavailable !== null && analysis !== null && <p>{UNAVAILABLE_NOTE}</p>}
-      {analysis !== null && video.active_job !== null && <p>Re-analysis in progress</p>}
-      {analysis === null ? <p role="status">{pipelineStatus(video)}</p> : <AnalysisView analysis={analysis} />}
+      {video.unavailable !== null && analysis !== null && <p className="alert">{UNAVAILABLE_NOTE}</p>}
+      {analysis !== null && video.active_job !== null && <p className="alert">Re-analysis in progress</p>}
+      {analysis === null ? <p className="alert" role="status">{pipelineStatus(video)}</p> : <AnalysisView analysis={analysis} />}
       {video.active_job !== null && video.progress != null && (
         <div>
           <JobProgress kind={video.active_job.kind} state={video.active_job.state} progress={video.progress} />

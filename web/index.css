@@ -565,6 +565,53 @@ a:focus {
   color: var(--color-link-hover);
 }
 
+/* ---- Video detail (#125) ----
+ * AnalysisView and ClaimItem are shared with Compare, so their sections are
+ * styled only as direct children of .video-detail. */
+
+.video-detail > h1 {
+  overflow-wrap: anywhere;
+}
+
+.video-detail__links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--touch-target);
+}
+
+.video-detail > section {
+  padding: var(--space-md);
+  background: var(--color-card);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  overflow-wrap: anywhere;
+}
+
+.video-detail > section > h2 {
+  margin: 0 0 var(--space-sm);
+}
+
+.video-detail > section > :last-child {
+  margin-bottom: 0;
+}
+
+.video-detail > section ul,
+.video-detail > section ol {
+  margin: 0;
+  padding-left: var(--space-lg);
+}
+
+.video-detail > section li + li {
+  margin-top: var(--space-sm);
+}
+
+.video-detail > footer {
+  color: var(--color-muted);
+  font-size: 14px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 /* ---- Player ---- */
 
 .player {
