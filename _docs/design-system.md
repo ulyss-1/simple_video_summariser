@@ -428,7 +428,8 @@ Owner decision: **Option C — Hybrid**, a modern, balanced direction.
 | Text (secondary/muted) | `#6b7280` | 4.8:1 on white |
 | Background (main) | `#ffffff` | |
 | Background (surface, cards) | `#f9fafb` | Soft lift from main |
-| Border | `#e5e7eb` | Divides regions and table cells |
+| Border | `#e5e7eb` | Divides regions and table cells (decorative, exempt from 1.4.11) |
+| Control border | `#6b7280` | `.input`/`.btn` outline; 4.8:1 on bg and card (`#ffffff`), 4.6:1 on surface (`#f9fafb`) |
 | Link | `#7c3aed` | Purple, 5.7:1 on white |
 | Link (visited) | `#a855f7` | Lighter purple, 4.0:1 on white (below AA for body text; visited state only) |
 | Link (hover/focus) | `#6d28d9` | Darker purple |
@@ -471,7 +472,7 @@ Applied: body padding `1rem`; section margin `1.5rem 0 0.5rem`; input padding `0
 - **Content padding:** `1rem` on sides; `1.5rem` vertical between sections
 - **Card styling:** white background, `1rem` padding, `6px` border-radius, `0 2px 8px rgba(0,0,0,0.08)` shadow
 - **Table styling:** `th` background `#f3f4f6`, `border-bottom 2px solid #e5e7eb`; `td` padding `0.75rem`, `border-bottom 1px solid #e5e7eb`
-- **Form inputs:** `1rem` width, `0.5rem 0.75rem` padding, `1px solid #e5e7eb` border, `4px` border-radius, focus ring on focus
+- **Form inputs:** `1rem` width, `0.5rem 0.75rem` padding, `1px solid` control-border (`--color-control-border`), `4px` border-radius, focus ring on focus
 
 ### App shell
 
@@ -515,7 +516,8 @@ with primary text):
 | Muted | `#6b7280` | `#9ca3af` | 7.0:1 on bg, 5.8:1 on surface |
 | Background | `#ffffff` | `#111827` | |
 | Surface | `#f9fafb` | `#1f2937` | |
-| Border | `#e5e7eb` | `#4b5563` | 2.3:1 on bg, divider only |
+| Border | `#e5e7eb` | `#4b5563` | 2.3:1 on bg, divider only (decorative; never used for control outlines) |
+| Control border | `#6b7280` | `#7c8596` | `.input`/`.btn` outline, WCAG 1.4.11 (3:1). Dark: 4.8:1 on bg `#111827`, 3.95:1 on surface/card `#1f2937` (worst case). Light: 4.8:1 / 4.6:1 (see above). Distinct from Border so dividers stay light |
 | Link | `#7c3aed` | `#a78bfa` | 6.5:1 on bg, 5.4:1 on surface |
 | Link (visited) | `#a855f7` | `#c4b5fd` | 9.6:1 |
 | Link (hover/focus) | `#6d28d9` | `#ddd6fe` | 12.8:1 |
@@ -548,7 +550,7 @@ printable page (`services/api/render.py`) keeps its own light print styles.
 ### Button variants
 
 - **Primary:** purple background (`#7c3aed`), white text, `0.5rem 1rem` padding, `4px` radius, hover darker
-- **Secondary:** white background, `#1f2937` text, `1px solid #e5e7eb` border, `4px` radius, hover `#f9fafb`
+- **Secondary:** white background, `#1f2937` text, `1px solid` control-border (`--color-control-border`), `4px` radius, hover `#f9fafb`
 - **Disabled:** `opacity: 0.5`, `cursor: not-allowed` (native `disabled` attribute)
 - **No icon buttons:** every button has visible text
 

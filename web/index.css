@@ -15,6 +15,7 @@
   --color-bg: #ffffff;
   --color-surface: #f9fafb;
   --color-border: #e5e7eb;
+  --color-control-border: #6b7280;
   --color-link: #7c3aed;
   --color-link-visited: #a855f7;
   --color-link-hover: #6d28d9;
@@ -62,6 +63,7 @@
     --color-bg: #111827;
     --color-surface: #1f2937;
     --color-border: #4b5563;
+    --color-control-border: #7c8596;
     --color-link: #a78bfa;
     --color-link-visited: #c4b5fd;
     --color-link-hover: #ddd6fe;
@@ -89,6 +91,7 @@
   --color-bg: #111827;
   --color-surface: #1f2937;
   --color-border: #4b5563;
+  --color-control-border: #7c8596;
   --color-link: #a78bfa;
   --color-link-visited: #c4b5fd;
   --color-link-hover: #ddd6fe;
@@ -302,7 +305,7 @@ a:focus {
   padding: var(--space-sm) 0.75rem;
   background: var(--color-bg);
   color: var(--color-text);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-control-border);
   border-radius: var(--radius-sm);
   font-family: var(--font-sans);
   font-size: 16px;
@@ -328,7 +331,7 @@ a:focus {
   padding: var(--space-sm) var(--space-md);
   background: var(--color-bg);
   color: var(--color-text);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-control-border);
   border-radius: var(--radius-sm);
   font-family: var(--font-sans);
   font-size: 16px;
