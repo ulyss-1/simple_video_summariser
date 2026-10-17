@@ -28,3 +28,42 @@ def public_url(value: str, *, invalid: str = "<invalid URL>") -> str:
         return invalid
     shown = f"[{name}]" if ":" in name else name
     return f"{parts.scheme}://{shown}" + (f":{port}" if port is not None else "")
+
+
+DSN_PASSWORD_PLACEHOLDER = "***"
+_DSN_SCHEMES = ("postgresql", "postgres")
+
+
+def safe_dsn(value: str, *, invalid: str = "<invalid DSN>") -> str:
+    """``postgresql://user:***@host:port/dbname`` rebuilt from the parsed ``value``.
+
+    Like ``public_url``, the result is assembled from parsed components, never
+    scrubbed out of the original text: the password is replaced by a fixed
+    placeholder, and the query string (which may carry ``password=``) and
+    fragment are dropped. ``invalid`` is returned for anything that does not
+    parse as a ``postgresql://`` or ``postgres://`` URI - including a
+    malformed one such as ``postgresql://u:pw@[bad/db``, whose password a
+    replace-based scrubber could never find.
+    """
+    try:
+        parts = urlsplit(value)
+        name = parts.hostname
+        port = parts.port
+        user = parts.username
+        has_password = parts.password is not None
+    except ValueError:
+        return invalid
+    if parts.scheme not in _DSN_SCHEMES:
+        return invalid
+    userinfo = ""
+    if user is not None or has_password:
+        userinfo = user or ""
+        if has_password:
+            userinfo += f":{DSN_PASSWORD_PLACEHOLDER}"
+        userinfo += "@"
+    shown = f"[{name}]" if name and ":" in name else (name or "")
+    return (
+        f"{parts.scheme}://{userinfo}{shown}"
+        + (f":{port}" if port is not None else "")
+        + parts.path
+    )
