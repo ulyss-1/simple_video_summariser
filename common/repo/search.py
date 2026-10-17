@@ -29,6 +29,13 @@ raises a syntax error. A query with no positive term (only stop words, or
 only exclusions such as ``-dogs``, which would otherwise match nearly every
 transcript) returns no results without running the search.
 
+Title and analysis excerpts (#169): ``ts_headline`` with the English query over
+``videos.title`` and ``search_docs.analysis_text`` (TL;DR, topics, claims and the
+description, materialised by ``refresh_search_doc``, migration 0016, so the
+latest-analysis selection lives in one place), each only when that source is in
+``matched_in``, through the same marker, strip and ``<>&`` protection, with
+``start_sec`` ``None``. Order: title, analysis, transcript.
+
 Excerpts (#110) are windows over the preferred transcript's ``segments``: one
 segment whose text matches, or two adjacent segments that match only when
 joined, each with the ``start`` of its first segment (at most 3, best
@@ -57,6 +64,11 @@ _RESTORE = str.maketrans({v: k for k, v in _PROTECT.items()})
 
 #: The ts_headline options: at most 3 fragments of about 35 words.
 HEADLINE_OPTIONS = "MaxFragments=3, MaxWords=35, MinWords=15, ShortWord=0"
+#: The ``ts_headline`` options argument shared by every multi-fragment headline.
+_HEADLINE_ARGS = (
+    "'StartSel=' || chr(1) || ', StopSel=' || chr(2)"
+    f" || ', FragmentDelimiter=' || chr(3) || ', {HEADLINE_OPTIONS}'"
+)
 #: A segment window is one short text: a single fragment of the same size.
 WINDOW_OPTIONS = "MaxFragments=0, MaxWords=35, MinWords=15, ShortWord=0"
 
@@ -157,7 +169,7 @@ WITH q AS (
 ),
 page AS (
     SELECT v.video_id, v.title, v.channel_id, c.title AS channel_title,
-           v.published_at, v.duration_sec, v.unavailable, sd.fts,
+           v.published_at, v.duration_sec, v.unavailable, sd.fts, sd.analysis_text,
            bt.id AS transcript_id, k.cfg,
            ts_rank_cd('{RANK_WEIGHTS}', sd.fts, r.rq, 1) AS rank
     FROM q
@@ -181,12 +193,23 @@ page AS (
 SELECT page.video_id, page.title, page.channel_id, page.channel_title,
        page.published_at, page.duration_sec, page.unavailable, t.source,
        m.in_title, m.in_analysis, m.in_transcript, w.windows,
+       CASE WHEN m.in_title THEN ts_headline(
+           'english',
+           translate(translate(page.title, {_STRIPPED}, ''), '<>&', {_PROTECTED}),
+           r.en,
+           {_HEADLINE_ARGS}
+       ) END AS title_headline,
+       CASE WHEN m.in_analysis THEN ts_headline(
+           'english',
+           translate(translate(page.analysis_text, {_STRIPPED}, ''), '<>&', {_PROTECTED}),
+           r.en,
+           {_HEADLINE_ARGS}
+       ) END AS analysis_headline,
        CASE WHEN m.in_transcript AND jsonb_array_length(w.windows) = 0 THEN ts_headline(
            page.cfg,
            translate(translate(t.full_text, {_STRIPPED}, ''), '<>&', {_PROTECTED}),
            r.own,
-           'StartSel=' || chr(1) || ', StopSel=' || chr(2)
-               || ', FragmentDelimiter=' || chr(3) || ', {HEADLINE_OPTIONS}'
+           {_HEADLINE_ARGS}
        ) END
 FROM page
 CROSS JOIN q
@@ -276,7 +299,8 @@ def _has_positive_term(conn: psycopg.Connection[Any], query: str) -> bool:
 
 def _hit(row: tuple[Any, ...]) -> SearchHit:
     (video_id, title, channel_id, channel_title, published_at, duration_sec, unavailable,
-     source, in_title, in_analysis, in_transcript, windows, headline) = row
+     source, in_title, in_analysis, in_transcript, windows, title_headline, analysis_headline,
+     headline) = row
     matched_in: list[Literal["title", "analysis", "transcript"]] = []
     if in_title:
         matched_in.append("title")
@@ -294,7 +318,11 @@ def _hit(row: tuple[Any, ...]) -> SearchHit:
         unavailable=unavailable,
         transcript_source=source,
         matched_in=tuple(matched_in),
-        excerpts=_window_excerpts(windows) or _excerpts(headline or ""),
+        excerpts=(
+            _excerpts(title_headline or "")
+            + _excerpts(analysis_headline or "")
+            + (_window_excerpts(windows) or _excerpts(headline or ""))
+        ),
     )
 
 

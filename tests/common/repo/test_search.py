@@ -502,7 +502,9 @@ def test_a_title_only_match_surfaces_the_video(conn: psycopg.Connection[Any]) ->
     [hit] = _search(conn, "zebra").results
 
     assert (hit.video_id, hit.matched_in) == ("title000001", ("title",))
-    assert hit.excerpts == ()
+    assert [(e.start_sec, [s.text for s in e.spans if s.match]) for e in hit.excerpts] == [
+        (None, ["Zebra"])
+    ]
 
 
 def test_a_titled_video_without_transcript_or_analysis_matches_its_title(
@@ -514,7 +516,7 @@ def test_a_titled_video_without_transcript_or_analysis_matches_its_title(
 
     assert hit.transcript_source is None
     assert hit.matched_in == ("title",)
-    assert hit.excerpts == ()
+    assert [e.start_sec for e in hit.excerpts] == [None]
 
 
 def test_matching_works_across_sources(conn: psycopg.Connection[Any]) -> None:
@@ -551,7 +553,7 @@ def test_matched_in_lists_every_matching_source_in_fixed_order(
     assert hits["mi000000003"].matched_in == ("analysis", "transcript")
 
 
-def test_excerpts_stay_transcript_only_and_are_empty_without_a_transcript_match(
+def test_an_analysis_only_match_has_an_analysis_excerpt_and_no_transcript_excerpt(
     conn: psycopg.Connection[Any],
 ) -> None:
     _full(conn, "ex000000001", tldr="a zebra summary", transcript="plain talk about horses")
@@ -560,7 +562,9 @@ def test_excerpts_stay_transcript_only_and_are_empty_without_a_transcript_match(
 
     assert hit.matched_in == ("analysis",)
     assert hit.transcript_source == "whisper"
-    assert hit.excerpts == ()
+    [excerpt] = hit.excerpts
+    assert excerpt.start_sec is None
+    assert Span("zebra", True) in excerpt.spans
 
 
 def test_a_negated_word_does_not_count_as_a_match_source(conn: psycopg.Connection[Any]) -> None:
@@ -1204,7 +1208,9 @@ def test_a_non_english_row_found_by_its_title_does_not_claim_a_transcript_match(
     [hit] = _search(conn, "running").results
 
     assert hit.matched_in == ("title",)
-    assert not any(s.match for e in hit.excerpts for s in e.spans)
+    [excerpt] = hit.excerpts  # the title's; the transcript contributes none
+    assert excerpt.start_sec is None
+    assert [s.text for s in excerpt.spans if s.match] == ["Running"]
 
 
 def test_a_source_a_row_is_admitted_on_is_reported_and_highlighted(
@@ -1218,7 +1224,7 @@ def test_a_source_a_row_is_admitted_on_is_reported_and_highlighted(
     _transcript(conn, "arm00000004", "she will run home", language="pl")
 
     for q, vid, sources, word in [
-        ("farm", "arm00000003", ("title",), None),
+        ("farm", "arm00000003", ("title",), "farms"),
         ("Häuser", "arm00000003", ("transcript",), "Häuser"),
         ("run", "arm00000004", ("transcript",), "run"),
     ]:
@@ -1245,7 +1251,7 @@ def test_the_sql_itself_returns_at_most_three_windows(conn: psycopg.Connection[A
     _segments(conn, "sqlwin00001", [(i, f"zebra n{i}") for i in range(7)])
     [row] = conn.execute(SEARCH_SQL, {"q": "zebra", "offset": 0, "limit": 5}).fetchall()
 
-    windows = row[-2]
+    windows = row[-4]
 
     assert [w[0] for w in windows] == sorted(w[0] for w in windows)
     assert len(windows) == 3
@@ -1404,7 +1410,7 @@ def _described(
 @pytest.mark.parametrize(
     "transcript", [None, ("plain words", "en"), ("einfache worte hier", "de")]
 )
-def test_a_description_only_match_returns_the_video_without_excerpts(
+def test_a_description_only_match_returns_the_video_with_an_analysis_excerpt(
     conn: psycopg.Connection[Any], transcript: tuple[str, str | None] | None
 ) -> None:
     _described(conn, "desc0000001", "all about okapis", transcript=transcript)
@@ -1412,7 +1418,9 @@ def test_a_description_only_match_returns_the_video_without_excerpts(
     page = _search(conn, "okapis")
 
     assert _ids(page) == ["desc0000001"]
-    assert page.results[0].excerpts == ()
+    [excerpt] = page.results[0].excerpts
+    assert excerpt.start_sec is None
+    assert excerpt.spans == (Span("all about ", False), Span("okapis", True))
 
 
 def test_title_outranks_description_outranks_transcript(conn: psycopg.Connection[Any]) -> None:
@@ -1424,3 +1432,131 @@ def test_title_outranks_description_outranks_transcript(conn: psycopg.Connection
     conn.execute("UPDATE videos SET published_at = '2026-02-01Z' WHERE video_id = 'rk_trans_00'")
 
     assert _ids(_search(conn, "okapi")) == ["rk_title_00", "rk_desc_000", "rk_trans_00"]
+
+
+# --- title and analysis excerpts (#169) -----------------------------------------
+
+
+def _marked(excerpts: Any) -> list[str]:
+    return [s.text for e in excerpts for s in e.spans if s.match]
+
+
+def test_a_title_only_match_has_a_marked_title_excerpt(conn: psycopg.Connection[Any]) -> None:
+    _full(conn, "tx000000001", title="The Zebra Report")
+
+    [hit] = _search(conn, "zebra").results
+
+    assert hit.matched_in == ("title",)
+    [excerpt] = hit.excerpts
+    assert excerpt.start_sec is None
+    assert excerpt.spans == (Span("The ", False), Span("Zebra", True), Span(" Report", False))
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"tldr": "a zebra tldr"},
+        {"topic": ("zebra topic", "x")},
+        {"topic": ("t", "a zebra summary")},
+        {"claim": "a zebra claim"},
+    ],
+)
+def test_each_analysis_field_gives_a_marked_excerpt(
+    conn: psycopg.Connection[Any], kwargs: dict[str, Any]
+) -> None:
+    _full(conn, "ax000000001", **kwargs)
+
+    [hit] = _search(conn, "zebra").results
+
+    assert hit.matched_in == ("analysis",)
+    assert _marked(hit.excerpts) == ["zebra"]
+    assert all(e.start_sec is None for e in hit.excerpts)
+
+
+def test_a_cross_source_hit_has_title_then_analysis_then_transcript_excerpts(
+    conn: psycopg.Connection[Any],
+) -> None:
+    _full(
+        conn, "xs000000001", title="Fridman talks", tldr="plain nuclear summary",
+        transcript="the nuclear plant",
+    )
+
+    [hit] = _search(conn, "fridman OR nuclear").results
+
+    assert hit.matched_in == ("title", "analysis", "transcript")
+    assert [e.start_sec for e in hit.excerpts] == [None, None, 0.0]
+    assert [_marked([e]) for e in hit.excerpts] == [["Fridman"], ["nuclear"], ["nuclear"]]
+
+
+def test_title_and_transcript_hit_keeps_the_transcript_window(
+    conn: psycopg.Connection[Any],
+) -> None:
+    _video(conn, "xt000000001", title="Fridman")
+    _transcript(conn, "xt000000001", "about nuclear power")
+
+    [hit] = _search(conn, "fridman OR nuclear").results
+
+    assert hit.matched_in == ("title", "transcript")
+    assert [e.start_sec for e in hit.excerpts] == [None, 0.0]
+
+
+def test_a_title_hit_without_a_transcript_has_no_transcript_excerpt(
+    conn: psycopg.Connection[Any],
+) -> None:
+    _video(conn, "nt000000001", title="Zebra")
+
+    [hit] = _search(conn, "zebra").results
+
+    assert hit.transcript_source is None
+    assert [e.start_sec for e in hit.excerpts] == [None]
+
+
+def test_a_matched_source_with_no_excerptable_text_contributes_nothing(
+    conn: psycopg.Connection[Any],
+) -> None:
+    # Only a negated or stop-word-free lexeme elsewhere: no analysis text at all.
+    _video(conn, "ne000000001", title="Zebra")
+
+    [hit] = _search(conn, "zebra").results
+
+    assert hit.matched_in == ("title",)
+    assert all(e.spans for e in hit.excerpts)
+
+
+HOSTILE = "zebra <script>alert(1)</script> & <mark>fake</mark> \x01fake\x02 \x03 \ue000x\ue001 \ue002"
+
+
+def _assert_inert(excerpts: Any) -> None:
+    assert _marked(excerpts) == ["zebra"]
+    text = "".join(s.text for e in excerpts for s in e.spans)
+    assert "<script>alert(1)</script>" in text and "<mark>fake</mark>" in text
+    for e in excerpts:
+        for sp in e.spans:
+            assert not any(c in sp.text for c in "\x01\x02\x03")
+
+
+def test_hostile_title_text_cannot_forge_a_match_or_inject(
+    conn: psycopg.Connection[Any],
+) -> None:
+    _full(conn, "hx000000001", title=HOSTILE)
+
+    [hit] = _search(conn, "zebra").results
+
+    _assert_inert(hit.excerpts)
+
+
+@pytest.mark.parametrize("field", ["tldr", "topic", "claim", "description"])
+def test_hostile_analysis_text_cannot_forge_a_match_or_inject(
+    conn: psycopg.Connection[Any], field: str
+) -> None:
+    if field == "topic":
+        _full(conn, "hy000000001", topic=(HOSTILE, "plain"))
+    elif field == "description":
+        _described(conn, "hy000000001", HOSTILE)
+    else:
+        kw: dict[str, Any] = {field: HOSTILE}
+        _full(conn, "hy000000001", **kw)
+
+    [hit] = _search(conn, "zebra").results
+
+    _assert_inert(hit.excerpts)
