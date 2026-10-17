@@ -3,8 +3,8 @@
 ``search_transcripts`` matches ``search_docs.fts`` (GIN index
 ``search_docs_fts_idx``). That
 vector is materialised per video by the database (migration 0010): title (weight
-A), latest analysis TL;DR (B), topics and claims (C) and the preferred
-transcript (D). Only a video's preferred transcript counts: the one with the
+A), latest analysis TL;DR (B), topics and claims (C), the video description (C,
+English, migration 0015, #168) and the preferred transcript (D). Only a video's preferred transcript counts: the one with the
 lowest ``transcript_rank(source)`` (D2), the same one ``get_best_transcript``
 returns. Results are ranked by ``ts_rank_cd`` with explicit weights and length
 normalisation, then ``published_at`` (newest first, nulls last), then

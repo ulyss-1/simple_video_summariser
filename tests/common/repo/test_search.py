@@ -1382,3 +1382,45 @@ def test_html_characters_before_a_match_are_restored(conn: psycopg.Connection[An
     [hit] = _search(conn, "zebra").results
 
     assert "x < y & <b> and " in "".join(s.text for s in hit.excerpts[0].spans)
+
+
+# --- description (#168) ---------------------------------------------------------
+
+
+def _described(
+    conn: psycopg.Connection[Any],
+    video_id: str,
+    description: str,
+    *,
+    title: str = "plain title",
+    transcript: tuple[str, str | None] | None = None,
+) -> None:
+    _video(conn, video_id, title=title)
+    conn.execute("UPDATE videos SET description = %s WHERE video_id = %s", (description, video_id))
+    if transcript is not None:
+        _transcript(conn, video_id, transcript[0], language=transcript[1])
+
+
+@pytest.mark.parametrize(
+    "transcript", [None, ("plain words", "en"), ("einfache worte hier", "de")]
+)
+def test_a_description_only_match_returns_the_video_without_excerpts(
+    conn: psycopg.Connection[Any], transcript: tuple[str, str | None] | None
+) -> None:
+    _described(conn, "desc0000001", "all about okapis", transcript=transcript)
+
+    page = _search(conn, "okapis")
+
+    assert _ids(page) == ["desc0000001"]
+    assert page.results[0].excerpts == ()
+
+
+def test_title_outranks_description_outranks_transcript(conn: psycopg.Connection[Any]) -> None:
+    # Equal length, one "okapi" each; the transcript hit is the newest.
+    _described(conn, "rk_desc_000", "plain okapi words")
+    _video(conn, "rk_title_00", title="okapi title")
+    conn.execute("UPDATE videos SET description = 'plain words' WHERE video_id = 'rk_title_00'")
+    _described(conn, "rk_trans_00", "plain words", transcript=("okapi plain words", "en"))
+    conn.execute("UPDATE videos SET published_at = '2026-02-01Z' WHERE video_id = 'rk_trans_00'")
+
+    assert _ids(_search(conn, "okapi")) == ["rk_title_00", "rk_desc_000", "rk_trans_00"]
