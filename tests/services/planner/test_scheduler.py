@@ -18,7 +18,9 @@ import psycopg
 import pytest
 from structlog.testing import capture_logs
 
-from services.planner.scheduler import Scheduler, Task
+from services.planner.backfill import BACKFILL_REQUEST_LIST_TIMEOUT_SEC
+from services.planner.main import TASK_LIVENESS_CEILING_SEC
+from services.planner.scheduler import MAX_SLEEP_SLICE_SEC, Scheduler, Task
 
 # ---------------------------------------------------------------------------
 # doubles
@@ -525,3 +527,105 @@ def test_run_once_does_not_back_off_when_the_database_is_down(h: Harness) -> Non
 
     assert sched.run_once() is False
     assert h.clock.sleeps == []
+
+
+# ---------------------------------------------------------------------------
+# background liveness ticker (issue #208)
+# ---------------------------------------------------------------------------
+
+HEALTH_WINDOW_SEC = 180  # compose.yml &worker-health: interval 60 x retries 3
+
+
+class FakeTimers:
+    """A timer_factory that captures callbacks; the test fires them by hand."""
+
+    def __init__(self) -> None:
+        self.pending: list[Callable[[], None]] = []
+        self.cancelled = 0
+
+    def __call__(self, interval: float, function: Callable[[], None]) -> Any:
+        assert interval == MAX_SLEEP_SLICE_SEC
+        self.pending.append(function)
+        timers = self
+
+        class _Handle:
+            def cancel(self) -> None:
+                timers.cancelled += 1
+                if function in timers.pending:
+                    timers.pending.remove(function)
+
+        return _Handle()
+
+    def fire(self) -> None:
+        self.pending.pop()()
+
+
+def _build_with_timers(h: Harness, timers: FakeTimers, task: Task, ceiling: float) -> Scheduler:
+    h.scheduler = Scheduler(
+        [task],
+        h.locks,
+        clock=h.clock,
+        sleep=h.clock.sleep,
+        liveness_path=h.liveness,
+        install_signal_handlers=False,
+        timer_factory=timers,
+        task_liveness_ceiling_sec=ceiling,
+    )
+    return h.scheduler
+
+
+def test_liveness_is_refreshed_mid_task_during_a_listing_longer_than_the_window(
+    tmp_path: Path,
+) -> None:
+    h = Harness(tmp_path)
+    timers = FakeTimers()
+    seen: list[float] = []
+
+    def listing() -> None:
+        # a 300 s listing, with the ticker firing every 30 s of fake time
+        h.liveness.touch()
+        os.utime(h.liveness, (0, 0))
+        for _ in range(10):
+            h.clock.now += 30
+            timers.fire()
+            seen.append(h.liveness.stat().st_mtime)
+            os.utime(h.liveness, (0, 0))
+
+    sched = _build_with_timers(h, timers, h.task("backfill", 3600, during=listing), 360)
+    sched.run(max_iterations=1)
+
+    assert h.clock.now >= BACKFILL_REQUEST_LIST_TIMEOUT_SEC
+    assert len(seen) == 10 and all(m > 0 for m in seen)
+    assert timers.pending == []  # cancelled once the task completed
+
+
+def test_ticker_stops_past_the_ceiling_so_a_wedged_task_ages_out(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    timers = FakeTimers()
+
+    def wedged() -> None:
+        h.liveness.touch()
+        os.utime(h.liveness, (0, 0))
+        h.clock.now += 360  # at the ceiling
+        timers.fire()
+
+    sched = _build_with_timers(h, timers, h.task("wedge", 3600, during=wedged), 360)
+    sched.run(max_iterations=1)
+
+    assert h.liveness.stat().st_mtime == 0  # the tick did not refresh it
+    assert timers.pending == []  # and did not re-arm
+
+
+def test_ticker_is_cancelled_when_the_task_raises(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    timers = FakeTimers()
+    sched = _build_with_timers(h, timers, h.task("a", 3600, raises=RuntimeError("x")), 360)
+
+    sched.run(max_iterations=1)
+
+    assert timers.pending == [] and timers.cancelled == 1
+
+
+def test_liveness_cadence_and_ceiling_are_consistent() -> None:
+    assert MAX_SLEEP_SLICE_SEC < HEALTH_WINDOW_SEC
+    assert TASK_LIVENESS_CEILING_SEC >= BACKFILL_REQUEST_LIST_TIMEOUT_SEC

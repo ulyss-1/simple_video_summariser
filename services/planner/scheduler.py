@@ -25,7 +25,10 @@ callables must not think about:
   timestamps from an injected wall clock. A recorder that raises is logged
   (``planner.record_failed``) and otherwise ignored.
 - **Liveness.** The liveness file is touched on every loop iteration and idle
-  waits are cut into slices of at most ``MAX_SLEEP_SLICE_SEC``.
+  waits are cut into slices of at most ``MAX_SLEEP_SLICE_SEC``. While a task
+  runs, a daemon timer touches it every ``MAX_SLEEP_SLICE_SEC`` too (#208), but
+  only until the task has run ``task_liveness_ceiling_sec``: past that the
+  file is left to age out, so a wedged task still fails the health check.
 - **Shutdown.** SIGTERM/SIGINT call ``request_shutdown()``: a task in flight
   finishes and releases its lock, nothing else starts, ``run()`` returns.
 
@@ -37,6 +40,7 @@ from __future__ import annotations
 import os
 import select
 import signal
+import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -56,8 +60,33 @@ _log = structlog.get_logger(__name__)
 #: under 180 s old across a 3600 s gap).
 MAX_SLEEP_SLICE_SEC = 30.0
 
+#: Default per-task bound on the background liveness ticker (#208). It must
+#: stay >= the longest task timeout (``BACKFILL_REQUEST_LIST_TIMEOUT_SEC``,
+#: 300 s); ``main`` derives the real value from it.
+DEFAULT_TASK_LIVENESS_CEILING_SEC = 360.0
+
 _INITIAL_DB_BACKOFF_SEC = 1.0
 _DEFAULT_MAX_DB_BACKOFF_SEC = 60.0
+
+
+
+class TimerHandle(Protocol):
+    """What ``timer_factory`` must hand back: something cancellable."""
+
+    def cancel(self) -> None: ...
+
+
+#: Runs ``function`` once after ``interval`` seconds; same shape as
+#: ``common.worker.TimerFactory``. Injected so tests fire ticks by hand.
+TimerFactory = Callable[[float, Callable[[], None]], TimerHandle]
+
+
+def _default_timer_factory(interval: float, function: Callable[[], None]) -> TimerHandle:
+    timer = threading.Timer(interval, function)
+    timer.daemon = True
+    timer.start()
+    return timer
+
 
 type Outcome = Literal["ok", "failed", "skipped_locked"]
 
@@ -163,7 +192,11 @@ class Scheduler:
         install_signal_handlers: bool = True,
         recorder: RunRecorder | None = None,
         wall_clock: Callable[[], datetime] = _utc_now,
+        timer_factory: TimerFactory = _default_timer_factory,
+        task_liveness_ceiling_sec: float = DEFAULT_TASK_LIVENESS_CEILING_SEC,
     ) -> None:
+        self._timer_factory = timer_factory
+        self._task_liveness_ceiling_sec = task_liveness_ceiling_sec
         self._tasks = list(tasks)
         self._recorder: RunRecorder = recorder if recorder is not None else NoopRecorder()
         self._wall_clock = wall_clock
@@ -324,6 +357,7 @@ class Scheduler:
         outcome: Outcome = "ok"
         result: int | None = None
         error: str | None = None
+        stop_ticker = self._start_liveness_ticker()
         try:
             result = task.fn()
         except Exception as exc:  # noqa: BLE001 - a failing task must not stop the others
@@ -336,6 +370,7 @@ class Scheduler:
                 exc_info=True,
             )
         finally:
+            stop_ticker()
             self._release(task)
         self._safely_record(
             task,
@@ -441,6 +476,34 @@ class Scheduler:
             self._liveness_path.touch()
         except OSError as exc:
             _log.error("planner.liveness_touch_failed", error=str(exc))
+
+    def _start_liveness_ticker(self) -> Callable[[], None]:
+        """Touch liveness every ``MAX_SLEEP_SLICE_SEC`` while a task runs (#208).
+
+        Stops re-arming once the task has run ``task_liveness_ceiling_sec``, so
+        a wedged task lets the file age out. Returns ``stop()``, which cancels
+        the pending timer and makes any in-flight tick a no-op.
+        """
+        started = self._clock()
+        stopped = threading.Event()
+        lock = threading.Lock()
+        handle_box: dict[str, TimerHandle] = {}
+
+        def _tick() -> None:
+            with lock:
+                if stopped.is_set() or self._clock() - started >= self._task_liveness_ceiling_sec:
+                    return
+                self._touch_liveness()
+                handle_box["handle"] = self._timer_factory(MAX_SLEEP_SLICE_SEC, _tick)
+
+        handle_box["handle"] = self._timer_factory(MAX_SLEEP_SLICE_SEC, _tick)
+
+        def stop() -> None:
+            with lock:
+                stopped.set()
+                handle_box["handle"].cancel()
+
+        return stop
 
     # -- signals ------------------------------------------------------------------
 
