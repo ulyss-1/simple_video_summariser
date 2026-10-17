@@ -158,43 +158,62 @@ SANCTIONED_BUILDER = "adapters/youtube/ytdlp.py"
 SCANNED_DIRS = ("adapters", "services", "common")
 
 
-def _fold(node: ast.expr) -> str | None:
-    """The string a constant expression evaluates to (``"a" + "b"``), else None."""
+def _runs(node: ast.expr) -> list[str]:
+    """String constants of ``node``, with adjacent ones of a ``+`` chain joined.
+
+    ``"--coo" + "kies" + p`` gives ``["--cookies"]``; ``"--cookies=" + p`` gives
+    ``["--cookies="]``. Anything that is not a string or a ``+`` chain gives [].
+    """
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return node.value
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-        left, right = _fold(node.left), _fold(node.right)
-        if left is not None and right is not None:
-            return left + right
-    return None
+        return [node.value]
+    if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add)):
+        return []
+    leaves: list[ast.expr] = []
+    stack: list[ast.expr] = [node]
+    while stack:
+        n = stack.pop()
+        if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Add):
+            stack.extend((n.right, n.left))
+        else:
+            leaves.append(n)
+    runs: list[str] = []
+    joined = False
+    for leaf in leaves:
+        if isinstance(leaf, ast.Constant) and isinstance(leaf.value, str):
+            if joined:
+                runs[-1] += leaf.value
+            else:
+                runs.append(leaf.value)
+            joined = True
+        else:
+            joined = False
+    return runs
 
 
 def cookie_flag_offenders(sources: Mapping[str, str]) -> list[str]:
     """Paths (``dir/file.py`` keys) building ``--cookies`` outside the one builder.
 
-    Pure over ``{path: source}``. Parses each file and folds constant string
-    concatenation, so ``"--coo" "kies"`` and ``"--coo" + "kies"`` are caught
-    along with the plain literal. Docstrings (bare string statements) are
-    prose, not argv, and are skipped.
+    Pure over ``{path: source}``. Parses each file and joins constant string
+    segments, so ``"--coo" "kies"``, ``"--coo" + "kies"``, ``"--cookies" + var``
+    and ``"--coo" + "kies" + p`` are all caught along with the plain literal.
+    Docstrings (bare string statements) are prose, not argv, and are skipped.
     """
     offenders = []
     for path, source in sources.items():
         if path == SANCTIONED_BUILDER:
             continue
         tree = ast.parse(source)
-        docstrings = {
-            id(n.value) for n in ast.walk(tree) if isinstance(n, ast.Expr)
-        }
+        docstrings = {id(n.value) for n in ast.walk(tree) if isinstance(n, ast.Expr)}
         inner = {
             id(c)
             for n in ast.walk(tree)
-            if isinstance(n, ast.BinOp)
+            if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Add)
             for c in (n.left, n.right)
         }
         for node in ast.walk(tree):
-            if id(node) in docstrings or id(node) in inner:
+            if id(node) in docstrings or id(node) in inner or not isinstance(node, ast.expr):
                 continue
-            if isinstance(node, ast.expr) and "--cookies" in (_fold(node) or ""):
+            if any("--cookies" in run for run in _runs(node)):
                 offenders.append(path)
                 break
     return offenders
@@ -215,6 +234,10 @@ def test_cookies_are_added_by_the_shared_helper_only() -> None:
     assert cookie_flag_offenders(sources) == []
 
 
+def test_the_scan_ignores_unrelated_mixed_concatenation() -> None:
+    assert cookie_flag_offenders({"adapters/a.py": 'X = ["--coo" + v + "kies", "--cook" + p]\n'}) == []
+
+
 @pytest.mark.parametrize(
     "snippet",
     [
@@ -222,6 +245,9 @@ def test_cookies_are_added_by_the_shared_helper_only() -> None:
         'ARGS = ["--coo" "kies", path]\n',
         'ARGS = ["--coo" + "kies", path]\n',
         'ARGS = ["-" + "-" + "coo" "kies"]\n',
+        'ARGS = ["--cookies" + var]\n',
+        'ARGS = ["--cookies=" + p]\n',
+        'ARGS = ["--coo" + "kies" + p]\n',
     ],
 )
 @pytest.mark.parametrize(
