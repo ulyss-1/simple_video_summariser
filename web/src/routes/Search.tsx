@@ -15,6 +15,13 @@ import {
 
 type Result = SearchPage['results'][number]
 
+// "Summary" covers TL;DR, topics, claims and the description (one tsvector weight, #168).
+const MATCHED_LABELS: Record<Result['matched_in'][number], string> = {
+  title: 'Title',
+  analysis: 'Summary',
+  transcript: 'Transcript',
+}
+
 // The query and page live in the URL only; TanStack Query owns the server state (architecture §9).
 // Everything shown is a React text node: stored text is never parsed as HTML.
 export function Search() {
@@ -213,6 +220,17 @@ function ResultItem({ result: r }: { result: Result }) {
           </>
         )}
       </div>
+      {r.matched_in.length > 0 && (
+        <div className="muted search__matched">
+          Matched in:{' '}
+          {r.matched_in.map((field, i) => (
+            <Fragment key={field}>
+              {i > 0 && ' · '}
+              <span>{MATCHED_LABELS[field]}</span>
+            </Fragment>
+          ))}
+        </div>
+      )}
       {fragments.length > 0 && (
         <p>
           {fragments.map((fragment, i) => (

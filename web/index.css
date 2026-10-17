@@ -686,6 +686,10 @@ a:focus {
   min-height: var(--touch-target);
 }
 
+.search__matched {
+  margin: var(--space-xs) 0 0;
+}
+
 .search__result > p {
   margin: var(--space-sm) 0 0;
 }

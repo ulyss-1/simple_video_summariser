@@ -158,6 +158,8 @@ function isExcerpt(v: unknown): boolean {
   )
 }
 
+const MATCHED_FIELDS = ['title', 'analysis', 'transcript']
+
 function isResult(v: unknown): boolean {
   return (
     isObject(v) &&
@@ -167,6 +169,8 @@ function isResult(v: unknown): boolean {
     isStringOrNull(v.channel_title) &&
     isStringOrNull(v.published_at) &&
     isStringOrNull(v.unavailable) &&
+    Array.isArray(v.matched_in) &&
+    v.matched_in.every((f) => typeof f === 'string' && MATCHED_FIELDS.includes(f)) &&
     Array.isArray(v.excerpts) &&
     v.excerpts.every(isExcerpt)
   )

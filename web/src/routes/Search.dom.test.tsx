@@ -429,6 +429,44 @@ describe('a result', () => {
     expect(two.textContent).not.toContain('Unavailable on YouTube')
   })
 
+  describe('matched_in indicator', () => {
+    async function matched(matched_in: SearchResult['matched_in']) {
+      stubFetch(() => page([hit(1, { matched_in })]))
+      await mount('/search?q=a')
+      return screen.getByRole('listitem').querySelector('.search__matched')
+    }
+
+    it('title only shows Title and not Summary/Transcript', async () => {
+      const el = await matched(['title'])
+      expect(el?.textContent).toBe('Matched in: Title')
+    })
+
+    it('analysis shows the Summary label (no Description label)', async () => {
+      const el = await matched(['analysis'])
+      expect(el?.textContent).toBe('Matched in: Summary')
+    })
+
+    it('transcript only shows Transcript and not Title/Summary', async () => {
+      const el = await matched(['transcript'])
+      expect(el?.textContent).toBe('Matched in: Transcript')
+    })
+
+    it('shows every label in the backend order, separated by a middle dot', async () => {
+      const el = await matched(['title', 'analysis', 'transcript'])
+      expect(el?.textContent).toBe('Matched in: Title · Summary · Transcript')
+    })
+
+    it('shows two labels for a two-field result', async () => {
+      const el = await matched(['title', 'analysis'])
+      expect(el?.textContent).toBe('Matched in: Title · Summary')
+    })
+
+    it('shows no indicator for an empty matched_in', async () => {
+      expect(await matched([])).toBeNull()
+      expect(screen.getByRole('link', { name: 'Title 1' })).toBeTruthy()
+    })
+  })
+
   it('renders no excerpt block for excerpts: []', async () => {
     stubFetch(() => page([hit(1, { excerpts: [] })]))
     await mount('/search?q=a')
@@ -737,6 +775,8 @@ describe('states', () => {
   it.each([
     ['not json', new Response('<html>SECRET</html>', { status: 200 })],
     ['wrong shape', json({ results: 'nope' })],
+    ['bad matched_in value', json({ results: [{ ...hit(1), matched_in: ['description'] }], limit: 20, offset: 0, has_more: false })],
+    ['missing matched_in', json({ results: [{ ...hit(1), matched_in: undefined }], limit: 20, offset: 0, has_more: false })],
     ['bad span', json({ results: [{ ...hit(1), excerpts: [{ spans: [{ text: 1 }], start_sec: null }] }], limit: 20, offset: 0, has_more: false })],
   ])('malformed 200 body (%s): generic error, nothing rendered', async (_n, res) => {
     stubFetch(() => res)
