@@ -21,8 +21,24 @@ export const routes: RouteObject[] = [
     errorElement: <RouteError />,
     children: [
       { index: true, element: <Library /> },
-      { path: 'videos/:videoId', element: <VideoDetail /> },
-      { path: 'videos/:videoId/transcript', element: <Transcript /> },
+      // Per-route PlayerProvider, not one in Shell: only these three routes
+      // render a Player, and Library/Search/Ops have none to register (#181).
+      {
+        path: 'videos/:videoId',
+        element: (
+          <PlayerProvider>
+            <VideoDetail />
+          </PlayerProvider>
+        ),
+      },
+      {
+        path: 'videos/:videoId/transcript',
+        element: (
+          <PlayerProvider>
+            <Transcript />
+          </PlayerProvider>
+        ),
+      },
       {
         path: 'videos/:videoId/compare',
         element: (
