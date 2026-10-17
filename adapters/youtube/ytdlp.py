@@ -12,6 +12,7 @@ The process call is injectable (``runner``), so tests never start yt-dlp.
 from __future__ import annotations
 
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -19,6 +20,7 @@ import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import quote, quote_plus
 
 from adapters.youtube.errors import from_ytdlp
 from common.errors import ToolFailureError, TransientNetworkError
@@ -83,9 +85,11 @@ def _kill_group(proc: subprocess.Popen[str]) -> None:
 
 COOKIE_FILE_VARIABLE = "YTDLP_COOKIE_FILE"
 
-# A cookie name or value shorter than this is not redacted on its own: it would
+# A cookie name or value shorter than this is redacted only as a whole token
+# (not preceded or followed by [A-Za-z0-9_-]): as a plain substring it would
 # mangle ordinary words in yt-dlp's messages. Whole lines always are.
 _MIN_REDACTED_VALUE_CHARS = 8
+_TOKEN_CHARS = re.compile(r"[A-Za-z0-9_-]+")
 
 
 class CookieFileError(ValueError):
@@ -130,16 +134,28 @@ def _cookie_secrets(text: str, *paths: Path | str) -> list[str]:
             continue
         secrets.append(line)
         # Netscape format: domain, flag, path, secure, expiry, name, value.
+        # A space-separated reprint is not valid Netscape; split it by fields too.
         fields = [f.strip() for f in raw.split("\t")]
+        if len(fields) < 7:
+            fields = line.split()
         for field in fields[5:]:
-            if len(field) >= _MIN_REDACTED_VALUE_CHARS:
-                secrets.append(field)
+            secrets.extend((field, quote(field, safe=""), quote_plus(field)))
     # Longest first, so a whole line goes before the value inside it.
     return sorted({s for s in secrets if s}, key=len, reverse=True)
 
 
 def _redact(text: str, secrets: Sequence[str]) -> str:
-    return redact_literals(text, secrets, "<cookie-file>")
+    short = [s for s in secrets if len(s) < _MIN_REDACTED_VALUE_CHARS]
+    bounded = [s for s in short if _TOKEN_CHARS.fullmatch(s)]
+    # A short value with punctuation is neither safe as a substring nor a token.
+    text = redact_literals(
+        text, [s for s in secrets if s not in short], "<cookie-file>"
+    )
+    for token in sorted(bounded, key=len, reverse=True):
+        text = re.sub(
+            rf"(?<![A-Za-z0-9_-]){re.escape(token)}(?![A-Za-z0-9_-])", "<cookie-file>", text
+        )
+    return text
 
 
 def run_ytdlp(

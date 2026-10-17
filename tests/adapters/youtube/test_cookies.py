@@ -13,12 +13,14 @@ therefore hands yt-dlp a private, writable, short-lived copy.
 
 from __future__ import annotations
 
+import ast
 import logging
 import os
 import stat
 import subprocess
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from urllib.parse import quote, quote_plus
 
 import pytest
 
@@ -152,14 +154,83 @@ def test_the_metadata_upcoming_retry_also_passes_cookies(
     assert len(spy.seen) == 2
 
 
+SANCTIONED_BUILDER = "adapters/youtube/ytdlp.py"
+SCANNED_DIRS = ("adapters", "services", "common")
+
+
+def _fold(node: ast.expr) -> str | None:
+    """The string a constant expression evaluates to (``"a" + "b"``), else None."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _fold(node.left), _fold(node.right)
+        if left is not None and right is not None:
+            return left + right
+    return None
+
+
+def cookie_flag_offenders(sources: Mapping[str, str]) -> list[str]:
+    """Paths (``dir/file.py`` keys) building ``--cookies`` outside the one builder.
+
+    Pure over ``{path: source}``. Parses each file and folds constant string
+    concatenation, so ``"--coo" "kies"`` and ``"--coo" + "kies"`` are caught
+    along with the plain literal. Docstrings (bare string statements) are
+    prose, not argv, and are skipped.
+    """
+    offenders = []
+    for path, source in sources.items():
+        if path == SANCTIONED_BUILDER:
+            continue
+        tree = ast.parse(source)
+        docstrings = {
+            id(n.value) for n in ast.walk(tree) if isinstance(n, ast.Expr)
+        }
+        inner = {
+            id(c)
+            for n in ast.walk(tree)
+            if isinstance(n, ast.BinOp)
+            for c in (n.left, n.right)
+        }
+        for node in ast.walk(tree):
+            if id(node) in docstrings or id(node) in inner:
+                continue
+            if isinstance(node, ast.expr) and "--cookies" in (_fold(node) or ""):
+                offenders.append(path)
+                break
+    return offenders
+
+
+def _repo_sources() -> dict[str, str]:
+    root = Path(__file__).resolve().parents[3]
+    return {
+        p.relative_to(root).as_posix(): p.read_text(encoding="utf-8")
+        for d in SCANNED_DIRS
+        for p in (root / d).rglob("*.py")
+    }
+
+
 def test_cookies_are_added_by_the_shared_helper_only() -> None:
-    adapters = Path(__file__).resolve().parents[3] / "adapters" / "youtube"
-    offenders = [
-        p.name
-        for p in adapters.glob("*.py")
-        if p.name != "ytdlp.py" and "--cookies" in p.read_text(encoding="utf-8")
-    ]
-    assert offenders == []
+    sources = _repo_sources()
+    assert SANCTIONED_BUILDER in sources
+    assert cookie_flag_offenders(sources) == []
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        'ARGS = ["--cookies", path]\n',
+        'ARGS = ["--coo" "kies", path]\n',
+        'ARGS = ["--coo" + "kies", path]\n',
+        'ARGS = ["-" + "-" + "coo" "kies"]\n',
+    ],
+)
+@pytest.mark.parametrize(
+    "fake_path",
+    ["adapters/other/x.py", "services/api/y.py", "common/z.py", "adapters/youtube/audio.py"],
+)
+def test_the_scan_flags_a_planted_second_call_site(snippet: str, fake_path: str) -> None:
+    sources = {SANCTIONED_BUILDER: snippet, fake_path: snippet, "adapters/ok.py": "X = 1\n"}
+    assert cookie_flag_offenders(sources) == [fake_path]
 
 
 def test_yt_dlp_gets_a_private_writable_copy_not_the_read_only_original(
@@ -318,3 +389,71 @@ def test_check_never_echoes_the_contents(tmp_path: Path) -> None:
     with pytest.raises(CookieFileError) as info:
         check_cookie_file(tmp_path / "SENTINEL-missing.txt")
     assert SECRET_VALUE not in str(info.value)
+
+
+# --- issue #188: redaction evasions ----------------------------------------
+
+
+def _leak(cookie_text: str, stderr: str, tmp_path: Path) -> str:
+    path = tmp_path / "jar.txt"
+    path.write_text(cookie_text, encoding="utf-8")
+
+    def runner(argv: Sequence[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
+        return completed(returncode=1, stderr=stderr)
+
+    with pytest.raises(JobError) as info:
+        run_ytdlp([], timeout=5, runner=runner, cookie_file=path)
+    return repr(info.value) + str(info.value)
+
+
+def _line(name: str, value: str, prefix: str = "") -> str:
+    return f"{prefix}.youtube.com\tTRUE\t/\tTRUE\t2000000000\t{name}\t{value}\n"
+
+
+@pytest.mark.parametrize("style", [quote, quote_plus])
+def test_a_percent_encoded_value_is_redacted(style: Callable[..., str], tmp_path: Path) -> None:
+    value = "SENTINEL/a=b:c d+e"
+    encoded = style(value, safe="")
+    assert encoded != value
+    text = _leak(_line("SENTINEL_n", value), f"ERROR: bad {encoded} here", tmp_path)
+    assert encoded not in text
+    assert "SENTINEL" not in text
+
+
+def test_a_short_value_on_a_token_boundary_is_redacted(tmp_path: Path) -> None:
+    text = _leak(_line("sn", "sv42"), "ERROR: bad cookie sv42 rejected (sn)", tmp_path)
+    assert "sv42" not in text
+    assert "(sn)" not in text
+
+
+def test_a_short_value_inside_a_larger_token_is_left_alone(tmp_path: Path) -> None:
+    text = _leak(_line("sn", "sv42"), "ERROR: sv4200 and xsv42 and a-sv42 kept", tmp_path)
+    assert "sv4200 and xsv42 and a-sv42 kept" in text
+
+
+def test_a_space_separated_echo_is_redacted_field_by_field(tmp_path: Path) -> None:
+    stderr = "ERROR: parsed SENTINEL_name SENTINEL-value-1 then SENTINEL-value-1 again"
+    text = _leak(_line("SENTINEL_name", "SENTINEL-value-1"), stderr, tmp_path)
+    assert "SENTINEL" not in text
+
+
+def test_a_space_separated_cookie_line_in_the_file_is_split_by_fields(tmp_path: Path) -> None:
+    jar = ".youtube.com TRUE / TRUE 2000000000 SENTINEL_name SENTINEL-value-2\n"
+    text = _leak(jar, "ERROR: bad SENTINEL-value-2 / SENTINEL_name", tmp_path)
+    assert "SENTINEL" not in text
+
+
+def test_every_cookie_of_several_is_redacted(tmp_path: Path) -> None:
+    jar = (
+        "# Netscape HTTP Cookie File\n"
+        + _line("n1", "sv99")
+        + _line("SENTINEL_n2", "SENTINEL/two=2")
+        + _line("SENTINEL_n3", "SENTINEL-three-3", prefix="#HttpOnly_")
+    )
+    stderr = (
+        f"ERROR: sv99 {quote('SENTINEL/two=2', safe='')} "
+        f"{quote_plus('SENTINEL/two=2')} SENTINEL-three-3 SENTINEL_n3"
+    )
+    text = _leak(jar, stderr, tmp_path)
+    assert "sv99" not in text
+    assert "SENTINEL" not in text
