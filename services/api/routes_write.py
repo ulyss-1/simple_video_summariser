@@ -38,6 +38,7 @@ from psycopg.pq import TransactionStatus
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.convertors import Convertor, register_url_convertor
 
+from common.backfill import ConnectionProvider
 from common.channel_catalog import (
     MAX_SELECTED,
     discover_catalog,
@@ -87,6 +88,7 @@ from services.api.deps import (
     get_catalog,
     get_channel_resolver,
     get_conn,
+    get_conn_provider,
     rate_limit,
 )
 from services.api.schemas import CatalogLimit, CatalogPageOut, catalog_page_out
@@ -611,7 +613,7 @@ def post_channel_backfill(
     channel_id: Annotated[str, Depends(_backfill_channel_id)],
     body: BackfillRequest,
     response: Response,
-    conn: Annotated[psycopg.Connection[Any], Depends(get_conn)],
+    provider: Annotated[ConnectionProvider, Depends(get_conn_provider)],
     catalog: Annotated[CatalogSource, Depends(get_catalog)],
     probe: Annotated[SubtitleProbe, Depends(get_subtitle_probe)],
 ) -> BackfillResponse:
@@ -628,14 +630,17 @@ def post_channel_backfill(
     A dry run also checks each new video's subtitles, newest first, within a
     100 s budget (#117); the rest are reported as ``unchecked``. It writes
     nothing.
+
+    The pooled connection is borrowed per short DB phase and returned across
+    the listing and the probes (#204), so a slow dry run cannot exhaust the
+    pool.
     """
-    _require_idle(conn)
     settings = get_settings()
     started = time.perf_counter()
     try:
         result = backfill(
-            conn,
-            PostgresQueue(conn),
+            provider,
+            PostgresQueue,
             catalog,
             channel_id,
             limit=body.limit,

@@ -17,13 +17,15 @@ for the read routes (#42).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Iterator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Annotated, Any
 
 import psycopg
 import structlog
 from fastapi import Depends, Request
 
+from common.backfill import ConnectionProvider
 from common.config import get_settings
 from common.models import CatalogSource
 from common.progress import HISTORY_SIZE
@@ -84,6 +86,27 @@ def get_conn(request: Request) -> Generator[psycopg.Connection[Any]]:
         # putconn rolls back an open or aborted transaction before the
         # connection is reused, and discards a broken one.
         pool.putconn(conn)
+
+
+def get_conn_provider(request: Request) -> ConnectionProvider:
+    """A per-phase connection provider for ``backfill`` (#204).
+
+    Each ``with provider() as conn`` is one ``get_conn`` lifecycle: borrow on
+    entry, ``putconn`` (rollback, reset) on exit. A route that does long
+    non-DB work uses it instead of ``get_conn`` so no pooled connection sits
+    idle through that work. A failed borrow raises ``DatabaseUnavailable``.
+    """
+
+    @contextmanager
+    def provide() -> Iterator[psycopg.Connection[Any]]:
+        gen = get_conn(request)
+        conn = next(gen)
+        try:
+            yield conn
+        finally:
+            gen.close()  # runs get_conn's ``finally``: putconn
+
+    return provide
 
 
 def get_read_conn(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import nullcontext
 from typing import Any
 
 import pytest
@@ -48,10 +49,7 @@ def calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 
 @pytest.fixture
 def api(app: FastAPI, calls: list[dict[str, Any]]) -> Iterator[TestClient]:
-    def fake_conn() -> Iterator[_Conn]:
-        yield _Conn()
-
-    app.dependency_overrides[deps.get_conn] = fake_conn
+    app.dependency_overrides[deps.get_conn_provider] = lambda: (lambda: nullcontext(_Conn()))
     app.dependency_overrides[deps.get_catalog] = lambda: object()
     app.dependency_overrides[routes_write.get_subtitle_probe] = lambda: PROBE
     with TestClient(app) as client:

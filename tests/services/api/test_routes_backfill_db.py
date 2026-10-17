@@ -6,6 +6,7 @@ The real ``get_conn`` is used; only the catalog is faked.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import psycopg
@@ -14,6 +15,7 @@ from fastapi import Request
 from fastapi.testclient import TestClient
 from psycopg.pq import TransactionStatus
 
+from common.backfill import ConnectionProvider
 from common.config import get_settings
 from common.models import CatalogEntry, ChannelCatalog
 from common.queue import PRIORITY_BACKFILL
@@ -149,17 +151,23 @@ def test_a_real_run_is_202_then_200_on_repeat(
     assert "secret title" not in logs.text()
 
 
-def test_the_catalog_runs_on_an_idle_request_connection(
+def test_the_catalog_runs_with_the_borrowed_connection_idle(
     db: psycopg.Connection[Any], logs: LogSink
 ) -> None:
     _register(db)
     seen: list[TransactionStatus] = []
     holder: list[psycopg.Connection[Any]] = []
 
-    def capture_conn(request: Request) -> Iterator[psycopg.Connection[Any]]:
-        for conn in deps.get_conn(request):
-            holder.append(conn)
-            yield conn
+    def capture_conn(request: Request) -> ConnectionProvider:
+        inner = deps.get_conn_provider(request)
+
+        @contextmanager
+        def provide() -> Iterator[psycopg.Connection[Any]]:
+            with inner() as conn:
+                holder.append(conn)
+                yield conn
+
+        return provide
 
     class Watching(Catalog):
         def list_uploads(self, channel_id: str, *, limit: int) -> ChannelCatalog:
@@ -167,7 +175,7 @@ def test_the_catalog_runs_on_an_idle_request_connection(
             return super().list_uploads(channel_id, limit=limit)
 
     app = create_app()
-    app.dependency_overrides[deps.get_conn] = capture_conn
+    app.dependency_overrides[deps.get_conn_provider] = capture_conn
     app.dependency_overrides[deps.get_catalog] = Watching
     app.dependency_overrides[routes_write.get_subtitle_probe] = lambda: NO_PROBE
     with TestClient(app) as client:

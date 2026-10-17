@@ -50,6 +50,10 @@ export interface paths {
          *     A dry run also checks each new video's subtitles, newest first, within a
          *     100 s budget (#117); the rest are reported as ``unchecked``. It writes
          *     nothing.
+         *
+         *     The pooled connection is borrowed per short DB phase and returned across
+         *     the listing and the probes (#204), so a slow dry run cannot exhaust the
+         *     pool.
          */
         post: operations["post_channel_backfill_channels__channel_id__backfill_post"];
         delete?: never;
