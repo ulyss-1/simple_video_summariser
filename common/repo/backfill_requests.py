@@ -139,6 +139,18 @@ def claim_next(conn: psycopg.Connection[Any]) -> BackfillRequestRow | None:
         return cur.fetchone()
 
 
+def is_active(conn: psycopg.Connection[Any], request_id: int) -> bool:
+    """Whether the request is still ``pending`` or ``running`` (live read, #209).
+
+    ``False`` for a cancelled, failed or finished request, and for a missing
+    one. Read-only: the caller owns the transaction.
+    """
+    row = conn.execute(
+        f"SELECT 1 FROM backfill_requests WHERE id = %s AND {_ACTIVE}", (request_id,)
+    ).fetchone()
+    return row is not None
+
+
 def count_pending_backfill_ingests(conn: psycopg.Connection[Any]) -> int:
     """How many ``pending`` ``ingest`` jobs sit at the backfill priority."""
     row = conn.execute(

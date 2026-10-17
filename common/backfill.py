@@ -177,6 +177,7 @@ def backfill(
     clock: Callable[[], float] = time.monotonic,
     backfill_id: str | None = None,
     max_enqueue: int | None = None,
+    still_active: Callable[[], bool] | None = None,
 ) -> BackfillResult:
     """Select the channel's unknown uploads and, unless ``dry_run``, enqueue them.
 
@@ -194,6 +195,13 @@ def backfill(
     ``max_enqueue`` bounds how many of the new videos a real run writes (the
     planner's per-run slice); ``new_videos`` and ``video_ids`` still describe
     the whole listing, ``enqueued`` what was written. ``None`` writes them all.
+
+    ``still_active`` (the planner's live request-state read, #209) is called
+    once after the listing, with no transaction open, before the first write;
+    ``False`` skips the enqueue loop (``enqueued == 0``). A cancel that lands
+    during the listing therefore writes nothing; one that lands mid-loop
+    still writes up to the rest of the slice (the per-slice check point).
+    ``None`` (the synchronous route) never checks.
     """
     started = clock()
     if conn.info.transaction_status != TransactionStatus.IDLE:
@@ -239,7 +247,7 @@ def backfill(
     elif backfill_id is None:
         backfill_id = str(uuid.uuid4())
     enqueued = 0
-    if backfill_id is not None:
+    if backfill_id is not None and new and (still_active is None or still_active()):
         payload = {"origin": "backfill", "backfill_id": backfill_id}
         for entry in new if max_enqueue is None else new[: max(max_enqueue, 0)]:
             with conn.transaction():

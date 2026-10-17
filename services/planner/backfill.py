@@ -128,6 +128,7 @@ def run_channel_backfill(
             clock=clock,
             backfill_id=request_backfill_id(request.id),
             max_enqueue=allowance,
+            still_active=lambda: _is_active(conn, request.id),
         )
     except (TransientNetworkError, RateLimitedError, ToolFailureError, ChannelNotRegistered) as exc:
         fatal = isinstance(exc, ToolFailureError | ChannelNotRegistered)
@@ -173,6 +174,12 @@ def run_channel_backfill(
         state="done" if done else "running",
     )
     return result.enqueued
+
+
+def _is_active(conn: psycopg.Connection[Any], request_id: int) -> bool:
+    """Live request state in its own short transaction (a cancel commits elsewhere)."""
+    with conn.transaction():
+        return requests.is_active(conn, request_id)
 
 
 def _result_json(result: BackfillResult) -> dict[str, Any]:
