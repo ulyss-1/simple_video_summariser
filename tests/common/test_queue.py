@@ -39,6 +39,7 @@ from common.errors import (
     TransientNetworkError,
 )
 from common.queue import Job, PostgresQueue, RetryOutcome
+from tests.common.test_redact import SENTINELS
 
 pytestmark = pytest.mark.integration
 
@@ -2176,3 +2177,18 @@ def test_reap_stale_warning_carries_run_after_only_for_requeued_jobs(
     }
     assert by_id[requeued]["run_after"] == _row(conn, requeued)["run_after"]
     assert "run_after" not in by_id[dead]
+
+
+@pytest.mark.parametrize("kind", sorted(SENTINELS))
+def test_failed_job_never_stores_a_secret_in_last_error(
+    kind: str, queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    text, secret = SENTINELS[kind]
+    job_id = queue.enqueue("ingest", "v1")
+    assert job_id is not None
+
+    with queue.claim(["ingest"], worker="w1") as job:
+        assert job is not None
+        raise RuntimeError(text)
+
+    assert secret not in _row(conn, job_id)["last_error"]

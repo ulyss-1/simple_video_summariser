@@ -48,6 +48,8 @@ from typing import Literal, Protocol
 import psycopg
 import structlog
 
+from common.safe_url import redact
+
 _log = structlog.get_logger(__name__)
 
 #: Longest single idle wait, so the liveness file stays fresh (issue #38 AC:
@@ -326,7 +328,7 @@ class Scheduler:
             result = task.fn()
         except Exception as exc:  # noqa: BLE001 - a failing task must not stop the others
             outcome = "failed"
-            error = f"{type(exc).__name__}: {exc}"[:MAX_RECORDED_ERROR_CHARS]
+            error = redact(f"{type(exc).__name__}: {exc}")[:MAX_RECORDED_ERROR_CHARS]
             _log.error(
                 "planner.task_failed",
                 task=task.name,

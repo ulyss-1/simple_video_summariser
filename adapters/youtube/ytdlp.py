@@ -22,6 +22,7 @@ from typing import Protocol
 
 from adapters.youtube.errors import from_ytdlp
 from common.errors import ToolFailureError, TransientNetworkError
+from common.safe_url import redact_literals
 
 # How long to wait for a killed process group to close its pipes.
 _REAP_TIMEOUT_SEC = 5.0
@@ -138,9 +139,7 @@ def _cookie_secrets(text: str, *paths: Path | str) -> list[str]:
 
 
 def _redact(text: str, secrets: Sequence[str]) -> str:
-    for secret in secrets:
-        text = text.replace(secret, "<cookie-file>")
-    return text
+    return redact_literals(text, secrets, "<cookie-file>")
 
 
 def run_ytdlp(

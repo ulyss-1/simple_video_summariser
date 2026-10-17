@@ -20,6 +20,8 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import ClassVar
 
+from common.safe_url import redact
+
 #: ``format_error`` output never exceeds this many UTF-8 bytes.
 MAX_ERROR_BYTES = 8 * 1024
 
@@ -193,12 +195,16 @@ def classify(exc: BaseException) -> ErrorClass:
 
 
 def format_error(exc: BaseException) -> str:
-    """Traceback text for ``jobs.last_error``, at most ``MAX_ERROR_BYTES``.
+    """Redacted traceback text for ``jobs.last_error``, at most ``MAX_ERROR_BYTES``.
+
+    Secrets are redacted (``common.safe_url.redact``, issue #196) before the
+    text is truncated.
 
     When it is longer, the start is dropped: the end holds the failing frame
     and the exception message.
     """
-    text = "".join(traceback.format_exception(exc))
+    # Redact the whole text first: a secret straddling the cut must not survive.
+    text = redact("".join(traceback.format_exception(exc)))
     data = text.encode("utf-8", "backslashreplace")
     if len(data) <= MAX_ERROR_BYTES:
         return text

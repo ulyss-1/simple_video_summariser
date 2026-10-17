@@ -91,6 +91,7 @@ from common.models import (
     TranscriptResult,
 )
 from common.queue import Job, JobQueue, PostgresQueue
+from common.safe_url import make_redactor
 from common.shutdown import SignalLatch
 from common.worker import JobContext, Worker
 from services.transcriber.ingest import SubtitleSource, make_ingest_handler
@@ -368,14 +369,7 @@ def _redactor(settings: Settings) -> Callable[[str], str]:
         secrets.append(password)
     if settings.ANTHROPIC_API_KEY is not None:
         secrets.append(settings.ANTHROPIC_API_KEY.get_secret_value())
-    ordered = sorted((s for s in secrets if s), key=len, reverse=True)
-
-    def redact(text: str) -> str:
-        for secret in ordered:
-            text = text.replace(secret, "***")
-        return text
-
-    return redact
+    return make_redactor(secrets, "***")
 
 
 # -- main -------------------------------------------------------------------------------
