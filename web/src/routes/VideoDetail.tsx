@@ -1,15 +1,16 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import type { components } from '../api'
 import { AnalysisView } from '../components/AnalysisView'
 import { JobProgress } from '../components/JobProgress'
 import { Player } from '../components/Player'
 import { buildWatchUrl } from '../components/player/youtubeTransport'
-import { formatTimestamp } from '../components/Timestamp'
+import { formatTimestamp, useMomentSeek } from '../components/Timestamp'
 import { useAnalysisTotal } from '../hooks/useAnalyses'
 import { deleteErrorMessage, useDeleteVideo } from '../hooks/useDeleteVideo'
 import { reanalyzeErrorMessage, useReanalyze } from '../hooks/useReanalyze'
 import { useVideo, VideoApiError } from '../hooks/useVideo'
+import { parseStartTime } from '../lib/moment'
 import { parseVideoId } from '../lib/videoId'
 
 type Video = components['schemas']['VideoDetail']
@@ -146,6 +147,9 @@ function VideoPage({ videoId }: { videoId: string }) {
   const analysisTotal = useAnalysisTotal(gone ? null : videoId).data
   const video = query.data
   const heading = video ? video.title || videoId : null
+  const [params] = useSearchParams()
+  // The Player mounts with the loaded video, so the deep-link seek waits for it.
+  useMomentSeek(video === undefined ? null : parseStartTime(params))
 
   useEffect(() => {
     if (heading !== null) document.title = heading

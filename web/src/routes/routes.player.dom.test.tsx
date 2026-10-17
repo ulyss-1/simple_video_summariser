@@ -84,17 +84,23 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+let router: ReturnType<typeof createMemoryRouter>
+
 async function mountRoute(entry: string) {
-  const router = createMemoryRouter(routes, { initialEntries: [entry] })
+  router = createMemoryRouter(routes, { initialEntries: [entry] })
   const { container } = render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
       <RouterProvider router={router} />
     </QueryClientProvider>,
   )
+  await settle()
+  return container
+}
+
+async function settle() {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0)
   })
-  return container
 }
 
 function readyEmbed(container: HTMLElement): void {
@@ -141,5 +147,59 @@ describe('provider presence guard', () => {
     // timestamp at 1:15 is the one that must be a seek button.
     expect(container.querySelectorAll('button.timestamp').length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: 'Seek to 1:15' })).toBeTruthy()
+  })
+})
+
+// #129: a `?t=` deep link seeks once, after the embed is ready, on both routes.
+describe.each([
+  ['video detail', `/videos/${ID}`],
+  ['transcript', `/videos/${ID}/transcript`],
+])('%s deep link in the shared table', (_name, path) => {
+  it('issues exactly one seekTo command, with the parsed t, once ready', async () => {
+    const container = await mountRoute(`${path}?t=3723`)
+    expect(seekCommands()).toEqual([])
+    readyEmbed(container)
+    expect(seekCommands().map((c) => c.message['args'])).toEqual([[3723, true]])
+    await settle()
+    expect(seekCommands()).toHaveLength(1)
+  })
+
+  it('passes the exact fractional value', async () => {
+    const container = await mountRoute(`${path}?t=12.5`)
+    readyEmbed(container)
+    expect(seekCommands().map((c) => c.message['args'])).toEqual([[12.5, true]])
+  })
+
+  it.each(['', '?t=', '?t=-1', '?t=abc', '?t=10&t=20', '?t=1h2m3s', '?t=360001'])(
+    'sends no seek for %j',
+    async (query) => {
+      const container = await mountRoute(`${path}${query}`)
+      readyEmbed(container)
+      expect(seekCommands()).toEqual([])
+    },
+  )
+
+  it('does not re-seek when an unrelated query param changes, but follows a new t once', async () => {
+    const container = await mountRoute(`${path}?t=30`)
+    readyEmbed(container)
+    expect(seekCommands()).toHaveLength(1)
+    await act(async () => {
+      await router.navigate(`${path}?t=30&page=2`)
+    })
+    await settle()
+    expect(seekCommands()).toHaveLength(1)
+    await act(async () => {
+      await router.navigate(`${path}?t=45&page=2`)
+    })
+    await settle()
+    expect(seekCommands().map((c) => c.message['args'])).toEqual([
+      [30, true],
+      [45, true],
+    ])
+  })
+
+  it('leaves ?t= in the URL', async () => {
+    await mountRoute(`${path}?t=3723`)
+    expect(router.state.location.search).toBe('?t=3723')
   })
 })

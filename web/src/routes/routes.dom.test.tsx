@@ -191,7 +191,7 @@ describe('trailing slash on a video id', () => {
 // SHARED route table (not a local router), so it proves that the registered
 // routes deliver the link's `?t=` to the detail route and that nothing strips it
 // once the destination view has rendered and run its effects. The seek itself
-// (player ready, once) belongs to the `?t=` deep-link work (#129).
+// (player ready, once) is tested in routes.player.dom.test.tsx (#129).
 describe('search hit timestamp links through the shared route table', () => {
   beforeEach(() => {
     vi.useFakeTimers()

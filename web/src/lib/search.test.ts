@@ -8,7 +8,6 @@ import {
   offsetForPage,
   parseSearchParams,
   searchHref,
-  timestampHref,
   validateQuery,
 } from './search'
 
@@ -185,29 +184,6 @@ describe('excerptFragments', () => {
 
   it('returns nothing for no excerpts', () => {
     expect(excerptFragments([])).toEqual([])
-  })
-})
-
-describe('timestampHref', () => {
-  it.each([
-    [12.5, '/videos/abc?t=12'],
-    [0, '/videos/abc?t=0'],
-    [3723, '/videos/abc?t=3723'],
-    [0.999, '/videos/abc?t=0'],
-    [1_000_000_000, '/videos/abc?t=1000000000'],
-  ])('%s -> %s', (sec, href) => {
-    expect(timestampHref('abc', sec)).toBe(href)
-  })
-
-  it.each([null, -0.5, Number.NaN, Number.POSITIVE_INFINITY, 1_000_000_001, 1e21])(
-    '%s -> no link',
-    (sec) => {
-      expect(timestampHref('abc', sec)).toBeNull()
-    },
-  )
-
-  it('encodes the video id', () => {
-    expect(timestampHref('a/b c', 1)).toBe('/videos/a%2Fb%20c?t=1')
   })
 })
 

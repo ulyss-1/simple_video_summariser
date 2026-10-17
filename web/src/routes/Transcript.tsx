@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { Player } from "../components/Player";
-import { Timestamp } from "../components/Timestamp";
+import { Timestamp, useMomentSeek } from "../components/Timestamp";
 import { TranscriptApiError, useTranscript } from "../hooks/useTranscript";
 import { useVideo } from "../hooks/useVideo";
 import {
@@ -14,6 +14,7 @@ import {
   sourceLabel,
   speakerLabels,
 } from "../lib/transcript";
+import { parseStartTime } from "../lib/moment";
 import { parseVideoId } from "../lib/videoId";
 
 // Semantic HTML styled by index.css (#130). The page number lives in the
@@ -55,6 +56,8 @@ function TranscriptView({ videoId }: { videoId: string }) {
   const q = useTranscript(videoId, page);
   const data = q.data;
   const switching = q.isPlaceholderData;
+  // The Player mounts once the transcript query has settled, so wait for it.
+  useMomentSeek(q.status === "pending" ? null : parseStartTime(params));
 
   const rawTitle = video.data?.title;
   const title = rawTitle != null && rawTitle.trim() !== "" ? rawTitle : videoId;

@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import { setupUser } from '../test/user'
 import { StrictMode } from 'react'
+import { MemoryRouter } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
 import { FakePlayerProvider } from './FakePlayerProvider'
 import { Timestamp } from './Timestamp'
@@ -130,5 +131,24 @@ describe('Timestamp without a provider', () => {
   it('renders zero as 0:00', () => {
     const { container } = render(<Timestamp seconds={0} />)
     expect(container.querySelector('time')?.textContent).toBe('0:00')
+  })
+})
+
+describe('Timestamp as a deep link (#129)', () => {
+  it('without a player but with a videoId renders a link to the moment', () => {
+    render(
+      <MemoryRouter>
+        <Timestamp seconds={3723.9} videoId="abc" />
+      </MemoryRouter>,
+    )
+    const link = screen.getByRole('link', { name: 'Open at 1:02:03' })
+    expect(link.getAttribute('href')).toBe('/videos/abc?t=3723')
+    expect(link.textContent).toBe('1:02:03')
+  })
+
+  it('renders plain text when the time is beyond the shared bound', () => {
+    const { container } = render(<Timestamp seconds={400000} videoId="abc" />)
+    expect(container.querySelector('a')).toBeNull()
+    expect(container.querySelector('time')).not.toBeNull()
   })
 })

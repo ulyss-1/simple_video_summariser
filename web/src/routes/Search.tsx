@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { formatTimestamp } from '../components/Timestamp'
+import { buildMomentHref } from '../lib/moment'
 import { SearchError, useSearch, type SearchPage } from '../hooks/useSearch'
 import { publishedDate } from '../lib/library'
 import {
@@ -9,7 +10,6 @@ import {
   nextEnabled,
   parseSearchParams,
   searchHref,
-  timestampHref,
   validateQuery,
 } from '../lib/search'
 
@@ -249,9 +249,9 @@ function ResultItem({ result: r }: { result: Result }) {
 }
 
 // The link form of a timestamp: opens the detail view at that moment (#110).
-// #129 owns the `?t=` route and should take this over with its own helper.
+// The href comes from #129's single `buildMomentHref`.
 function TimestampLink({ videoId, startSec }: { videoId: string; startSec: number | null }) {
-  const href = timestampHref(videoId, startSec)
+  const href = buildMomentHref(videoId, startSec)
   if (href === null || startSec === null) return null
   const label = formatTimestamp(startSec)
   return (

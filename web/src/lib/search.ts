@@ -105,16 +105,6 @@ export function buildSearchRequest(q: string, page: number): URLSearchParams {
 
 // ---- response -------------------------------------------------------------
 
-/** The most seconds a hit link carries; #43 stores segment starts up to 1e9. */
-export const MAX_LINK_SEC = 1_000_000_000
-
-/** `/videos/{id}?t=<whole seconds>` for a usable segment start; null otherwise. */
-export function timestampHref(videoId: string, startSec: number | null): string | null {
-  if (typeof startSec !== 'number' || !Number.isFinite(startSec)) return null
-  if (startSec < 0 || startSec > MAX_LINK_SEC) return null
-  return `/videos/${encodeURIComponent(videoId)}?t=${Math.floor(startSec)}`
-}
-
 export interface ExcerptFragment {
   spans: Span[]
   /** The excerpt's start in seconds, or null when it has no usable one. */
