@@ -1,5 +1,5 @@
 import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { setupUser } from '../test/user'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -81,11 +81,14 @@ function stubFetch(h: Handler) {
 }
 
 /** Routes by path: healthz, ops/jobs (GET) and retry (POST). */
-function api(opts: { health?: Handler; channels?: Handler; jobs?: Handler; retry?: Handler } = {}): Handler {
+function api(opts: { health?: Handler; channels?: Handler; jobs?: Handler; retry?: Handler; bulk?: Handler } = {}): Handler {
   return (c) => {
     if (c.url.pathname === '/api/healthz') return (opts.health ?? (() => health()))(c)
     if (c.url.pathname === '/api/ops/channels') return (opts.channels ?? (() => channels()))(c)
     if (c.url.pathname === '/api/ops/jobs') return (opts.jobs ?? (() => list([])))(c)
+    if (c.url.pathname === '/api/ops/jobs/retry') {
+      return (opts.bulk ?? (() => json({ detail: 'unexpected' }, 500)))(c)
+    }
     if (/^\/api\/ops\/jobs\/\d+\/retry$/.test(c.url.pathname)) {
       return (opts.retry ?? (() => json({ detail: 'job not found' }, 404)))(c)
     }
@@ -1186,5 +1189,337 @@ describe('transcription progress (#245)', () => {
     })
     expect(within(progressCell(1)).queryByRole('status')).toBeNull()
     expect(within(progressCell(1)).getByText(/left/)).toBeTruthy()
+  })
+})
+
+describe('retry all matching (#161)', () => {
+  const bulkBtn = () => screen.queryByRole('button', { name: 'Retry all matching' }) as HTMLButtonElement | null
+  const confirmBtn = () => screen.getByRole('button', { name: 'Confirm retry' }) as HTMLButtonElement
+  const cancelBtn = () => screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement
+  const bulkPosts = () => posts().map((c) => JSON.parse(c.body ?? 'null') as Record<string, unknown>)
+  const out = (over: Record<string, unknown> = {}) => ({
+    retried: 3,
+    job_ids: [3, 2, 1],
+    has_more: false,
+    dry_run: true,
+    ...over,
+  })
+  /** Dry runs answer with the count; real runs with `real`. */
+  const bulk = (real: () => Reply = () => out({ dry_run: false }), count = 3): Handler => (c) =>
+    (JSON.parse(c.body ?? '{}') as { dry_run: boolean }).dry_run ? out({ retried: count }) : real()
+
+  it('is offered in the dead view and absent for every other state', async () => {
+    stubFetch(api())
+    await mount()
+    expect(bulkBtn()).not.toBeNull()
+    for (const state of ['pending', 'running', 'done']) {
+      stubFetch(api())
+      document.body.innerHTML = ''
+      await mount(`/ops?state=${state}`)
+      expect(bulkBtn()).toBeNull()
+    }
+  })
+
+  it('opens an inline confirmation with the dry-run count and the scope, and sends no real retry', async () => {
+    stubFetch(api({ bulk: bulk() }))
+    await mount()
+    await click(bulkBtn() as HTMLElement)
+    expect(bulkPosts()).toEqual([{ state: 'dead', limit: 50, dry_run: true }])
+    expect(screen.getByText(/Retry 3 jobs \(all dead jobs\)\?/)).toBeTruthy()
+    expect(screen.getByText(/A transcription can take hours of CPU\./)).toBeTruthy()
+    expect(document.activeElement).toBe(confirmBtn())
+    expect(bulkBtn()).toBeNull()
+  })
+
+  it('shows the transcribe warning only when transcription is in scope', async () => {
+    stubFetch(api({ bulk: bulk() }))
+    await mount('/ops?kind=analyze')
+    await click(bulkBtn() as HTMLElement)
+    expect(screen.getByText(/Retry 3 jobs \(dead jobs with kind analyze\)\?/)).toBeTruthy()
+    expect(screen.queryByText(/hours of CPU/)).toBeNull()
+  })
+
+  it('Cancel sends nothing more and returns focus to the trigger', async () => {
+    stubFetch(api({ bulk: bulk() }))
+    await mount()
+    await click(bulkBtn() as HTMLElement)
+    await click(cancelBtn())
+    expect(posts()).toHaveLength(1)
+    expect(document.activeElement).toBe(bulkBtn())
+  })
+
+  it('says so, and offers no confirmation, when nothing matches', async () => {
+    stubFetch(api({ bulk: bulk(undefined, 0) }))
+    await mount()
+    await click(bulkBtn() as HTMLElement)
+    expect(screen.queryByRole('button', { name: 'Confirm retry' })).toBeNull()
+    expect(liveText()).toContain('No dead jobs match these filters.')
+  })
+
+  it.each<[string, string, Record<string, unknown>]>([
+    ['Any / Any', '/ops', { state: 'dead', limit: 50 }],
+    ['kind', '/ops?kind=transcribe', { state: 'dead', kind: 'transcribe', limit: 50 }],
+    ['class', '/ops?error_class=BUG', { state: 'dead', error_class: 'BUG', limit: 50 }],
+    ['No class', '/ops?kind=ingest&error_class=none', { state: 'dead', kind: 'ingest', error_class: 'none', limit: 50 }],
+  ])('Confirm sends the mapped body (%s)', async (_n, url, expected) => {
+    stubFetch(api({ bulk: bulk() }))
+    await mount(url)
+    await click(bulkBtn() as HTMLElement)
+    await click(confirmBtn())
+    expect(bulkPosts()).toEqual([
+      { ...expected, dry_run: true },
+      { ...expected, dry_run: false },
+    ])
+    expect(posts()[1]?.headers.get('content-type')).toBe('application/json')
+  })
+
+  it('announces the count, closes the confirmation and refreshes the list and depth', async () => {
+    stubFetch(api({ bulk: bulk(() => out({ retried: 3, dry_run: false })) }))
+    await mount()
+    const gets = jobGets().length
+    const depthGets = healthGets().length
+    await click(bulkBtn() as HTMLElement)
+    await click(confirmBtn())
+    expect(liveText()).toContain('Retried 3 jobs.')
+    expect(liveText()).not.toContain('limit')
+    expect(screen.queryByRole('button', { name: 'Confirm retry' })).toBeNull()
+    expect(jobGets().length).toBeGreaterThan(gets)
+    expect(healthGets().length).toBeGreaterThan(depthGets)
+  })
+
+  it('notes when the per-call cap was reached', async () => {
+    stubFetch(api({ bulk: bulk(() => out({ retried: 50, has_more: true, dry_run: false })) }))
+    await mount()
+    await click(bulkBtn() as HTMLElement)
+    await click(confirmBtn())
+    expect(liveText()).toContain('Retried 50 jobs. The limit of 50 per call was reached and more remain')
+  })
+
+  it.each<[string, () => Reply, string]>([
+    ['409', () => json({ detail: 'SECRET' }, 409), 'Concurrent change, try again'],
+    ['429', () => json({ detail: 'SECRET' }, 429), 'Too many requests. Try again shortly.'],
+    ['503', () => json({ detail: 'SECRET' }, 503), 'The database is unavailable. Try again shortly.'],
+    ['422', () => json({ detail: 'SECRET' }, 422), 'Retry failed'],
+    ['bad shape', () => json({ retried: 'x' }), 'Retry failed'],
+    ['network', () => Promise.reject(new TypeError('SECRET boom')) as unknown as Response, 'Retry failed'],
+  ])('a failing real retry (%s) shows a fixed message once, never the server text', async (_n, reply, text) => {
+    stubFetch(api({ bulk: bulk(reply) }))
+    await mount()
+    await click(bulkBtn() as HTMLElement)
+    await click(confirmBtn())
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000)
+    })
+    expect(liveText()).toContain(text)
+    expect(document.body.textContent).not.toContain('SECRET')
+    expect(posts()).toHaveLength(2)
+  })
+
+  it('a failing dry run shows a fixed message and opens no confirmation', async () => {
+    stubFetch(api({ bulk: () => json({ detail: 'SECRET' }, 503) }))
+    await mount()
+    await click(bulkBtn() as HTMLElement)
+    expect(liveText()).toContain('The database is unavailable. Try again shortly.')
+    expect(screen.queryByRole('button', { name: 'Confirm retry' })).toBeNull()
+    expect(bulkBtn()).not.toBeNull()
+  })
+
+  it('disables Confirm and Cancel in flight and a double click fires one retry', async () => {
+    const d = deferred()
+    stubFetch(api({ bulk: bulk(() => d.promise) }))
+    await mount()
+    await click(bulkBtn() as HTMLElement)
+    const c = confirmBtn()
+    fireEvent.click(c)
+    fireEvent.click(c)
+    await settle()
+    expect(posts()).toHaveLength(2)
+    expect(confirmBtn().disabled).toBe(true)
+    expect(cancelBtn().disabled).toBe(true)
+    await act(async () => {
+      d.resolve(json(out({ dry_run: false })))
+    })
+    await settle()
+  })
+
+  it('disables the trigger while the dry run is in flight', async () => {
+    const d = deferred()
+    stubFetch(api({ bulk: () => d.promise }))
+    await mount()
+    fireEvent.click(bulkBtn() as HTMLElement)
+    fireEvent.click(bulkBtn() as HTMLElement)
+    await settle()
+    expect(posts()).toHaveLength(1)
+    expect(bulkBtn()?.disabled).toBe(true)
+    await act(async () => {
+      d.resolve(json(out()))
+    })
+    await settle()
+  })
+})
+
+describe('retry all matching (#161)', () => {
+  const bulkBtn = () => screen.queryByRole('button', { name: 'Retry all matching' }) as HTMLButtonElement | null
+  const confirmBtn = () => screen.getByRole('button', { name: 'Confirm retry' }) as HTMLButtonElement
+  const cancelBtn = () => screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement
+  const bulkPosts = () => posts().map((c) => JSON.parse(c.body ?? 'null') as Record<string, unknown>)
+  const out = (over: Record<string, unknown> = {}) => ({
+    retried: 3,
+    job_ids: [3, 2, 1],
+    has_more: false,
+    dry_run: true,
+    ...over,
+  })
+  /** Dry runs answer with the count; real runs with `real`. */
+  const bulk = (real: () => Reply = () => out({ dry_run: false }), count = 3): Handler => (c) =>
+    (JSON.parse(c.body ?? '{}') as { dry_run: boolean }).dry_run ? out({ retried: count }) : real()
+
+  it('is offered in the dead view and absent for every other state', async () => {
+    stubFetch(api())
+    await mount()
+    expect(bulkBtn()).not.toBeNull()
+    for (const state of ['pending', 'running', 'done']) {
+      stubFetch(api())
+      document.body.innerHTML = ''
+      await mount(`/ops?state=${state}`)
+      expect(bulkBtn()).toBeNull()
+    }
+  })
+
+  it('opens an inline confirmation with the dry-run count and the scope, and sends no real retry', async () => {
+    stubFetch(api({ bulk: bulk() }))
+    await mount()
+    await click(bulkBtn() as HTMLElement)
+    expect(bulkPosts()).toEqual([{ state: 'dead', limit: 50, dry_run: true }])
+    expect(screen.getByText(/Retry 3 jobs \(all dead jobs\)\?/)).toBeTruthy()
+    expect(screen.getByText(/A transcription can take hours of CPU\./)).toBeTruthy()
+    expect(document.activeElement).toBe(confirmBtn())
+    expect(bulkBtn()).toBeNull()
+  })
+
+  it('shows the transcribe warning only when transcription is in scope', async () => {
+    stubFetch(api({ bulk: bulk() }))
+    await mount('/ops?kind=analyze')
+    await click(bulkBtn() as HTMLElement)
+    expect(screen.getByText(/Retry 3 jobs \(dead jobs with kind analyze\)\?/)).toBeTruthy()
+    expect(screen.queryByText(/hours of CPU/)).toBeNull()
+  })
+
+  it('Cancel sends nothing more and returns focus to the trigger', async () => {
+    stubFetch(api({ bulk: bulk() }))
+    await mount()
+    await click(bulkBtn() as HTMLElement)
+    await click(cancelBtn())
+    expect(posts()).toHaveLength(1)
+    expect(document.activeElement).toBe(bulkBtn())
+  })
+
+  it('says so, and offers no confirmation, when nothing matches', async () => {
+    stubFetch(api({ bulk: bulk(undefined, 0) }))
+    await mount()
+    await click(bulkBtn() as HTMLElement)
+    expect(screen.queryByRole('button', { name: 'Confirm retry' })).toBeNull()
+    expect(liveText()).toContain('No dead jobs match these filters.')
+  })
+
+  it.each<[string, string, Record<string, unknown>]>([
+    ['Any / Any', '/ops', { state: 'dead', limit: 50 }],
+    ['kind', '/ops?kind=transcribe', { state: 'dead', kind: 'transcribe', limit: 50 }],
+    ['class', '/ops?error_class=BUG', { state: 'dead', error_class: 'BUG', limit: 50 }],
+    ['No class', '/ops?kind=ingest&error_class=none', { state: 'dead', kind: 'ingest', error_class: 'none', limit: 50 }],
+  ])('Confirm sends the mapped body (%s)', async (_n, url, expected) => {
+    stubFetch(api({ bulk: bulk() }))
+    await mount(url)
+    await click(bulkBtn() as HTMLElement)
+    await click(confirmBtn())
+    expect(bulkPosts()).toEqual([
+      { ...expected, dry_run: true },
+      { ...expected, dry_run: false },
+    ])
+    expect(posts()[1]?.headers.get('content-type')).toBe('application/json')
+  })
+
+  it('announces the count, closes the confirmation and refreshes the list and depth', async () => {
+    stubFetch(api({ bulk: bulk(() => out({ retried: 3, dry_run: false })) }))
+    await mount()
+    const gets = jobGets().length
+    const depthGets = healthGets().length
+    await click(bulkBtn() as HTMLElement)
+    await click(confirmBtn())
+    expect(liveText()).toContain('Retried 3 jobs.')
+    expect(liveText()).not.toContain('limit')
+    expect(screen.queryByRole('button', { name: 'Confirm retry' })).toBeNull()
+    expect(jobGets().length).toBeGreaterThan(gets)
+    expect(healthGets().length).toBeGreaterThan(depthGets)
+  })
+
+  it('notes when the per-call cap was reached', async () => {
+    stubFetch(api({ bulk: bulk(() => out({ retried: 50, has_more: true, dry_run: false })) }))
+    await mount()
+    await click(bulkBtn() as HTMLElement)
+    await click(confirmBtn())
+    expect(liveText()).toContain('Retried 50 jobs. The limit of 50 per call was reached and more remain')
+  })
+
+  it.each<[string, () => Reply, string]>([
+    ['409', () => json({ detail: 'SECRET' }, 409), 'Concurrent change, try again'],
+    ['429', () => json({ detail: 'SECRET' }, 429), 'Too many requests. Try again shortly.'],
+    ['503', () => json({ detail: 'SECRET' }, 503), 'The database is unavailable. Try again shortly.'],
+    ['422', () => json({ detail: 'SECRET' }, 422), 'Retry failed'],
+    ['bad shape', () => json({ retried: 'x' }), 'Retry failed'],
+    ['network', () => Promise.reject(new TypeError('SECRET boom')) as unknown as Response, 'Retry failed'],
+  ])('a failing real retry (%s) shows a fixed message once, never the server text', async (_n, reply, text) => {
+    stubFetch(api({ bulk: bulk(reply) }))
+    await mount()
+    await click(bulkBtn() as HTMLElement)
+    await click(confirmBtn())
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000)
+    })
+    expect(liveText()).toContain(text)
+    expect(document.body.textContent).not.toContain('SECRET')
+    expect(posts()).toHaveLength(2)
+  })
+
+  it('a failing dry run shows a fixed message and opens no confirmation', async () => {
+    stubFetch(api({ bulk: () => json({ detail: 'SECRET' }, 503) }))
+    await mount()
+    await click(bulkBtn() as HTMLElement)
+    expect(liveText()).toContain('The database is unavailable. Try again shortly.')
+    expect(screen.queryByRole('button', { name: 'Confirm retry' })).toBeNull()
+    expect(bulkBtn()).not.toBeNull()
+  })
+
+  it('disables Confirm and Cancel in flight and a double click fires one retry', async () => {
+    const d = deferred()
+    stubFetch(api({ bulk: bulk(() => d.promise) }))
+    await mount()
+    await click(bulkBtn() as HTMLElement)
+    const c = confirmBtn()
+    fireEvent.click(c)
+    fireEvent.click(c)
+    await settle()
+    expect(posts()).toHaveLength(2)
+    expect(confirmBtn().disabled).toBe(true)
+    expect(cancelBtn().disabled).toBe(true)
+    await act(async () => {
+      d.resolve(json(out({ dry_run: false })))
+    })
+    await settle()
+  })
+
+  it('disables the trigger while the dry run is in flight', async () => {
+    const d = deferred()
+    stubFetch(api({ bulk: () => d.promise }))
+    await mount()
+    fireEvent.click(bulkBtn() as HTMLElement)
+    fireEvent.click(bulkBtn() as HTMLElement)
+    await settle()
+    expect(posts()).toHaveLength(1)
+    expect(bulkBtn()?.disabled).toBe(true)
+    await act(async () => {
+      d.resolve(json(out()))
+    })
+    await settle()
   })
 })

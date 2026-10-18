@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { operations } from '../api'
 import {
+  bulkIncludesTranscribe,
+  bulkRetryBody,
+  bulkRetryErrorMessage,
+  bulkRetryMessage,
+  bulkScopeLabel,
   buildJobsRequest,
+  isBulkRetryOut,
   collapseError,
   depthTable,
   ERROR_CLASSES,
@@ -343,5 +349,43 @@ describe('isJobList', () => {
     ['created_at', null], ['created_at', 5],
   ])('rejects a job whose %s is %j', (field, value) => {
     expect(isJobList(ok({ [field]: value }))).toBe(false)
+  })
+})
+
+describe('bulk retry helpers (#161)', () => {
+  const f = (kind: 'ingest' | 'transcribe' | 'analyze' | null, errorClass: 'BUG' | 'none' | null) =>
+    ({ state: 'dead', kind, errorClass }) as const
+
+  it('maps the filter to exactly the strict body', () => {
+    expect(bulkRetryBody(f(null, null), true)).toEqual({ state: 'dead', limit: 50, dry_run: true })
+    expect(bulkRetryBody(f('analyze', 'BUG'), false)).toEqual({ state: 'dead', kind: 'analyze', error_class: 'BUG', limit: 50, dry_run: false })
+    expect(bulkRetryBody(f(null, 'none'), false)).toEqual({ state: 'dead', error_class: 'none', limit: 50, dry_run: false })
+  })
+
+  it('names the scope and when transcription is in it', () => {
+    expect(bulkScopeLabel(f(null, null))).toBe('all dead jobs')
+    expect(bulkScopeLabel(f('ingest', 'none'))).toBe('dead jobs with kind ingest and no error class')
+    expect(bulkScopeLabel(f(null, 'BUG'))).toBe('dead jobs with error class BUG')
+    expect(bulkIncludesTranscribe(f(null, null))).toBe(true)
+    expect(bulkIncludesTranscribe(f('transcribe', null))).toBe(true)
+    expect(bulkIncludesTranscribe(f('ingest', null))).toBe(false)
+  })
+
+  it('words the result and the fixed errors', () => {
+    const o = { retried: 1, job_ids: [1], has_more: false, dry_run: false }
+    expect(bulkRetryMessage(o)).toBe('Retried 1 job.')
+    expect(bulkRetryMessage({ ...o, retried: 50, has_more: true })).toContain('limit of 50 per call was reached')
+    expect(bulkRetryErrorMessage(409)).toBe('Concurrent change, try again')
+    expect(bulkRetryErrorMessage(429)).toBe('Too many requests. Try again shortly.')
+    expect(bulkRetryErrorMessage(503)).toBe('The database is unavailable. Try again shortly.')
+    expect(bulkRetryErrorMessage(422)).toBe('Retry failed')
+    expect(bulkRetryErrorMessage(null)).toBe('Retry failed')
+  })
+
+  it('guards the response shape', () => {
+    expect(isBulkRetryOut({ retried: 0, job_ids: [], has_more: false, dry_run: true })).toBe(true)
+    for (const v of [null, {}, { retried: -1, job_ids: [], has_more: false, dry_run: true }, { retried: 1, job_ids: ['1'], has_more: false, dry_run: true }, { retried: 1, job_ids: [1], has_more: 'no', dry_run: true }]) {
+      expect(isBulkRetryOut(v)).toBe(false)
+    }
   })
 })

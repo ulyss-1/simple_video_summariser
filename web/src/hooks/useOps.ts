@@ -1,6 +1,8 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, ApiError, rethrowHttp } from '../api'
 import {
+  bulkRetryBody,
+  isBulkRetryOut,
   jobsQuery,
   isHealth,
   isPositiveSafeInt,
@@ -8,6 +10,7 @@ import {
   isOpsChannelList,
   retryMessage,
   type HealthOut,
+  type BulkRetryOut,
   type JobListOut,
   type OpsChannelListOut,
   type OpsFilters,
@@ -117,4 +120,28 @@ export function useRetryJob(onResult: (jobId: number, message: string) => void) 
     },
     onError: (_error, id) => onResult(id, retryMessage(id, { type: 'network' })),
   })
+}
+
+async function postBulkRetry(filters: OpsFilters, dryRun: boolean): Promise<BulkRetryOut> {
+  const body: unknown = await api
+    .post('/ops/jobs/retry', { body: bulkRetryBody(filters, dryRun) })
+    .catch((error: unknown) => rethrowHttp(error, (_e, status) => new OpsError(status)))
+  if (!isBulkRetryOut(body)) throw new Error('Unexpected response shape')
+  return body
+}
+
+/**
+ * POST /api/ops/jobs/retry (#161). `preview` is the dry run that counts the
+ * matching dead jobs; `run` retries them and then refreshes everything under
+ * ['ops']. Neither is retried automatically.
+ */
+export function useBulkRetry() {
+  const client = useQueryClient()
+  const preview = useMutation({ retry: 0, mutationFn: (filters: OpsFilters) => postBulkRetry(filters, true) })
+  const run = useMutation({
+    retry: 0,
+    mutationFn: (filters: OpsFilters) => postBulkRetry(filters, false),
+    onSuccess: () => client.invalidateQueries({ queryKey: ['ops'] }),
+  })
+  return { preview, run }
 }

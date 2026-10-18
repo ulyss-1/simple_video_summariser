@@ -1,8 +1,21 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { JobProgress } from '../components/JobProgress'
-import { OpsError, useOpsChannels, useOpsJobs, useQueueDepth, useRetryJob, type JobOut, type OpsChannelOut } from '../hooks/useOps'
 import {
+  OpsError,
+  useBulkRetry,
+  useOpsChannels,
+  useOpsJobs,
+  useQueueDepth,
+  useRetryJob,
+  type JobOut,
+  type OpsChannelOut,
+} from '../hooks/useOps'
+import {
+  bulkIncludesTranscribe,
+  bulkRetryErrorMessage,
+  bulkRetryMessage,
+  bulkScopeLabel,
   collapseError,
   depthTable,
   ERROR_CLASSES,
@@ -147,6 +160,9 @@ export function Ops() {
       <section className="ops__section" aria-labelledby={jobsId}>
         <h2 id={jobsId}>Jobs</h2>
         <Filters filters={filters} onChange={(f) => go(f, null)} />
+        {filters.state === 'dead' && (
+          <BulkRetry key={`${filters.kind}|${filters.errorClass}`} filters={filters} onAction={() => setResult(null)} />
+        )}
         <p className="muted" aria-live="polite">{rowVanished ? result.message : ''}</p>
         {loadingJobs && <p className="muted">Loading jobs…</p>}
         {jobs.isError && (
@@ -322,6 +338,96 @@ function Filters({ filters, onChange }: { filters: OpsFilters; onChange: (f: Ops
       </select>
       </div>
     </form>
+  )
+}
+
+/** "Retry all matching" (#161): a dry run counts the jobs, an inline confirmation names the scope, Confirm retries. */
+function BulkRetry({ filters, onAction }: { filters: OpsFilters; onAction: () => void }) {
+  const { preview, run } = useBulkRetry()
+  const [count, setCount] = useState<number | null>(null)
+  const [note, setNote] = useState<{ text: string; error: boolean } | null>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const confirmRef = useRef<HTMLButtonElement>(null)
+  const restoreFocus = useRef(false)
+  // Set synchronously on click: isPending only turns true on a later tick.
+  const sent = useRef(false)
+  const confirming = count !== null
+  const busy = preview.isPending || run.isPending
+
+  // Focus follows the confirmation: into it when it opens, back out on Cancel.
+  useEffect(() => {
+    if (confirming) confirmRef.current?.focus()
+    else if (restoreFocus.current) {
+      restoreFocus.current = false
+      triggerRef.current?.focus()
+    }
+  }, [confirming])
+
+  const fail = (error: unknown) =>
+    setNote({ text: bulkRetryErrorMessage(error instanceof OpsError ? error.status : null), error: true })
+
+  const open = () => {
+    if (sent.current) return
+    sent.current = true
+    onAction()
+    setNote(null)
+    preview.mutate(filters, {
+      onSuccess: (out) => {
+        if (out.retried === 0) setNote({ text: 'No dead jobs match these filters.', error: false })
+        else setCount(out.retried)
+      },
+      onError: fail,
+      onSettled: () => {
+        sent.current = false
+      },
+    })
+  }
+
+  const confirm = () => {
+    if (sent.current) return
+    sent.current = true
+    run.mutate(filters, {
+      onSuccess: (out) => setNote({ text: bulkRetryMessage(out), error: false }),
+      onError: fail,
+      onSettled: () => {
+        sent.current = false
+        setCount(null)
+      },
+    })
+  }
+
+  return (
+    <div>
+      {confirming ? (
+        <div className="ops__confirm">
+          <p>
+            Retry {count} {count === 1 ? 'job' : 'jobs'} ({bulkScopeLabel(filters)})?
+            {bulkIncludesTranscribe(filters) && ' A transcription can take hours of CPU.'}
+          </p>
+          <button className="btn btn--primary" type="button" ref={confirmRef} disabled={busy} onClick={confirm}>
+            Confirm retry
+          </button>{' '}
+          <button
+            className="btn"
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              restoreFocus.current = true
+              setCount(null)
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <button className="btn" type="button" ref={triggerRef} disabled={busy} onClick={open}>
+          Retry all matching
+        </button>
+      )}
+      <p className={note?.error ? 'alert alert--danger' : 'muted'} aria-live="polite">
+        {note?.text ?? ''}
+      </p>
+    </div>
   )
 }
 
