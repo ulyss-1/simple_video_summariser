@@ -1104,3 +1104,46 @@ def test_audio_min_free_values_are_read_from_the_environment(
     settings = get_settings()
 
     assert (settings.AUDIO_MIN_FREE_GB, settings.AUDIO_MIN_FREE_PCT) == (0, 12.5)
+
+
+# --- AUDIO_MAX_GB / AUDIO_MIN_FREE_GB must be finite (#197) -------------------
+
+NON_FINITE_OR_NEGATIVE = ["inf", "+inf", "-inf", "nan", "-1", "-0.5"]
+
+
+@pytest.mark.parametrize("field", ["AUDIO_MAX_GB", "AUDIO_MIN_FREE_GB"])
+@pytest.mark.parametrize("value", NON_FINITE_OR_NEGATIVE)
+def test_audio_gb_settings_reject_non_finite_and_negative_values(
+    monkeypatch: pytest.MonkeyPatch, field: str, value: str
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", DB_URL)
+    monkeypatch.setenv(field, value)
+    with pytest.raises(ValidationError) as excinfo:
+        get_settings()
+    assert _errors_for(excinfo.value, field)
+
+
+@pytest.mark.parametrize("value", ["0", "0.0"])
+def test_audio_max_gb_rejects_zero(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    monkeypatch.setenv("DATABASE_URL", DB_URL)
+    monkeypatch.setenv("AUDIO_MAX_GB", value)
+    with pytest.raises(ValidationError) as excinfo:
+        get_settings()
+    assert _errors_for(excinfo.value, "AUDIO_MAX_GB")
+
+
+def test_audio_gb_settings_accept_normal_finite_values() -> None:
+    s = build_settings(DATABASE_URL=DB_URL, AUDIO_MAX_GB=20, AUDIO_MIN_FREE_GB=2)
+    assert (s.AUDIO_MAX_GB, s.AUDIO_MIN_FREE_GB) == (20, 2)
+    assert build_settings(DATABASE_URL=DB_URL, AUDIO_MIN_FREE_GB=0).AUDIO_MIN_FREE_GB == 0
+
+
+@pytest.mark.parametrize("value", ["inf", "-inf", "nan", "-1", "100", "101"])
+def test_audio_min_free_pct_rejects_non_finite_negative_and_out_of_range(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", DB_URL)
+    monkeypatch.setenv("AUDIO_MIN_FREE_PCT", value)
+    with pytest.raises(ValidationError) as excinfo:
+        get_settings()
+    assert _errors_for(excinfo.value, "AUDIO_MIN_FREE_PCT")

@@ -184,3 +184,11 @@ def test_free_at_the_floor_evicts_nothing_and_returns_the_reading(tmp_path: Path
 
     assert free == 2 * GB
     assert counters.errors == 0
+
+
+def test_gb_conversion_works_for_accepted_values_and_inf_overflows() -> None:
+    # #197: config now rejects inf, so these conversions never see it.
+    assert retention.max_bytes_from_gb(20) == 20_000_000_000
+    assert min_free_bytes(10_000, min_free_gb=2, min_free_pct=0) == 2_000_000_000
+    with pytest.raises(OverflowError):
+        retention.max_bytes_from_gb(float("inf"))
