@@ -482,3 +482,36 @@ def test_the_planner_task_persists_its_rekeys_and_supersedes_on_a_fresh_connecti
         assert _row(fresh, rekeyed)["dedupe_key"] == "v2:ollama"
         gone = _row(fresh, superseded)
         assert (gone["state"], gone["last_error"]) == ("dead", SUPERSEDED)
+
+
+def test_each_malformed_dead_letter_logs_one_error_line(
+    conn: psycopg.Connection[Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    _video(conn)
+    _video(conn, W)
+    first = _job(conn, "default")
+    second = _job(conn, "v1", video_id=W)
+
+    with caplog.at_level(logging.DEBUG):
+        resolve_stale_analyze_jobs(_queue(conn), _settings())
+
+    records = [r for r in caplog.records if r.getMessage() == "job dead-lettered"]
+    assert sorted(r.__dict__["job_id"] for r in records) == sorted([first, second])
+    for r in records:
+        assert r.levelno == logging.ERROR
+        assert r.__dict__["error_class"] == "BUG"
+        assert r.__dict__["kind"] == "analyze"
+        assert r.__dict__["alert"] is False
+        assert "dedupe_key is malformed" in r.__dict__["last_error"]
+
+
+def test_a_pass_with_nothing_dead_logs_no_dead_letter_line(
+    conn: psycopg.Connection[Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    _video(conn)
+    _job(conn, "v1:fake")
+
+    with caplog.at_level(logging.DEBUG):
+        resolve_stale_analyze_jobs(_queue(conn), _settings())
+
+    assert [r for r in caplog.records if r.getMessage() == "job dead-lettered"] == []

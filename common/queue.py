@@ -39,7 +39,15 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from common.config import Settings, get_settings
-from common.errors import Cancelled, Defer, ErrorClass, classify, format_error, policy
+from common.errors import (
+    Cancelled,
+    Defer,
+    ErrorClass,
+    classify,
+    format_error,
+    log_dead_letter,
+    policy,
+)
 from common.repo.jobs import UNSET
 from common.safe_url import redact
 
@@ -82,6 +90,11 @@ _MAX_BACKOFF_SEC = 6 * 60 * 60  # 6 h
 _JITTER_FRACTION = 0.10
 
 _REAP_LAST_ERROR = "worker lost: heartbeat stale"
+# last_error of a malformed-key analyze job dead-lettered by resolve_stale_analyze (#200).
+MALFORMED_ANALYZE_ERROR = (
+    "BUG: analyze dedupe_key is malformed (not <version>:<summarizer>); "
+    "unclaimable and unresolvable, dead-lettered by stale-analyze resolution"
+)
 
 _CLAIM_SQL_TEMPLATE = """
     UPDATE jobs SET state='running', locked_at=now(), started_at=now(),
@@ -588,7 +601,7 @@ class PostgresQueue:
             dead = job.attempts >= effective_max
 
         if dead:
-            self._resolve(
+            transitioned = self._resolve(
                 job,
                 worker,
                 """
@@ -599,6 +612,16 @@ class PostgresQueue:
                 """,
                 {"last_error": last_error, "error_class": error_class.value},
             )
+            # Only a row actually moved to 'dead' is a dead-letter; a zero-row
+            # outcome is the reaped-and-reclaimed race (#193).
+            if transitioned:
+                log_dead_letter(
+                    job_id=job.id,
+                    kind=job.kind,
+                    error_class=error_class,
+                    last_error=last_error,
+                    video_id=job.video_id,
+                )
             return
 
         retry_after_sec = getattr(exc, "retry_after_sec", None)
@@ -646,7 +669,8 @@ class PostgresQueue:
 
     def _resolve(
         self, job: Job, worker: str, sql: str, params: dict[str, Any]
-    ) -> None:
+    ) -> bool:
+        """Run an outcome UPDATE; True when it matched a row."""
         with self._conn.transaction(), self._conn.cursor() as cur:
             cur.execute(sql, {**params, "id": job.id, "worker": worker})
             if cur.rowcount == 0:
@@ -655,6 +679,8 @@ class PostgresQueue:
                     "reaped and reclaimed by another worker",
                     extra={"job_id": job.id, "worker": worker, "kind": job.kind},
                 )
+                return False
+            return True
 
     # -- retry_dead ------------------------------------------------------------
 
@@ -973,6 +999,14 @@ class PostgresQueue:
             if row["outcome"] == "pending":
                 extra["run_after"] = row["run_after"]
             _logger.warning("queue.job_reaped", extra=extra)
+            if row["outcome"] == "dead":
+                log_dead_letter(
+                    job_id=row["id"],
+                    kind=row["kind"],
+                    error_class=None,
+                    last_error=_REAP_LAST_ERROR,
+                    video_id=row["video_id"],
+                )
         return len(reaped)
 
     # -- resolve_stale_analyze -------------------------------------------------
@@ -1005,10 +1039,7 @@ class PostgresQueue:
                 {
                     "prompt_version": prompt_version,
                     "message": f"superseded: PROMPT_VERSION is now {prompt_version}",
-                    "malformed_message": redact(
-                        "BUG: analyze dedupe_key is malformed (not <version>:<summarizer>); "
-                        "unclaimable and unresolvable, dead-lettered by stale-analyze resolution"
-                    ),
+                    "malformed_message": redact(MALFORMED_ANALYZE_ERROR),
                 },
             )
             row = cur.fetchone()

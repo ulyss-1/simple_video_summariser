@@ -332,7 +332,7 @@ def test_dead_letter_of_an_alerting_class_logs_critical_with_alert(
 ) -> None:
     logger = logging.getLogger("test.dead_letter")
     with caplog.at_level(logging.DEBUG, logger="test.dead_letter"):
-        log_dead_letter(_job_error_for(cls), logger=logger, job_id=7)
+        log_dead_letter(job_id=7, kind="ingest", error_class=cls, last_error="x", logger=logger)
     [record] = caplog.records
     assert record.levelno == logging.CRITICAL
     assert record.__dict__["alert"] is True
@@ -346,7 +346,7 @@ def test_dead_letter_of_a_quiet_class_does_not_alert(
 ) -> None:
     logger = logging.getLogger("test.dead_letter")
     with caplog.at_level(logging.DEBUG, logger="test.dead_letter"):
-        log_dead_letter(_job_error_for(cls), logger=logger)
+        log_dead_letter(job_id=7, kind="ingest", error_class=cls, last_error="x", logger=logger)
     [record] = caplog.records
     assert record.levelno < logging.CRITICAL
     assert record.__dict__["alert"] is False
@@ -364,10 +364,49 @@ def test_dead_letter_of_a_raw_disk_full_error_alerts(
 ) -> None:
     logger = logging.getLogger("test.dead_letter")
     with caplog.at_level(logging.DEBUG, logger="test.dead_letter"):
-        log_dead_letter(OSError(errno.ENOSPC, "No space left on device"), logger=logger)
+        log_dead_letter(
+            job_id=7,
+            kind="ingest",
+            error_class=classify(OSError(errno.ENOSPC, "No space left on device")),
+            last_error="x",
+            logger=logger,
+        )
     [record] = caplog.records
     assert record.levelno == logging.CRITICAL
     assert record.__dict__["alert"] is True
+
+
+def test_dead_letter_without_a_class_logs_error_and_carries_the_row_fields(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    logger = logging.getLogger("test.dead_letter")
+    with caplog.at_level(logging.DEBUG, logger="test.dead_letter"):
+        log_dead_letter(
+            job_id=9, kind="analyze", error_class=None, last_error="lost", logger=logger,
+            video_id="v1",
+        )
+    [record] = caplog.records
+    assert record.levelno == logging.ERROR
+    assert record.__dict__["error_class"] is None
+    assert record.__dict__["alert"] is False
+    assert (record.__dict__["job_id"], record.__dict__["kind"]) == (9, "analyze")
+    assert record.__dict__["last_error"] == "lost"
+    assert record.__dict__["video_id"] == "v1"
+
+
+def test_dead_letter_redacts_last_error_and_the_message(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    logger = logging.getLogger("test.dead_letter")
+    secret = "s3cr3tpassw0rd"
+    with caplog.at_level(logging.DEBUG, logger="test.dead_letter"):
+        log_dead_letter(
+            job_id=1, kind="ingest", error_class=ErrorClass.BUG, logger=logger,
+            last_error=f"failed https://user:{secret}@host/x",
+        )
+    [record] = caplog.records
+    assert secret not in record.getMessage()
+    assert secret not in str(record.__dict__["last_error"])
 
 
 # --- import direction -----------------------------------------------------

@@ -215,20 +215,36 @@ def format_error(exc: BaseException) -> str:
 
 
 def log_dead_letter(
-    exc: BaseException, *, logger: logging.Logger | None = None, **context: object
+    *,
+    job_id: int,
+    kind: str,
+    error_class: ErrorClass | str | None,
+    last_error: str,
+    logger: logging.Logger | None = None,
+    **context: object,
 ) -> None:
-    """Log that a job dead-lettered with ``exc``.
+    """Log that a job dead-lettered (issue #193; architecture.md 8.4 / 15).
 
-    Alerting classes (``policy(cls).alert``) log at CRITICAL with
-    ``alert=True``; the rest log at ERROR with ``alert=False``. ``context``
-    (job id, video id, kind ...) is attached to the record.
+    The one dead-letter logging path, for every site that sets ``state='dead'``.
+    Takes the fields stored on the row, not an exception: two sites have none.
+    ``error_class`` is the row value (``None`` for a reaped job, #114). Alerting
+    classes (``policy(cls).alert``) log at CRITICAL with ``alert=True``; the
+    rest, including ``None``, log at ERROR with ``alert=False``. ``last_error``
+    is redacted again here (``common.safe_url.redact``, idempotent), and is
+    attached to the record only, never interpolated into the message.
+    ``context`` (video id ...) is attached to the record.
     """
-    cls = classify(exc)
-    alert = policy(cls).alert
+    cls = ErrorClass(error_class) if error_class is not None else None
+    alert = policy(cls).alert if cls is not None else False
     (logger or _logger).log(
         logging.CRITICAL if alert else logging.ERROR,
-        "job dead-lettered: %s: %s",
-        cls,
-        exc,
-        extra={**context, "error_class": cls, "alert": alert},
+        "job dead-lettered",
+        extra={
+            **context,
+            "job_id": job_id,
+            "kind": kind,
+            "error_class": cls,
+            "last_error": redact(last_error),
+            "alert": alert,
+        },
     )

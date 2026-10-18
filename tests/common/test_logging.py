@@ -21,7 +21,7 @@ import pytest
 import structlog
 
 from common.config import Settings
-from common.errors import ToolFailureError, log_dead_letter
+from common.errors import ErrorClass, log_dead_letter
 from common.logging import bound_context, configure_logging
 
 UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
@@ -289,7 +289,9 @@ def test_stdlib_extra_fields_are_rendered() -> None:
 def test_dead_letter_log_from_errors_module_renders_as_json() -> None:
     stream = setup()
     with bound_context(job_id=5, video_id="abc", kind="ingest", attempt=3):
-        log_dead_letter(ToolFailureError("extractor broke"))
+        log_dead_letter(
+            job_id=5, kind="ingest", error_class=ErrorClass.TOOL_FAILURE, last_error="x"
+        )
 
     [record] = records(stream)
     assert record["level"] == "critical"
