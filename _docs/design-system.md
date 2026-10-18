@@ -504,7 +504,9 @@ Behaviour:
   not an inline script, because the production CSP is `script-src 'self'`.
   `src/theme.ts` (`useTheme`) owns the toggle state and follows live OS changes
   while no choice is stored.
-- **Motion.** Nothing is animated; a `prefers-reduced-motion: reduce` rule
+- **Motion.** Only route changes animate (#163): an opted-in navigation gets the UA
+  root cross-fade via the View Transitions API, disabled by its own
+  `::view-transition-*` reduced-motion rule. A `prefers-reduced-motion: reduce` rule
   disables transitions and animations in case one is added.
 
 Dark token table (contrast on `#111827` bg unless noted; text on tints measured

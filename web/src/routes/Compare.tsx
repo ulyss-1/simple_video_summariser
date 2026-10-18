@@ -44,7 +44,7 @@ function NotFound() {
     <section className="page">
       <h1>Video not found</h1>
       <p>
-        <Link to="/">Back to Library</Link>
+        <Link to="/" viewTransition>Back to Library</Link>
       </p>
     </section>
   )
@@ -94,13 +94,13 @@ function ComparePage({ videoId }: { videoId: string }) {
         <>
           <p>This video has no analyses yet.</p>
           <p className="compare__links">
-            <Link to={`/videos/${videoId}`}>Video details</Link>
+            <Link to={`/videos/${videoId}`} viewTransition>Video details</Link>
           </p>
         </>
       ) : (
         <>
           <p className="compare__links">
-            <Link to={`/videos/${videoId}`}>Video details</Link>
+            <Link to={`/videos/${videoId}`} viewTransition>Video details</Link>
           </p>
           <Player videoId={videoId} title={heading === videoId ? undefined : heading} />
           {capped && <p className="alert">{`Showing the newest ${runs.length} of ${total} analyses`}</p>}

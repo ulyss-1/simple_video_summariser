@@ -288,7 +288,7 @@ export function Library() {
                     return (
                       <tr key={v.video_id}>
                         <td>
-                          <Link to={`/videos/${v.video_id}`}>{v.title ?? v.video_id}</Link>
+                          <Link to={`/videos/${v.video_id}`} viewTransition>{v.title ?? v.video_id}</Link>
                         </td>
                         <td>
                           {id !== null ? (

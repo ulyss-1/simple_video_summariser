@@ -705,6 +705,18 @@ a:focus {
   }
 }
 
+/* Route changes (#163): react-router's viewTransition opt-in wraps navigation in
+   document.startViewTransition; the UA default root cross-fade is used as is.
+   The block above does not match view-transition pseudo-elements, so reduced
+   motion needs its own rule. */
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}
+
 /* ---- Search (#131) ----
  * Built from .page, .filters, .field, .input, .btn, .alert, .card, .muted and
  * .pagination; the hit link reuses .timestamp. Only what those do not cover

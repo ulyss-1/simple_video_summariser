@@ -11,16 +11,16 @@ export function Shell() {
     <>
       <header className="shell-header">
         <nav className="shell-nav" aria-label="Main">
-          <NavLink to="/" end className="shell-nav__link">
+          <NavLink to="/" end viewTransition className="shell-nav__link">
             Library
           </NavLink>
-          <NavLink to="/search" className="shell-nav__link">
+          <NavLink to="/search" viewTransition className="shell-nav__link">
             Search
           </NavLink>
-          <NavLink to="/channels/add" className="shell-nav__link">
+          <NavLink to="/channels/add" viewTransition className="shell-nav__link">
             Add channel
           </NavLink>
-          <NavLink to="/ops" className="shell-nav__link">
+          <NavLink to="/ops" viewTransition className="shell-nav__link">
             Ops
           </NavLink>
           {/* Plain anchor on purpose: API URLs belong to the server, not the router. */}

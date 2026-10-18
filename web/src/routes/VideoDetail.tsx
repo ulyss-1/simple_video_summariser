@@ -56,7 +56,7 @@ function NotFound() {
     <section className="page">
       <h1>Video not found</h1>
       <p>
-        <Link className="btn" to="/">
+        <Link className="btn" to="/" viewTransition>
           Back to Library
         </Link>
       </p>
@@ -206,13 +206,13 @@ function VideoPage({ videoId }: { videoId: string }) {
         {video.transcript !== null && (
           <>
             {' · '}
-            <Link to={`/videos/${videoId}/transcript`}>Transcript</Link>
+            <Link to={`/videos/${videoId}/transcript`} viewTransition>Transcript</Link>
           </>
         )}
         {analysisTotal !== undefined && analysisTotal >= 2 && (
           <>
             {' · '}
-            <Link to={`/videos/${videoId}/compare`}>Compare analyses</Link>
+            <Link to={`/videos/${videoId}/compare`} viewTransition>Compare analyses</Link>
           </>
         )}
         {analysis !== null && (

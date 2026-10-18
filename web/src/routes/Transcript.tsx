@@ -107,7 +107,7 @@ function TranscriptView({ videoId }: { videoId: string }) {
     <section className="page transcript">
       <h1>{title}</h1>
       <p>
-        <Link className="transcript__back" to={`/videos/${videoId}`}>Back to video</Link>
+        <Link className="transcript__back" to={`/videos/${videoId}`} viewTransition>Back to video</Link>
       </p>
       {q.status !== "pending" && (
         <Player videoId={videoId} title={rawTitle ?? undefined} />
