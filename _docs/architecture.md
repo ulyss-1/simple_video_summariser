@@ -445,6 +445,9 @@ a job just to defer it. Each planner tick, `stale_analyze` finds `pending`
 `analyze` jobs on any other version and re-keys each to the current version in
 place (keeping its priority), or marks it `dead` as superseded when the target
 key already has work or the video already has an analysis at that version (#100).
+A `pending` `analyze` job whose key is malformed (fails `^[^:]+:[^:]+$`, so no
+analyzer can ever claim it) is dead-lettered as `BUG` by the same pass, with a
+fixed, redacted `last_error` that does not echo the key (#200).
 
 ### Reaping (C2)
 
@@ -1066,7 +1069,9 @@ changed something" from "my LLM is down" at a glance.
 
 A NULL `error_class` on a `pending`/`dead` job means the reaper reset it after a
 lost heartbeat (`last_error = 'worker lost: heartbeat stale'`); it is not a
-class and has no retry policy.
+class and has no retry policy. A job superseded by `stale_analyze` (§11.6 of
+the queue) also has a NULL class; an `analyze` job with a malformed
+`dedupe_key` is dead-lettered by that resolution as `BUG` (#200).
 
 ---
 

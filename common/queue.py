@@ -30,7 +30,7 @@ import logging
 import random
 from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Literal, Protocol
 
@@ -41,6 +41,7 @@ from psycopg.types.json import Jsonb
 from common.config import Settings, get_settings
 from common.errors import Cancelled, Defer, ErrorClass, classify, format_error, policy
 from common.repo.jobs import UNSET
+from common.safe_url import redact
 
 _logger = logging.getLogger(__name__)
 
@@ -104,7 +105,10 @@ _CLAIM_SQL_KEYED = _CLAIM_SQL_TEMPLATE.format(key_filter=" AND dedupe_key = %(de
 #: Per (video, target key) the highest ``priority`` (then lowest ``id``) is
 #: re-keyed, unless the target already has a pending/running/dead job or the
 #: video already has an analysis at the version; everything else is superseded.
-#: One statement, so one transaction: the two UPDATEs touch disjoint rows.
+#: A pending ``analyze`` job whose key fails that shape is unclaimable (the
+#: keyed claim needs an exact well-formed key) and would be unresolvable, so the
+#: ``malformed`` CTE dead-letters it with ``error_class = 'BUG'`` (#200).
+#: One statement, so one transaction: the three UPDATEs touch disjoint rows.
 _STALE_ANALYZE_SQL = r"""
     WITH stale AS (
         SELECT id, video_id, priority,
@@ -141,7 +145,21 @@ _STALE_ANALYZE_SQL = r"""
         FROM ranked r WHERE j.id = r.id AND NOT r.rekey
         RETURNING j.id
     )
-    SELECT (SELECT count(*) FROM rekeyed), (SELECT count(*) FROM superseded)
+    ,
+    malformed AS (
+        SELECT id FROM jobs
+        WHERE kind = 'analyze' AND state = 'pending'
+          AND dedupe_key !~ '^[^:]+:[^:]+$'
+        FOR UPDATE SKIP LOCKED
+    ),
+    dead_lettered AS (
+        UPDATE jobs j SET state = 'dead', finished_at = now(), error_class = 'BUG',
+                          last_error = %(malformed_message)s
+        FROM malformed m WHERE j.id = m.id
+        RETURNING j.id
+    )
+    SELECT (SELECT count(*) FROM rekeyed), (SELECT count(*) FROM superseded),
+           (SELECT coalesce(array_agg(id ORDER BY id), '{}') FROM dead_lettered)
 """
 
 #: #44. ``NOT EXISTS`` only looks at active-index states, matching the
@@ -258,6 +276,9 @@ class StaleAnalyzeResult:
 
     rekeyed: int
     superseded: int
+    #: Malformed-key jobs dead-lettered as ``BUG`` (#200); ids are not compared.
+    dead: int = 0
+    dead_ids: tuple[int, ...] = field(default=(), compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -969,8 +990,10 @@ class PostgresQueue:
         already has an analysis at ``prompt_version`` (whatever the model). The
         other matching jobs are marked ``dead`` with ``last_error`` "superseded:
         ..." and keep their old key for the ops view. A row being claimed right
-        now is skipped (``SKIP LOCKED``) and handled on the next call. One
-        statement. PostgresQueue only, not on the ``JobQueue`` Protocol.
+        now is skipped (``SKIP LOCKED``) and handled on the next call. A
+        pending ``analyze`` job whose key is malformed (fails
+        ``^[^:]+:[^:]+$``) is dead-lettered with ``error_class`` ``BUG`` and
+        counted in ``dead`` (#200). One statement. PostgresQueue only, not on the ``JobQueue`` Protocol.
         """
         if not prompt_version or ":" in prompt_version:
             raise ValueError(
@@ -982,8 +1005,15 @@ class PostgresQueue:
                 {
                     "prompt_version": prompt_version,
                     "message": f"superseded: PROMPT_VERSION is now {prompt_version}",
+                    "malformed_message": redact(
+                        "BUG: analyze dedupe_key is malformed (not <version>:<summarizer>); "
+                        "unclaimable and unresolvable, dead-lettered by stale-analyze resolution"
+                    ),
                 },
             )
             row = cur.fetchone()
         assert row is not None
-        return StaleAnalyzeResult(rekeyed=int(row[0]), superseded=int(row[1]))
+        dead_ids = tuple(int(i) for i in row[2])
+        return StaleAnalyzeResult(
+            rekeyed=int(row[0]), superseded=int(row[1]), dead=len(dead_ids), dead_ids=dead_ids
+        )

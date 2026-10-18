@@ -23,7 +23,7 @@ _logger = logging.getLogger(__name__)
 
 
 def resolve_stale_analyze_jobs(queue: PostgresQueue, settings: Settings) -> int:
-    """Run one pass and return how many jobs it re-keyed plus superseded."""
+    """Run one pass and return how many jobs it re-keyed, superseded plus dead-lettered."""
     result = queue.resolve_stale_analyze(settings.PROMPT_VERSION)
     _logger.info(
         "planner.stale_analyze_resolved",
@@ -31,6 +31,8 @@ def resolve_stale_analyze_jobs(queue: PostgresQueue, settings: Settings) -> int:
             "prompt_version": settings.PROMPT_VERSION,
             "rekeyed": result.rekeyed,
             "superseded": result.superseded,
+            "dead": result.dead,
+            "dead_ids": list(result.dead_ids),
         },
     )
-    return result.rekeyed + result.superseded
+    return result.rekeyed + result.superseded + result.dead
