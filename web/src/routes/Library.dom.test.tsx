@@ -43,6 +43,8 @@ function range(from: number, count: number): VideoItem[] {
 
 type Responder = (q: URLSearchParams) => Response | Promise<Response> | VideoList
 let requests: URL[]
+let channelRequests: URL[]
+let channelsResponse: () => Response | Promise<Response>
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
@@ -50,10 +52,16 @@ function json(body: unknown, status = 200): Response {
 
 function stubFetch(respond: Responder) {
   requests = []
+  channelRequests = []
+  channelsResponse = () => json({ items: [], total: 0, offset: 0, limit: 200 })
   vi.stubGlobal(
     'fetch',
     vi.fn((input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost')
+      if (url.pathname.endsWith('/channels')) {
+        channelRequests.push(url)
+        return Promise.resolve(channelsResponse())
+      }
       requests.push(url)
       const r = respond(url.searchParams)
       return Promise.resolve(r instanceof Response || r instanceof Promise ? r : json(r))
@@ -697,6 +705,119 @@ describe('filters', () => {
     expect(requests).toHaveLength(0)
     expect(screen.getByText("'From' is after 'To'")).toBeTruthy()
     expect(screen.queryByText('Nothing has been processed yet')).toBeNull()
+  })
+})
+
+function chan(id: string, title: string | null) {
+  return { channel_id: id, title, video_count: 1, active: true }
+}
+
+function channelsOf(...items: ReturnType<typeof chan>[]) {
+  return () => json({ items, total: items.length, offset: 0, limit: 200 })
+}
+
+const optionNames = () =>
+  within(screen.getByLabelText('Channel')).getAllByRole('option').map((o) => o.textContent)
+
+describe('channel picker', () => {
+  it('is populated from GET /channels in server order, title falling back to id', async () => {
+    stubFetch(() => list(0, []))
+    channelsResponse = channelsOf(chan(UC2, null), chan(UC, 'Chan A'))
+    await mount()
+    expect(channelRequests).toHaveLength(1)
+    expect(optionNames()).toEqual(['All channels', UC2, 'Chan A'])
+    expect((screen.getByLabelText('Channel') as HTMLSelectElement).value).toBe('')
+  })
+
+  it('selecting a channel writes ?channel, resets the page and filters the videos query', async () => {
+    stubFetch(serverWith(120))
+    channelsResponse = channelsOf(chan(UC, 'Chan A'), chan(UC2, 'Chan B'))
+    const router = await mount('/?page=2')
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Channel'), { target: { value: UC2 } })
+    })
+    await settle()
+    expect(search(router)).toBe(`?channel=${UC2}`)
+    expect(last().searchParams.get('channel')).toBe(UC2)
+    expect(last().searchParams.get('offset')).toBe('0')
+    expect((screen.getByLabelText('Channel') as HTMLSelectElement).value).toBe(UC2)
+  })
+
+  it('All channels clears the filter; Back and a deep link restore the selection', async () => {
+    stubFetch(() => list(1, [vid(1)]))
+    channelsResponse = channelsOf(chan(UC, 'Chan A'))
+    const router = await mount(`/?channel=${UC}`)
+    const select = () => screen.getByLabelText('Channel') as HTMLSelectElement
+    expect(select().value).toBe(UC)
+    await act(async () => {
+      fireEvent.change(select(), { target: { value: '' } })
+    })
+    await settle()
+    expect(search(router)).toBe('')
+    expect(last().searchParams.has('channel')).toBe(false)
+    expect(select().value).toBe('')
+    await act(async () => {
+      await router.navigate(-1)
+    })
+    await settle()
+    expect(select().value).toBe(UC)
+  })
+
+  it('stays in sync with row click-to-filter and the chip Clear', async () => {
+    stubFetch(() => list(1, [vid(1)]))
+    channelsResponse = channelsOf(chan(UC, 'Chan A'))
+    await mount()
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: 'Chan A' })[0] as HTMLElement)
+    })
+    await settle()
+    const select = screen.getByLabelText('Channel') as HTMLSelectElement
+    expect(select.value).toBe(UC)
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('group', { name: 'Active filters' })).getByRole('button', { name: 'Clear' }))
+    })
+    await settle()
+    expect(select.value).toBe('')
+  })
+
+  it('keeps a selected id that is not in the fetched page as an option', async () => {
+    stubFetch(() => list(1, [vid(1, { channel_id: UC2, channel_title: 'Other' })]))
+    channelsResponse = channelsOf(chan(UC2, 'Other'))
+    await mount(`/?channel=${UC}`)
+    expect(optionNames()).toEqual(['All channels', UC, 'Other'])
+    expect((screen.getByLabelText('Channel') as HTMLSelectElement).value).toBe(UC)
+    expect(last().searchParams.get('channel')).toBe(UC)
+  })
+
+  it('is disabled while loading and the videos still render', async () => {
+    stubFetch(() => list(1, [vid(1)]))
+    channelsResponse = () => new Promise<Response>(() => {})
+    await mount()
+    expect((screen.getByLabelText('Channel') as HTMLSelectElement).disabled).toBe(true)
+    expect(screen.getByRole('link', { name: 'Title 1' })).toBeTruthy()
+  })
+
+  it('an empty list shows only All channels', async () => {
+    stubFetch(() => list(1, [vid(1)]))
+    await mount()
+    expect(optionNames()).toEqual(['All channels'])
+    expect((screen.getByLabelText('Channel') as HTMLSelectElement).disabled).toBe(false)
+  })
+
+  it('a failed or malformed channel list degrades without blanking the Library or leaking text', async () => {
+    stubFetch(() => list(1, [vid(1)]))
+    channelsResponse = () => json({ detail: 'secret server text' }, 500)
+    await mount()
+    expect(optionNames()).toEqual(['All channels'])
+    expect(screen.getByRole('link', { name: 'Title 1' })).toBeTruthy()
+    expect(screen.queryByText(/secret server text/)).toBeNull()
+    expect(screen.getByLabelText('Status')).toBeTruthy()
+    cleanup()
+    stubFetch(() => list(1, [vid(1)]))
+    channelsResponse = () => json({ nope: true })
+    await mount()
+    expect(optionNames()).toEqual(['All channels'])
+    expect(screen.getByRole('link', { name: 'Title 1' })).toBeTruthy()
   })
 })
 
