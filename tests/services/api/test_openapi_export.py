@@ -140,3 +140,10 @@ def test_failed_write_leaves_no_partial_file(
     assert openapi_export.main(["--out", str(target)]) != 0
     assert target.read_text(encoding="utf-8") == "old\n"
     assert [p.name for p in tmp_path.iterdir()] == ["schema.json"]
+
+
+def test_retry_route_declares_its_json_request_body() -> None:
+    """#202: `POST /ops/jobs/{id}/retry` declares `{}` so the typed client can send it."""
+    op = openapi_export.build_schema()["paths"]["/ops/jobs/{id}/retry"]["post"]
+    assert op["requestBody"]["required"] is True
+    assert op["requestBody"]["content"]["application/json"]["schema"] == {"$ref": "#/components/schemas/RetryBody"}

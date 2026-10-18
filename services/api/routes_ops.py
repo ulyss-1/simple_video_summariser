@@ -312,6 +312,12 @@ def _require_json_content_type(request: Request) -> None:
         raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Content-Type must be application/json")
 
 
+class RetryBody(BaseModel):
+    """``POST /ops/jobs/{id}/retry`` body: an empty object ``{}`` (#54/#44, #202)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+
 @router.post(
     "/ops/jobs/{id}/retry",
     response_model=schemas.JobOut,
@@ -319,6 +325,7 @@ def _require_json_content_type(request: Request) -> None:
 )
 def post_ops_job_retry(
     id: Annotated[int, Depends(_retry_job_id)],
+    body: RetryBody,
     conn: Annotated[psycopg.Connection[Any], Depends(get_conn)],
 ) -> schemas.JobOut | JSONResponse:
     """Revive one ``dead`` job in place: same id, ``attempts`` reset to 0 (#44).

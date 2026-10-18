@@ -1974,6 +1974,12 @@
         "title": "QuoteOut",
         "type": "object"
       },
+      "RetryBody": {
+        "description": "``POST /ops/jobs/{id}/retry`` body: an empty object ``{}`` (#54/#44, #202).",
+        "properties": {},
+        "title": "RetryBody",
+        "type": "object"
+      },
       "SearchPage": {
         "properties": {
           "has_more": {
@@ -3560,6 +3566,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetryBody"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {

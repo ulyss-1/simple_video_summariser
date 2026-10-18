@@ -1146,6 +1146,11 @@ export interface components {
             /** Text */
             text: string;
         };
+        /**
+         * RetryBody
+         * @description ``POST /ops/jobs/{id}/retry`` body: an empty object ``{}`` (#54/#44, #202).
+         */
+        RetryBody: Record<string, never>;
         /** SearchPage */
         SearchPage: {
             /** Has More */
@@ -1898,7 +1903,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetryBody"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

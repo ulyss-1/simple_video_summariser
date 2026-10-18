@@ -7,9 +7,10 @@ describe('Ops view source', () => {
     expect(src).not.toMatch(/dangerouslySetInnerHTML|innerHTML|insertAdjacentHTML/)
   })
 
-  it('builds every API URL through apiUrl() and every query through URLSearchParams', () => {
+  it('reaches the API only through the typed helper, with no raw fetch or hand-built URL', () => {
     const src = readFileSync(new URL('../hooks/useOps.ts', import.meta.url), 'utf8')
-    expect(src).toMatch(/apiUrl\(/)
+    expect(src).toMatch(/\.post\('\/ops\/jobs\/\{id\}\/retry'/)
+    expect(src).not.toMatch(/apiUrl/)
     expect(src).not.toMatch(/fetch\(\s*[`'"]/)
   })
 })
