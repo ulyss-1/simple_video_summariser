@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 import psycopg
 import structlog
 from fastapi import Depends, Request
+from psycopg_pool import PoolTimeout
 
 from common.backfill import ConnectionProvider
 from common.config import get_settings
@@ -66,6 +67,45 @@ def rate_limit() -> None:
     """No-op in v1. The one place write throttling will go."""
 
 
+def _checkout_reason(pool: Any, exc: psycopg.Error) -> dict[str, str]:
+    """Why a ``PoolTimeout`` happened, for the operator's log line only (#218).
+
+    The pool opens ``wait=False``, so connect failures happen in its background
+    worker and ``getconn`` raises the same ``PoolTimeout`` whether the pool is
+    exhausted or the database is down. ``pool.get_stats()`` tells them apart:
+
+    - ``pool_size == 0``: nothing established or being established, so
+      ``db_unreachable``.
+    - ``connections_errors > 0`` and ``connections_ms == 0``: connects were
+      tried, all failed, none ever completed, so ``db_unreachable``. Needed
+      because ``pool_size`` also counts attempts still in progress (the real
+      pool reports it as ``max_size`` against a closed port).
+    - otherwise ``pool_size >= 1`` and ``pool_available == 0`` (connections
+      exist, none free): ``pool_exhausted``. The ambiguous "database was up and
+      is now dying" case lands here too: a connect did complete once, so it
+      reads as a capacity problem until the pool drops its connections to zero
+      (then ``db_unreachable``).
+
+    Anything else (another error type, idle connections despite the timeout,
+    ``get_stats`` missing or raising) yields no ``reason``: the plain 503 as
+    before. The result carries no DSN, host or exception text, and the client
+    response is unchanged (architecture.md section 1).
+    """
+    if not isinstance(exc, PoolTimeout):
+        return {}
+    try:
+        stats = pool.get_stats()
+        size, available = int(stats["pool_size"]), int(stats["pool_available"])
+    except Exception:  # noqa: BLE001 - a failed diagnosis must not mask the 503
+        return {}
+    never_connected = stats.get("connections_errors", 0) > 0 and not stats.get("connections_ms", 0)
+    if size == 0 or never_connected:
+        return {"reason": "db_unreachable"}
+    if available == 0:
+        return {"reason": "pool_exhausted"}
+    return {}
+
+
 def get_conn(request: Request) -> Generator[psycopg.Connection[Any]]:
     pool = getattr(request.app.state, "pool", None)
     if pool is None:
@@ -78,7 +118,7 @@ def get_conn(request: Request) -> Generator[psycopg.Connection[Any]]:
         # message carries no DSN (the pool never formats one).
         conn = pool.getconn()
     except psycopg.Error as exc:
-        _log.warning("db.pool_unavailable", error=type(exc).__name__)
+        _log.warning("db.pool_unavailable", error=type(exc).__name__, **_checkout_reason(pool, exc))
         raise DatabaseUnavailable from exc
     try:
         yield conn

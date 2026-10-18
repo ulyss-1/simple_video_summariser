@@ -68,11 +68,19 @@ class FakePool:
     """Stands in for ``psycopg_pool.ConnectionPool``: records every call.
 
     ``getconn`` hands out ``conns`` in order, or raises ``getconn_error``.
+    ``get_stats`` reports ``stats`` (default: connections exist, none idle, i.e.
+    an exhausted pool); ``stats_error`` makes it raise instead (#218).
     """
 
     def __init__(
-        self, conns: list[Any] | None = None, getconn_error: Exception | None = None
+        self,
+        conns: list[Any] | None = None,
+        getconn_error: Exception | None = None,
+        stats: dict[str, int] | None = None,
+        stats_error: Exception | None = None,
     ) -> None:
+        self.stats = stats if stats is not None else {"pool_size": 1, "pool_available": 0}
+        self.stats_error = stats_error
         self.conns = list(conns or [])
         self.getconn_error = getconn_error
         self.open_calls: list[dict[str, Any]] = []
@@ -91,6 +99,11 @@ class FakePool:
 
     def putconn(self, conn: Any) -> None:
         self.returned.append(conn)
+
+    def get_stats(self) -> dict[str, int]:
+        if self.stats_error is not None:
+            raise self.stats_error
+        return dict(self.stats)
 
     def close(self) -> None:
         self.closed = True
