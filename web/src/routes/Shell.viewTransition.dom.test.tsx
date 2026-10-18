@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider } from 'react-router'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Shell } from './Shell'
 
 // #163: Shell nav links opt into View Transitions. jsdom has no
@@ -21,6 +21,11 @@ function mount() {
 }
 
 describe('route View Transitions opt-in', () => {
+  // Always remove the stub, even when an assertion throws.
+  afterEach(() => {
+    delete (document as { startViewTransition?: unknown }).startViewTransition
+  })
+
   it('wraps an opted-in navigation in document.startViewTransition', async () => {
     const start = vi.fn((cb: () => void | Promise<void>) => {
       void cb()
@@ -34,7 +39,6 @@ describe('route View Transitions opt-in', () => {
     })
     expect(start).toHaveBeenCalled()
     expect(await screen.findByText('search page')).toBeTruthy()
-    delete (document as { startViewTransition?: unknown }).startViewTransition
   })
 
   it('navigates instantly and without error when the API is absent', async () => {
