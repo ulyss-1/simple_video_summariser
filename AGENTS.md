@@ -105,6 +105,9 @@ Activate `.venv` first; all Python commands assume it.
   fails on any warning; `bash -lc 'cd web && npm run lint'`
 - `npm run test:e2e` / `npm run typecheck:e2e` - in `web/`; Playwright browser
   suite (`web/e2e/*.spec.ts`) against `vite preview` of the production build
+- `npm run test:e2e:real-embed` - in `web/`; opt-in (#178), never in CI: the real
+  youtube-nocookie embed under the real CSP, served by the #57 nginx image via
+  `docker run`; needs Docker and real YouTube network
 - `npm test` - in `web/`; runs Vitest once (no watch, Node environment)
 - `npm run dev` - in `web/`; Vite dev server on `:5173`, proxying `/api/` to
   the backend (prefix stripped, like nginx). The target is the non-`VITE_` env

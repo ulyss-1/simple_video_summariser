@@ -15,6 +15,7 @@
     "coverage": "vitest run --coverage --testTimeout=15000",
     "pretest:e2e": "npm run typecheck:e2e",
     "test:e2e": "playwright test",
+    "test:e2e:real-embed": "npm run typecheck:e2e && E2E_REAL_EMBED=1 playwright test --project=real-embed",
     "gen:api": "node scripts/api-types.mjs",
     "gen:api:check": "node scripts/api-types.mjs --check",
     "prebuild": "npm run gen:api",

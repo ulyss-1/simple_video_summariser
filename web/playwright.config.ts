@@ -13,11 +13,24 @@ import { defineConfig, devices } from '@playwright/test'
 // LIMITATION: `vite preview` emits no response headers, so it does NOT
 // reproduce #57's nginx CSP (default-src 'self'; frame-src
 // https://www.youtube-nocookie.com; ...) or `Referrer-Policy: no-referrer`
-// (ops/nginx.conf). Embed-under-real-CSP checks are #178's job.
+// (ops/nginx.conf). Embed-under-real-CSP checks live in the opt-in
+// `real-embed` project below (#178).
 //
 // Port 4317 is deliberately not Vite's 5173/4173, and reuseExistingServer is
 // off, so a developer's own dev/preview server is never used or killed.
 const PORT = 4317
+
+// Opt-in `real-embed` project (#178): the real youtube-nocookie.com embed under
+// the REAL production CSP and `Referrer-Policy: no-referrer`. Needs Docker and
+// real YouTube network, so it is never part of `npm run test:e2e` or the CI e2e
+// job. Run it on demand:  npm run test:e2e:real-embed
+// Playwright has one global webServer, so the opt-in run (E2E_REAL_EMBED=1)
+// swaps the whole config: only the real-embed project, served by the #57 nginx
+// production image (ops/Dockerfile.frontend + ops/nginx.conf), whose own
+// headers the browser receives. No policy string is copied here.
+const REAL_EMBED = process.env['E2E_REAL_EMBED'] === '1'
+const REAL_PORT = 4318
+const REAL_NAME = 'ytdigest-web-e2e'
 
 export default defineConfig({
   testDir: './e2e',
@@ -27,12 +40,39 @@ export default defineConfig({
   forbidOnly: true,
   retries: 0,
   reporter: 'list',
-  use: { baseURL: `http://localhost:${PORT}` },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
-  webServer: {
-    command: `npm run build && npx vite preview --port ${PORT} --strictPort`,
-    url: `http://localhost:${PORT}`,
-    reuseExistingServer: false,
-    timeout: 120_000,
-  },
+  // Playwright kills the docker CLI, not the container it started.
+  globalTeardown: REAL_EMBED ? './e2e/real-embed/teardown.ts' : undefined,
+  use: { baseURL: `http://localhost:${REAL_EMBED ? REAL_PORT : PORT}` },
+  projects: REAL_EMBED
+    ? [
+        {
+          name: 'real-embed',
+          testMatch: 'real-embed/**/*.spec.ts',
+          use: { ...devices['Desktop Chrome'] },
+        },
+      ]
+    : [
+        {
+          name: 'chromium',
+          testIgnore: 'real-embed/**',
+          use: { ...devices['Desktop Chrome'] },
+        },
+      ],
+  webServer: REAL_EMBED
+    ? {
+        // Build context is the repo root (the Dockerfile COPYs web/ and ops/).
+        command:
+          `docker rm -f ${REAL_NAME} >/dev/null 2>&1; ` +
+          `docker build -f ../ops/Dockerfile.frontend -t ${REAL_NAME}:latest .. && ` +
+          `exec docker run --rm --name ${REAL_NAME} -p 127.0.0.1:${REAL_PORT}:80 ${REAL_NAME}:latest`,
+        url: `http://localhost:${REAL_PORT}`,
+        reuseExistingServer: false,
+        timeout: 300_000,
+      }
+    : {
+        command: `npm run build && npx vite preview --port ${PORT} --strictPort`,
+        url: `http://localhost:${PORT}`,
+        reuseExistingServer: false,
+        timeout: 120_000,
+      },
 })
