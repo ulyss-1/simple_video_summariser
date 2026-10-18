@@ -218,6 +218,19 @@ describe('page states', () => {
     expect(document.querySelector('iframe')).toBeNull()
   })
 
+  it.each([
+    ['status is not a string', { status: 5, analysis: null }],
+    ['analysis.tldr is not a string', { status: 'done', analysis: { tldr: 1, topics: [], claims: [], quotes: [] } }],
+    ['analysis.topics is not an array', { status: 'done', analysis: { tldr: 'x', claims: [], quotes: [] } }],
+    ['analysis.claims is not an array', { status: 'done', analysis: { tldr: 'x', topics: [], quotes: [] } }],
+    ['analysis.quotes is not an array', { status: 'done', analysis: { tldr: 'x', topics: [], claims: [] } }],
+  ])('a 200 where %s shows Could not load, not the error boundary', async (_n, bad) => {
+    stubFetch(() => json(bad))
+    await mount()
+    expect(screen.getByText('Could not load this video')).toBeTruthy()
+    expect(screen.queryByText('Something went wrong')).toBeNull()
+  })
+
   it('Retry refetches and then shows the video', async () => {
     stubFetch((_u, n) => (n === 1 ? json({}, 503) : json(video())))
     await mount()
@@ -284,6 +297,17 @@ describe('page states', () => {
   it('unavailable with no analysis', async () => {
     await mountWith(video({ analysis: null, status: 'unavailable', unavailable: 'private' }))
     expect(screen.getByRole('status').textContent).toBe('This video is no longer available on YouTube')
+  })
+
+  it('unavailable with no analysis shows the note once, only as the status line', async () => {
+    await mountWith(video({ analysis: null, status: 'unavailable', unavailable: 'private' }))
+    expect(screen.getAllByText('This video is no longer available on YouTube')).toHaveLength(1)
+  })
+
+  it('an empty-string unavailable still counts as unavailable', async () => {
+    await mountWith(video({ unavailable: '', status: 'unavailable' }))
+    expect(screen.getByText('This video is no longer available on YouTube')).toBeTruthy()
+    expect(screen.getByText('A short summary.')).toBeTruthy()
   })
 
   it('idle with no analysis', async () => {
@@ -363,6 +387,11 @@ describe('header and player', () => {
     expect(screen.getByText('UCfallbackfallbackfallba')).toBeTruthy()
   })
 
+  it('falls back to the channel_id when the channel title is an empty string', async () => {
+    await mountWith(video({ channel_title: '', channel_id: 'UCfallbackfallbackfallba' }))
+    expect(screen.getByText('UCfallbackfallbackfallba')).toBeTruthy()
+  })
+
   it('omits the channel when both are null', async () => {
     await mountWith(video({ channel_title: null, channel_id: null }))
     expect(screen.queryByText('My Channel')).toBeNull()
@@ -421,6 +450,16 @@ describe('header and player', () => {
     expect(document.querySelectorAll('iframe')).toHaveLength(1)
     const tldr = section('TL;DR')
     expect(iframe.compareDocumentPosition(tldr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('uses the route id, not the API video_id, for the player and the YouTube link', async () => {
+    stubFetch(() => json(video({ video_id: DASH_ID })))
+    await mount(`/videos/${ID}`)
+    const iframe = document.querySelector('iframe') as HTMLIFrameElement
+    expect(new URL(iframe.src).pathname).toBe(`/embed/${ID}`)
+    expect(screen.getByRole('link', { name: 'Open on YouTube' }).getAttribute('href')).toBe(
+      `https://www.youtube.com/watch?v=${ID}`,
+    )
   })
 
   it('embeds the player when there is no analysis', async () => {

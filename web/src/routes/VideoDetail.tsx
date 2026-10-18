@@ -242,6 +242,7 @@ function VideoPage({ videoId }: { videoId: string }) {
         </p>
       )}
       <Player videoId={videoId} title={heading ?? undefined} />
+      {/* Any non-null `unavailable`, including '', means unavailable. */}
       {video.unavailable !== null && analysis !== null && <p className="alert">{UNAVAILABLE_NOTE}</p>}
       {analysis !== null && video.active_job !== null && <p className="alert">Re-analysis in progress</p>}
       {analysis === null ? <p className="alert" role="status">{pipelineStatus(video)}</p> : <AnalysisView analysis={analysis} />}
