@@ -436,7 +436,11 @@ def _run(video_id: str, deps: Deps | None, *, verbose: bool) -> int:
         configure_logging(settings, stream=sys.stderr)
         try:
             deps = default_deps(settings)
-        except (SummarizerConfigError, CookieFileError) as exc:
+        except CookieFileError as exc:
+            # A cookie path that can never work is a usage/config error (2).
+            _say(f"invalid configuration: {_one_line(str(exc))}")
+            return _EXIT_USAGE
+        except SummarizerConfigError as exc:
             _say(f"invalid configuration: {_one_line(str(exc))}")
             return _EXIT_FAILED
         except Exception as exc:  # noqa: BLE001 - anything else that cannot be built
