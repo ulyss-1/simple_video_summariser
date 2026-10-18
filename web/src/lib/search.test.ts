@@ -127,6 +127,10 @@ describe('parseSearchParams', () => {
   it('uses the first q when several are given', () => {
     expect(parse('q=one&q=two').q).toBe('one')
   })
+
+  it('rewrites a duplicated q to a single q in the corrected URL', () => {
+    expect(parse('q=one&q=two').corrected?.getAll('q')).toEqual(['one'])
+  })
 })
 
 describe('request and URL construction', () => {

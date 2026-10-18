@@ -264,6 +264,7 @@ describe('client-side query validation', () => {
     await mount()
     await submit('a\u0000b')
     expect(requests).toHaveLength(0)
+    expect(screen.getByRole('alert').textContent).toBe('Search terms cannot contain a NUL character')
     expect(input().value).toBe('a\u0000b')
     expect(document.body.textContent).not.toContain('\u0000')
   })
@@ -402,6 +403,18 @@ describe('a result', () => {
     expect(one.textContent).toContain('UCchan')
     expect(one.textContent).toContain('Date unknown')
     expect(two.textContent).toContain('Unknown channel')
+  })
+
+  it('treats a whitespace-only title and channel title as missing', async () => {
+    stubFetch(() =>
+      page([
+        hit(1, { title: '   ', channel_title: '   ', channel_id: 'UCchan' }),
+      ]),
+    )
+    await mount('/search?q=a')
+    const [one] = screen.getAllByRole('listitem') as [HTMLElement]
+    expect(within(one).getByRole('link', { name: 'v0000000001' })).toBeTruthy()
+    expect(one.textContent).toContain('UCchan')
   })
 
   it('shows dates in UTC whatever the local zone', async () => {
