@@ -11,13 +11,16 @@ The process call is injectable (``runner``), so tests never start yt-dlp.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
 import tempfile
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import quote, quote_plus
@@ -125,6 +128,61 @@ def check_cookie_file(path: Path | None) -> None:
     raise CookieFileError(f"{COOKIE_FILE_VARIABLE} is set but unusable: {reason}")
 
 
+COOKIE_TMP_PREFIX = "ytdigest-cookies-"
+"""Name prefix of the per-call cookie temp dir; creator and sweeper share it."""
+
+# A yt-dlp call is bounded by its timeout (minutes); an hour is far past any
+# live call, yet short enough that killed runs do not pile up.
+COOKIE_TMP_GRACE_SECONDS = 3600.0
+
+_logger = logging.getLogger(__name__)
+
+
+def sweep_stale_cookie_dirs(
+    root: Path | str | None = None,
+    *,
+    grace_seconds: float = COOKIE_TMP_GRACE_SECONDS,
+    clock: Callable[[], float] = time.time,
+) -> int:
+    """Remove stale ``ytdigest-cookies-*`` dirs left by killed yt-dlp runs.
+
+    Only real directories directly under ``root`` (default
+    ``tempfile.gettempdir()``) whose name starts with ``COOKIE_TMP_PREFIX``
+    and whose mtime is older than ``grace_seconds`` are removed, each with its
+    own ``rmtree``. The default grace is one hour: well beyond any live
+    call's timeout, so a concurrent replica's directory is never taken.
+
+    The directory paths are secret material (see ``_cookie_secrets``), so only
+    an aggregate count is logged. Returns the number removed; per-dir errors
+    are tolerated.
+    """
+    base = Path(root) if root is not None else Path(tempfile.gettempdir())
+    cutoff = clock() - grace_seconds
+    swept = failed = 0
+    try:
+        entries = list(os.scandir(base))
+    except OSError:
+        _logger.warning("cookie temp sweep could not scan the temp root")
+        return 0
+    for entry in entries:
+        try:
+            if (
+                not entry.name.startswith(COOKIE_TMP_PREFIX)
+                or entry.is_symlink()
+                or not entry.is_dir(follow_symlinks=False)
+                or entry.stat(follow_symlinks=False).st_mtime >= cutoff
+            ):
+                continue
+            shutil.rmtree(entry.path)
+            swept += 1
+        except OSError:
+            failed += 1
+    if failed:
+        _logger.warning("cookie temp sweep failed to remove %d dirs", failed)
+    _logger.info("swept %d stale cookie dirs", swept)
+    return swept
+
+
 def _cookie_secrets(text: str, *paths: Path | str) -> list[str]:
     """Everything of a cookie file that must not appear in an error message."""
     secrets = [str(p) for p in paths]
@@ -188,7 +246,7 @@ def run_ytdlp(
         raise ToolFailureError(
             f"{COOKIE_FILE_VARIABLE} cannot be read (errno {exc.errno})"
         ) from None
-    with tempfile.TemporaryDirectory(prefix="ytdigest-cookies-") as tmp:
+    with tempfile.TemporaryDirectory(prefix=COOKIE_TMP_PREFIX) as tmp:
         copy = Path(tmp) / "cookies.txt"
         fd = os.open(copy, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:

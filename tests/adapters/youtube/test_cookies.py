@@ -16,6 +16,7 @@ from __future__ import annotations
 import ast
 import logging
 import os
+import shutil
 import stat
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
@@ -28,7 +29,13 @@ from adapters.youtube.audio import YouTubeAudio
 from adapters.youtube.catalog import YouTubeCatalog
 from adapters.youtube.metadata import YouTubeMetadata
 from adapters.youtube.subtitles import YouTubeSubtitles
-from adapters.youtube.ytdlp import CookieFileError, check_cookie_file, run_ytdlp
+from adapters.youtube.ytdlp import (
+    COOKIE_TMP_PREFIX,
+    CookieFileError,
+    check_cookie_file,
+    run_ytdlp,
+    sweep_stale_cookie_dirs,
+)
 from common.errors import JobError, ToolFailureError, TransientNetworkError, classify
 from tests.adapters.youtube.fakes import completed
 
@@ -483,3 +490,78 @@ def test_every_cookie_of_several_is_redacted(tmp_path: Path) -> None:
     text = _leak(jar, stderr, tmp_path)
     assert "sv99" not in text
     assert "SENTINEL" not in text
+
+
+NOW = 1_000_000.0
+GRACE = 60.0
+
+
+def _seed(root: Path, name: str, age: float) -> Path:
+    d = root / name
+    d.mkdir()
+    (d / "cookies.txt").write_text(COOKIE_LINE)
+    os.utime(d, (NOW - age, NOW - age))
+    return d
+
+
+def _sweep(root: Path) -> int:
+    return sweep_stale_cookie_dirs(root, grace_seconds=GRACE, clock=lambda: NOW)
+
+
+def test_sweep_removes_only_stale_prefixed_dirs(tmp_path: Path) -> None:
+    root = tmp_path / "tmp"
+    root.mkdir()
+    stale = _seed(root, f"{COOKIE_TMP_PREFIX}old", GRACE + 1)
+    fresh = _seed(root, f"{COOKIE_TMP_PREFIX}new", GRACE - 1)
+    other = _seed(root, "something-else-old", GRACE + 1)
+    plain_file = root / f"{COOKIE_TMP_PREFIX}file"
+    plain_file.write_text("x")
+    os.utime(plain_file, (NOW - GRACE - 1, NOW - GRACE - 1))
+
+    assert _sweep(root) == 1
+
+    assert not stale.exists()
+    assert fresh.exists() and other.exists() and plain_file.exists()
+    assert root.exists()
+
+
+def test_sweep_logs_only_an_aggregate_count(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    root = tmp_path / "tmp"
+    root.mkdir()
+    stale = _seed(root, f"{COOKIE_TMP_PREFIX}old", GRACE + 1)
+    with caplog.at_level(logging.DEBUG):
+        _sweep(root)
+    rendered = "\n".join(
+        f"{r.getMessage()} {r.__dict__} {r.exc_text}" for r in caplog.records
+    )
+    assert "swept 1 stale cookie dirs" in rendered
+    assert COOKIE_TMP_PREFIX not in rendered
+    assert stale.name not in rendered
+    assert "SENTINEL" not in rendered
+
+
+def test_sweep_tolerates_a_dir_that_cannot_be_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    root = tmp_path / "tmp"
+    root.mkdir()
+    bad = _seed(root, f"{COOKIE_TMP_PREFIX}bad", GRACE + 1)
+    good = _seed(root, f"{COOKIE_TMP_PREFIX}good", GRACE + 1)
+    real = shutil.rmtree
+
+    def flaky(path: str | Path, *a: object, **k: object) -> None:
+        if Path(path) == bad:
+            raise PermissionError(13, "denied", str(path))
+        real(path)
+
+    monkeypatch.setattr(shutil, "rmtree", flaky)
+    with caplog.at_level(logging.DEBUG):
+        assert _sweep(root) == 1
+    assert bad.exists() and not good.exists()
+    assert COOKIE_TMP_PREFIX not in "\n".join(r.getMessage() for r in caplog.records)
+
+
+def test_sweep_of_a_missing_root_is_a_no_op(tmp_path: Path) -> None:
+    assert _sweep(tmp_path / "absent") == 0

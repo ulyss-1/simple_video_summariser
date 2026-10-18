@@ -77,7 +77,11 @@ from adapters.transcription.faster_whisper import FasterWhisperTranscriber
 from adapters.youtube.audio import YouTubeAudio
 from adapters.youtube.metadata import YouTubeMetadata
 from adapters.youtube.subtitles import YouTubeSubtitles
-from adapters.youtube.ytdlp import CookieFileError, check_cookie_file
+from adapters.youtube.ytdlp import (
+    CookieFileError,
+    check_cookie_file,
+    sweep_stale_cookie_dirs,
+)
 from common.chunking import chunk_segments
 from common.config import Settings, get_settings
 from common.db import connect as default_connect
@@ -431,6 +435,7 @@ def _run(
             error=str(exc),
         )
         return _EXIT_BAD_CONFIG
+    sweep_stale_cookie_dirs()
     if latch.requested:
         return 0
 
