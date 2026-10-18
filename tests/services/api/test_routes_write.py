@@ -8,6 +8,7 @@ and the test waits (bounded, no sleep) until Postgres reports it blocked.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from collections.abc import Iterator
@@ -541,7 +542,10 @@ _INVALID_REFS = [
 def test_a_malformed_video_body_is_rejected_and_writes_nothing(
     api: TestClient, db: psycopg.Connection[Any], body: Any
 ) -> None:
-    response = api.post("/videos", json=body)
+    # content=, not json=: json=None sends no body and no Content-Type (now 415).
+    response = api.post(
+        "/videos", content=json.dumps(body), headers={"Content-Type": "application/json"}
+    )
 
     assert response.status_code == 422
     assert VID not in response.text
@@ -875,8 +879,68 @@ def test_an_invalid_name_reference_is_422_before_any_lookup(
 def test_invalid_channel_input_is_rejected_and_writes_nothing(
     api: TestClient, db: psycopg.Connection[Any], body: Any
 ) -> None:
-    response = api.post("/channels", json=body)
+    response = api.post(
+        "/channels", content=json.dumps(body), headers={"Content-Type": "application/json"}
+    )
 
     assert response.status_code == 422
     assert CHANNEL not in response.text
     assert _counts(db) == (0, 0, 0)
+
+
+# --- JSON-only guard (#164) ---------------------------------------------------
+
+_NON_JSON_HEADERS = [
+    {"Content-Type": "text/plain"},
+    {"Content-Type": "application/x-www-form-urlencoded"},
+    {},
+]
+
+
+@pytest.mark.parametrize("headers", _NON_JSON_HEADERS)
+@pytest.mark.parametrize(
+    ("path", "ref"), [("/videos", VID), ("/channels", CHANNEL)]
+)
+def test_a_non_json_content_type_is_415_and_writes_nothing(
+    api: TestClient,
+    db: psycopg.Connection[Any],
+    resolver: FakeResolver,
+    path: str,
+    ref: str,
+    headers: dict[str, str],
+) -> None:
+    # A text/plain body that is valid JSON: the cross-site form-post shape.
+    response = api.post(path, content=f'{{"url": "{ref}"}}', headers=headers)
+
+    assert response.status_code == 415
+    assert _counts(db) == (0, 0, 0)
+    assert resolver.calls == []
+
+
+def test_a_non_json_name_reference_is_415_before_the_resolver(
+    api: TestClient, resolver: FakeResolver
+) -> None:
+    response = api.post(
+        "/channels", content='{"url": "@somebody"}', headers={"Content-Type": "text/plain"}
+    )
+
+    assert response.status_code == 415
+    assert resolver.calls == []
+
+
+@pytest.mark.parametrize("content_type", ["application/json", "application/json; charset=utf-8"])
+def test_json_requests_still_succeed_and_dedupe(
+    api: TestClient, db: psycopg.Connection[Any], content_type: str
+) -> None:
+    headers = {"Content-Type": content_type}
+    video = f'{{"url": "{VID}"}}'
+    channel = f'{{"url": "{CHANNEL}"}}'
+
+    assert api.post("/videos", content=video, headers=headers).status_code == 202
+    assert api.post("/videos", content=video, headers=headers).status_code == 200
+    first = api.post("/channels", content=channel, headers=headers)
+    again = api.post("/channels", content=channel, headers=headers)
+
+    assert (first.status_code, again.status_code) == (201, 200)
+    assert again.json()["monitor_from"] == first.json()["monitor_from"]
+    assert _counts(db) == (1, 1, 1)

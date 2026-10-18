@@ -315,9 +315,22 @@ def submit_video(
         return SubmitResult(video_id, job_id, state, created=False)
 
 
+def _require_json_content_type(request: Request) -> None:
+    """Refuse a non-JSON body (415) so a cross-site form post cannot trigger a cancel.
+
+    Same rule as ``routes_ops``' check (#44), which is private to that module.
+    """
+    media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if media_type != "application/json":
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Content-Type must be application/json"
+        )
+
+
 @router.post(
     "/videos",
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(_require_json_content_type)],
     responses={200: {"model": VideoSubmission, "description": "Already submitted"}},
 )
 def post_videos(
@@ -472,6 +485,7 @@ def post_video_reanalyze(
     "/channels",
     status_code=status.HTTP_201_CREATED,
     response_model_exclude_none=True,
+    dependencies=[Depends(_require_json_content_type)],
     responses={
         200: {"model": ChannelRegistration, "description": "Already registered"}
     },
@@ -781,18 +795,6 @@ def post_channel_backfill_request(
         dry_run=body.dry_run,
         state="pending",
     )
-
-
-def _require_json_content_type(request: Request) -> None:
-    """Refuse a non-JSON body (415) so a cross-site form post cannot trigger a cancel.
-
-    Same rule as ``routes_ops``' check (#44), which is private to that module.
-    """
-    media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-    if media_type != "application/json":
-        raise HTTPException(
-            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Content-Type must be application/json"
-        )
 
 
 @router.post(
