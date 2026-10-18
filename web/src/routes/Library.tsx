@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router'
 import { AddVideoForm } from '../components/AddVideoForm'
+import { BackfillChannelForm } from '../components/BackfillChannelForm'
 import { useChannels } from '../hooks/useChannels'
 import { ApiError, useVideos } from '../hooks/useVideos'
 import {
@@ -101,6 +102,7 @@ export function Library() {
       <p aria-live="polite">{notice}</p>
 
       <AddVideoForm />
+      <BackfillChannelForm />
 
       <form className="card filters" onSubmit={(e) => e.preventDefault()}>
         <label className="field">
