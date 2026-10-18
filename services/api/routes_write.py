@@ -479,9 +479,11 @@ def post_video_reanalyze(
 def post_channels(
     body: SubmitRef,
     response: Response,
-    conn: Annotated[psycopg.Connection[Any], Depends(get_conn)],
+    provider: Annotated[ConnectionProvider, Depends(get_conn_provider)],
     resolve: Annotated[ChannelResolver, Depends(get_channel_resolver)],
 ) -> ChannelRegistration:
+    # The yt-dlp resolve can take ~20 s and touches no database, so it runs
+    # with nothing checked out; the pool is borrowed only for the write (#219).
     try:
         ref = parse_channel_input(body.url)
     except ValueError:
@@ -495,11 +497,12 @@ def post_channels(
         resolved_title = resolved.title
     else:
         channel_id = ref
-    _require_idle(conn)
-    with conn.transaction():
-        registered = register_channel(conn, channel_id)
-        if isinstance(ref, NameRef):
-            fill_channel_title(conn, channel_id, resolved_title)
+    with provider() as conn:
+        _require_idle(conn)
+        with conn.transaction():
+            registered = register_channel(conn, channel_id)
+            if isinstance(ref, NameRef):
+                fill_channel_title(conn, channel_id, resolved_title)
     if not registered.created:
         response.status_code = status.HTTP_200_OK
     channel = registered.channel
