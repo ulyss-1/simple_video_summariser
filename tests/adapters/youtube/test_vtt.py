@@ -182,6 +182,30 @@ def test_voice_tag_becomes_speaker(payload: str) -> None:
     assert parse_vtt(source) == [Segment(1.0, 2.0, "text", speaker="Jane Doe")]
 
 
+@pytest.mark.parametrize(
+    ("name", "speaker"),
+    [("--", "--"), ("x--", "x--"), ("a--&gt;b", "a-->b"), ("--&gt;", "-->")],
+)
+def test_voice_name_containing_arrow_is_not_a_timing_line(
+    name: str, speaker: str
+) -> None:
+    source = f"WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n<v {name}>text</v>\n"
+
+    assert parse_vtt(source) == [Segment(0.0, 1.0, "text", speaker=speaker)]
+
+
+def test_arrow_in_payload_does_not_hide_a_real_next_timing_line() -> None:
+    source = (
+        "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n<v -->One.</v>\n"
+        "00:00:03.000 --> 00:00:04.000\nTwo.\n"
+    )
+
+    assert parse_vtt(source) == [
+        Segment(1.0, 2.0, "One.", speaker="--"),
+        Segment(3.0, 4.0, "Two."),
+    ]
+
+
 def test_voice_spans_multiple_lines_of_a_cue() -> None:
     source = vtt("00:00:01.000 --> 00:00:02.000\n<v Jane>first line\nsecond line</v>")
 
