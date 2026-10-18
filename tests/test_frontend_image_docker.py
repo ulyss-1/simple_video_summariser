@@ -661,16 +661,17 @@ def test_metrics_is_not_published_but_the_rest_of_the_api_is(stack: Stack) -> No
     assert echoed["path"] == "/healthz"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#186 (follow-up to #57): the prefix-strip map reads the raw $request_uri "
-    "while location matching uses the normalized URI",
-)
 @pytest.mark.parametrize("client", ["/%61pi/healthz", "/x/../api/healthz"])
-def test_non_canonical_api_prefixes_reach_the_same_upstream_path(
+def test_non_canonical_api_prefixes_fail_closed_with_404(
     stack: Stack, client: str
 ) -> None:
-    _, echoed = stack.echo(client)
+    # #186: routed into /api/ on the normalized URI, but not a raw /api/ prefix.
+    resp = stack.get(client + "?x=1")
+    assert resp.status == 404
+    assert b'<div id="root">' not in resp.body
+    assert b"stub" not in resp.body and b'"method"' not in resp.body  # not echoed
+    ok, echoed = stack.echo("/api/healthz")
+    assert ok.status == 200
     assert echoed["path"] == "/healthz"
 
 
