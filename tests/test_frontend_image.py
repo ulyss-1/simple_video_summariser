@@ -279,9 +279,16 @@ def test_dockerignore_keeps_what_the_build_needs(path: str) -> None:
 
 def test_dockerignore_frontend_artifacts_are_appended_after_the_55_entries() -> None:
     lines = _dockerignore_lines()
-    assert lines[-3:] == ["web/dist", "web/tsconfig.tsbuildinfo", "web/coverage"]
-    assert lines.index(".git") < lines.index("web/dist")
-    assert lines.index("*:Zone.Identifier") < lines.index("web/dist")
+    for entry in (
+        "web/dist",
+        "web/tsconfig.tsbuildinfo",
+        "web/coverage",
+        "web/test-results",
+        "web/playwright-report",
+    ):
+        assert entry in lines
+        assert lines.index(".git") < lines.index(entry)
+        assert lines.index("*:Zone.Identifier") < lines.index(entry)
 
 
 # ---- nginx.conf: serving and caching ----

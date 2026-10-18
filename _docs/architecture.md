@@ -1951,6 +1951,7 @@ gauges, no tracing stack.
 | Summarizer | `FakeSummarizer` returning canned JSON; plus schema-violation fixtures |
 | Error classification | Table-driven over real yt-dlp/provider error strings |
 | API | FastAPI `TestClient` against a seeded database |
+| Browser (#177) | Playwright (`@playwright/test`, chromium only) in `web/e2e/` against `vite preview` of the production build; offline, `/api` stubbed |
 | Quality (manual) | Golden set of ~20 videos; compare runs via the Compare view (D5) |
 
 The quality evaluation is deliberately manual. Automating "is this summary

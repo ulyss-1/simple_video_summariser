@@ -36,6 +36,8 @@ Setup
   `python3.14` without `ensurepip`, so `python3.14 -m venv` fails without it
 - `sudo apt install ffmpeg` - once per machine; `ffmpeg`/`ffprobe` normalize
   downloaded audio (#19) and are needed by its tests and #3's bake-off
+- `cd web && npx playwright install --with-deps chromium` - once per machine;
+  the browser for `npm run test:e2e` (#177), never fetched by `npm ci`/build
 - `python3.14 -m venv .venv && . .venv/bin/activate`
 - `pip install -r requirements.backend.txt -e ".[dev]"` - runtime and dev
   dependencies. `requirements.whisper.txt` is deliberately not installed on
@@ -101,6 +103,8 @@ Activate `.venv` first; all Python commands assume it.
 - `npm ci && npm run build` - in `web/`, frontend only
 - `npm run lint` - in `web/`; ESLint (react-hooks + React Compiler rules),
   fails on any warning; `bash -lc 'cd web && npm run lint'`
+- `npm run test:e2e` / `npm run typecheck:e2e` - in `web/`; Playwright browser
+  suite (`web/e2e/*.spec.ts`) against `vite preview` of the production build
 - `npm test` - in `web/`; runs Vitest once (no watch, Node environment)
 - `npm run dev` - in `web/`; Vite dev server on `:5173`, proxying `/api/` to
   the backend (prefix stripped, like nginx). The target is the non-`VITE_` env

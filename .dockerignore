@@ -36,3 +36,7 @@ scripts/
 web/dist
 web/tsconfig.tsbuildinfo
 web/coverage
+
+# Browser-suite output (#177)
+web/test-results
+web/playwright-report

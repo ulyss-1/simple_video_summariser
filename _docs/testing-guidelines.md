@@ -79,6 +79,19 @@ boundaries, no network, deterministic, no repeat-run loops) apply unchanged to
   cleanup guard verifies this in either shuffled test order. Leave `process.env`
   and module singletons as you found them.
 
+### Browser-level checks
+
+- Specs live in `web/e2e/` and are named `*.spec.ts`. Playwright collects
+  them (`npm run test:e2e`); Vitest must not (it only includes `src/**`).
+- The harness serves `vite preview` of the production build on a non-default
+  port and starts and stops its own server. Install the browser once with
+  `npx playwright install --with-deps chromium`.
+- No third-party network, ever: the `e2e/fixtures/offline.ts` guard aborts
+  and fails on any unstubbed request. Stub `/api/**` with `page.route`.
+- No sleeps, no retries, no repeat-run loops: web-first assertions only.
+- `vite preview` sends no CSP or `Referrer-Policy`, so CSP-dependent checks
+  belong where the real nginx headers are available (#178/#57).
+
 ## Test at the scale the system actually runs at
 
 This is a single-operator system (architecture.md, "Expected scale"): tens of
