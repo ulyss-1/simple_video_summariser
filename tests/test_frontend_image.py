@@ -589,3 +589,18 @@ def test_dockerfile_and_conf_files_exist_where_the_dockerfile_copies_them() -> N
     assert Path(REPO_ROOT / "ops" / "nginx.conf").is_file()
     assert Path(REPO_ROOT / "web" / "package-lock.json").is_file()
     assert Path(REPO_ROOT / "web" / "openapi.json").is_file()
+
+
+def test_api_location_caps_the_request_body_at_64k() -> None:
+    assert "client_max_body_size 64k;" in _directives_with_semicolon(_location("/api/"))
+
+
+def test_body_cap_is_on_the_proxy_location_only() -> None:
+    # The SPA/static side is GET-only, so a server- or http-level cap is inert.
+    server_level = _server().replace(_location("/api/"), "")
+    assert "client_max_body_size" not in server_level
+    assert "client_max_body_size" not in _conf_text().replace(_server(), "")
+
+
+def _directives_with_semicolon(body: str) -> str:
+    return "\n".join(f"{d};" for d in _directives(body))

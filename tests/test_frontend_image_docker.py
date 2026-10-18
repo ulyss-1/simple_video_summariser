@@ -785,3 +785,33 @@ def test_nginx_follows_the_api_to_a_new_address(
         assert stack.wait_for_api(deadline=30), stack.logs()
     finally:
         _docker("rm", "-f", first)
+
+
+API_BODY_LIMIT = 64 * 1024  # client_max_body_size in the /api/ location
+
+
+def test_body_over_the_cap_is_rejected_at_nginx_and_never_forwarded(
+    stack: Stack,
+) -> None:
+    resp = stack.get(
+        "/api/videos",
+        method="POST",
+        headers={"Content-Type": "application/json"},
+        body=b"x" * (API_BODY_LIMIT + 1),
+    )
+    assert resp.status == 413
+    assert b"stub" not in resp.body and b'"method"' not in resp.body  # not echoed
+    assert b'<div id="root">' not in resp.body
+
+
+def test_body_at_the_cap_is_still_proxied_unchanged(stack: Stack) -> None:
+    payload = b"x" * API_BODY_LIMIT
+    resp, echoed = stack.echo(
+        "/api/videos",
+        method="POST",
+        headers={"Content-Type": "application/json"},
+        body=payload,
+    )
+    assert resp.status == 200
+    assert echoed["method"] == "POST"
+    assert echoed["body"].encode("latin-1") == payload  # type: ignore[attr-defined]
