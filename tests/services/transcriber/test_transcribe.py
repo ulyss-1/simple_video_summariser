@@ -154,6 +154,15 @@ class SpyQueue:
     def reap_stale(self, older_than_sec: int | None = None) -> int:
         return self.inner.reap_stale(older_than_sec)
 
+    def fail_job(self, job: Job, worker: str, exc: BaseException) -> None:
+        self.inner.fail_job(job, worker, exc)
+
+    def force_pending(self, job_id: int, priority: int) -> bool:
+        return self.inner.force_pending(job_id, priority)
+
+    def raise_priority(self, video_id: str, priority: int) -> list[int]:
+        return self.inner.raise_priority(video_id, priority)
+
 
 class Rig:
     def __init__(

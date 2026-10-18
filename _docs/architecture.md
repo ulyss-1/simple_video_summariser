@@ -253,9 +253,29 @@ class JobQueue(Protocol):
     def enqueue(self, kind: str, video_id: str, *, dedupe_key: str = "default",
                 payload: dict | None = None, priority: int = 0,
                 run_after: datetime | None = None) -> int | None: ...
-    def claim(self, kinds: list[str]) -> AbstractContextManager[Job | None]: ...
-    def heartbeat(self, job_id: int) -> None: ...
+    def claim(self, kinds: Sequence[str], *, worker: str,
+              dedupe_key: str | None = None) -> AbstractContextManager[Job | None]: ...
+    def heartbeat(self, job_id: int, worker: str) -> bool: ...
+    def reap_stale(self, older_than_sec: int | None = None) -> int: ...
+    def fail_job(self, job: Job, worker: str, exc: BaseException) -> None: ...
+    def force_pending(self, job_id: int, priority: int) -> bool: ...
+    def raise_priority(self, video_id: str, priority: int) -> list[int]: ...
 ```
+
+**What belongs on `JobQueue` (#201).** A queue operation is on the Protocol when
+a backend-agnostic caller depends on it through the port: the workers the CLI
+runs over `InProcessQueue`, and the API write-path functions (`submit_video`,
+`request_reanalysis`), which take a queue port by construction. Operations
+reached only by code that legitimately builds a `PostgresQueue` (operator
+sweeps and lifecycle) stay off it.
+
+- On the port: `enqueue`, `claim`, `heartbeat`, `reap_stale`, `force_pending`,
+  `raise_priority`, `fail_job`.
+- `fail_job` is on the port: the worker's runtime-limit watchdog (#66) calls it
+  through a `JobQueue` reference, so the former `getattr` fallback is gone.
+  `InProcessQueue.fail_job` is a no-op, matching its no-retry contract.
+- `PostgresQueue` only: `close` (#106), `retry_dead`, `retry_dead_matching`,
+  `cancel_backfill`, `resolve_stale_analyze` (ops routes and planner loop).
 
 `ChunkBatchSummarizer` (#88) is an optional extension: it adds
 `analyze_chunks(chunks, roster, meta) -> list[ChunkAnalysis]`, one analysis per

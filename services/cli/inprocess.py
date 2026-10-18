@@ -133,6 +133,28 @@ class InProcessQueue:
     def reap_stale(self, older_than_sec: int | None = None) -> int:
         return 0
 
+    def fail_job(self, job: Job, worker: str, exc: BaseException) -> None:
+        """No-op: there is no retry, so a failed attempt is not recorded."""
+
+    def force_pending(self, job_id: int, priority: int) -> bool:
+        for i, job in enumerate(self._pending):
+            if job.id == job_id:
+                self._pending[i] = replace(
+                    job,
+                    payload={**job.payload, "force": True},
+                    priority=max(job.priority, priority),
+                )
+                return True
+        return False
+
+    def raise_priority(self, video_id: str, priority: int) -> list[int]:
+        changed: list[int] = []
+        for i, job in enumerate(self._pending):
+            if job.video_id == video_id and job.priority < priority:
+                self._pending[i] = replace(job, priority=priority)
+                changed.append(job.id)
+        return changed
+
     def leftover(self) -> list[tuple[str, str]]:
         """``(kind, video_id)`` of every job still pending, oldest first."""
         return [(job.kind, job.video_id) for job in self._pending]

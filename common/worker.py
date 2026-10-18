@@ -602,10 +602,7 @@ class Worker:
         )
         try:
             queue = self._get_heartbeat_queue()
-            fail_job = getattr(queue, "fail_job", None)
-            if fail_job is None:
-                raise RuntimeError("queue cannot record a failed attempt")
-            fail_job(job, self._name, exc)
+            queue.fail_job(job, self._name, exc)
         except Exception as err:  # noqa: BLE001 - exit regardless; the reaper recovers the job
             _log.error(
                 "worker.runtime_limit_record_failed",

@@ -54,6 +54,7 @@ from common.errors import (
 from common.models import CatalogSource
 from common.queue import (
     PRIORITY_INTERACTIVE,
+    JobQueue,
     PostgresQueue,
     analyze_dedupe_key,
 )
@@ -287,7 +288,7 @@ def _require_idle(conn: psycopg.Connection[Any]) -> None:
 
 
 def submit_video(
-    conn: psycopg.Connection[Any], video_id: str, *, queue: PostgresQueue
+    conn: psycopg.Connection[Any], video_id: str, *, queue: JobQueue
 ) -> SubmitResult:
     """Record ``video_id`` and give it one ``ingest`` job, unless it already has one.
 
@@ -389,7 +390,7 @@ def request_reanalysis(
     conn: psycopg.Connection[Any],
     video_id: str,
     *,
-    queue: PostgresQueue,
+    queue: JobQueue,
     dedupe_key: str,
     after_lookup: Callable[[], None] | None = None,
 ) -> Reanalysis:

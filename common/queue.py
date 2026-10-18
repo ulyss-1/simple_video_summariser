@@ -384,6 +384,12 @@ class JobQueue(Protocol):
 
     def reap_stale(self, older_than_sec: int | None = None) -> int: ...
 
+    def fail_job(self, job: Job, worker: str, exc: BaseException) -> None: ...
+
+    def force_pending(self, job_id: int, priority: int) -> bool: ...
+
+    def raise_priority(self, video_id: str, priority: int) -> list[int]: ...
+
 
 class PostgresQueue:
     """``JobQueue`` backed by the ``jobs`` table (architecture.md §5-§6).
@@ -830,8 +836,7 @@ class PostgresQueue:
         Merges ``{"force": true}`` into its payload (other keys stay) and sets
         ``priority = GREATEST(priority, <priority>)``, so a job above it is
         never lowered. A job claimed or finished in the meantime matches no
-        row: ``False``, nothing written. PostgresQueue only, not on the
-        ``JobQueue`` Protocol.
+        row: ``False``, nothing written.
         """
         return bool(
             self._update_pending(
