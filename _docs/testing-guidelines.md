@@ -138,6 +138,17 @@ When a test fails intermittently, or a criterion is about a race:
    wait/retry logic runs in microseconds with fakes (see
    `tests/test_postgres_readiness.py`).
 
+**Containers and Ryuk.** The shared Postgres container waits for a real
+connection on the mapped port before yielding, because Docker Desktop (WSL)
+publishes the port a moment after the container reports ready (#74,
+`tests/conftest.py`). Testcontainers' Ryuk reaper is **disabled**
+(`testcontainers_config.ryuk_disabled = True` in `tests/conftest.py`, #194):
+every container the suite starts is wrapped in a `with` block, so cleanup is
+deterministic without it, and under concurrent Docker load Ryuk's connect is
+refused — which otherwise turns a green run into hundreds of
+`ConnectionRefusedError` setup errors. If pytest is hard-killed (SIGKILL) a
+container can leak; clear it with `docker ps` / `docker rm`.
+
 One run of the suite is the bar. If a test needs repetition to be trusted,
 the test is wrong: rewrite it to force the condition. Do not write "passes N
 runs in a row", `seq N` loops, `pytest-repeat` or rerun plugins into

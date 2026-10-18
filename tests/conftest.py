@@ -21,11 +21,26 @@ import pytest
 from docker.errors import DockerException  # type: ignore[import-untyped]
 from psycopg import sql
 from testcontainers.community.postgres import PostgresContainer
+from testcontainers.core.config import testcontainers_config
 from testcontainers.core.docker_client import DockerClient
 
 # ``pytester`` is a built-in pytest plugin (no dependency); the shuffle plugin
 # is registered here so every run is shuffled (issue #72).
 pytest_plugins = ["pytester", "tests.shuffle_plugin"]
+
+# Disable testcontainers' Ryuk reaper (#194). Every container this suite starts
+# is created with ``with PostgresContainer(...)`` / ``with DockerContainer(...)``,
+# so it is stopped and removed when that block exits, including on error — Ryuk
+# is redundant here. Ryuk is only a crash-safety net for a hard-killed run, and
+# under concurrent Docker load its connect is refused, turning a green suite
+# into hundreds of ``ConnectionRefusedError`` setup errors (QA saw 902 at one
+# seed; the same seed passed when rerun alone — environmental, not order
+# dependence). Disabling it removes that failure mode entirely. The tradeoff —
+# a container leaked if pytest is SIGKILLed mid-run — is cleared with
+# ``docker ps`` / ``docker rm``. Set on the config object, not via
+# ``TESTCONTAINERS_RYUK_DISABLED`` in the environment, so it holds regardless of
+# when testcontainers first read its environment (and needs no os.environ write).
+testcontainers_config.ryuk_disabled = True
 
 # Same image tag as compose.yml (architecture.md 11.4, 16.1: >=18.6).
 _POSTGRES_IMAGE = "postgres:18-alpine"
