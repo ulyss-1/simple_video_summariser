@@ -84,8 +84,31 @@ describe('error boundary', () => {
 //
 // Do NOT delete a row here when a view replaces its placeholder. REWRITE the
 // row: keep the same URL and assert the search string is unchanged after the
-// view has rendered and its effects have run. #52 (Search), #53 (Compare) and
-// #54 (Ops) must do the same for their rows.
+// view has rendered and its effects have run. Search (#52), Compare (#53) and
+// Ops (#54) now have their rows, so all six routes are covered. Compare's
+// URL-rewrite effect lives in Comparison, which only mounts once the analyses
+// list loads, so its fetch stub serves a 2-run list (ids match the URL).
+function compareRun(id: number) {
+  return {
+    id,
+    transcript_id: 1,
+    transcript_source: 'captions',
+    chunk_strategy: 'fixed',
+    model: 'gpt',
+    prompt_version: 'v1',
+    created_at: '2026-10-01T08:09:10Z',
+    input_tokens: 1000,
+    output_tokens: 200,
+    cost_usd: null,
+    duration_ms: null,
+    tldr: `TLDR of ${id}`,
+    speaker_roster: null,
+    topics: [],
+    claims: [],
+    quotes: [],
+  }
+}
+
 describe('query strings survive the shared route table', () => {
   let requests: URL[]
 
@@ -95,7 +118,14 @@ describe('query strings survive the shared route table', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
-        requests.push(new URL(String(input), 'http://localhost'))
+        const url = new URL(String(input), 'http://localhost')
+        requests.push(url)
+        if (url.pathname.endsWith('/analyses')) {
+          return new Response(JSON.stringify({ total: 2, items: [compareRun(2), compareRun(1)] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
         return new Response('{}', { status: 500, headers: { 'content-type': 'application/json' } })
       }),
     )
@@ -123,6 +153,8 @@ describe('query strings survive the shared route table', () => {
     ['/videos/-wNyEUrxzFU/transcript?page=3', '?page=3'],
     ['/ops?state=dead&before=100', '?state=dead&before=100'],
     ['/ops?state=pending&kind=ingest&error_class=none', '?state=pending&kind=ingest&error_class=none'],
+    ['/search?q=zebra&page=2', '?q=zebra&page=2'],
+    ['/videos/-wNyEUrxzFU/compare?a=1&b=2', '?a=1&b=2'],
   ])('%s keeps its search string after effects have run', async (entry, search) => {
     const router = mount(entry)
     await settle()
