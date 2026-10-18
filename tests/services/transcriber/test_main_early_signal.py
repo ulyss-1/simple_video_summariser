@@ -52,12 +52,17 @@ def test_the_handler_is_installed_before_the_heavy_imports_begin(tmp_path: Path)
 
 @pytest.mark.skipif(not proc_status_available(), reason="needs /proc")
 def test_sigterm_the_moment_the_handler_exists_exits_0(tmp_path: Path) -> None:
-    # The issue asks for ten rounds: the signal lands at a different point of
-    # startup each time. Each round waits on the exact condition (SigCgt).
-    for round_no in range(10):
-        code, out = race_once(MODULE, tmp_path)
+    # One round, not ten. #108's AC asked for a ten-round loop, but
+    # testing-guidelines.md ("Flaky or racy behaviour") bans "passes N runs in
+    # a row" loops and supersedes it (#198). This check also cannot fail on the
+    # original bug: the SigCgt bit only appears once main() installs the latch's
+    # handler, so race_once always sends SIGTERM after a handler exists, even on
+    # the unfixed code. It is a regression guard only; what actually proves the
+    # fix is the window / SIGINT / ordering tests, which do fail on the parent
+    # tree. Do not restore the loop.
+    code, out = race_once(MODULE, tmp_path)
 
-        assert code == 0, f"round {round_no}: exit {code}\n{out}"
+    assert code == 0, out
 
 
 def test_importing_the_entrypoint_does_not_change_sigterm_or_sigint() -> None:
