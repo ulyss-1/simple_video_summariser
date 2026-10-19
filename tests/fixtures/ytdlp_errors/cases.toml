@@ -154,6 +154,19 @@ returncode = 1
 error_class = "RATE_LIMITED"
 
 [[case]]
+# yt-dlp 2026.08.19 SOURCE, not a live run (a captcha cannot be provoked
+# responsibly). extractor/youtube/_video.py (~line 4066) appends
+# ". YouTube is requiring a captcha challenge before playback" to the
+# playability reason when the player response carries a playerCaptchaViewModel.
+# The reason commonly begins "Video unavailable", which would otherwise match
+# _PERMANENT's REMOVED pattern - so this must classify as RATE_LIMITED (#148).
+stderr = '''
+ERROR: [youtube] aaaaaaaaaaa: Video unavailable. YouTube is requiring a captcha challenge before playback
+'''
+returncode = 1
+error_class = "RATE_LIMITED"
+
+[[case]]
 # yt-dlp stable@2024.10.22, copied from the log in https://github.com/yt-dlp/yt-dlp/issues/11426
 # (older wording, without the "Video unavailable." prefix or the "rate-limited by
 # YouTube" suffix that current yt-dlp adds)

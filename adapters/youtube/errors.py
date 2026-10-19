@@ -76,6 +76,10 @@ _RATE_LIMITED = _rx(
     r"Sign in to confirm you['’]re not a bot",
     r"This content isn['’]t available, try again later",
     r"rate-limited by YouTube",
+    # A captcha gate is a session block, not a removal (#148). yt-dlp appends
+    # this to the playability reason, which often starts with "Video
+    # unavailable." - so it must be matched here, before _PERMANENT's REMOVED.
+    r"requiring a captcha challenge",
 )
 # 403 storms mean the extractor is broken (architecture.md 16.11), not the network.
 _FORBIDDEN = _rx(r"HTTP Error 403")
