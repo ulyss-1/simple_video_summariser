@@ -361,6 +361,28 @@ def _failed_logs(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
     return [r for r in caplog.records if r.getMessage() == "planner.poll.channel_failed"]
 
 
+def test_a_fetch_failure_rolls_back_before_recording_the_poll(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The failure path must roll the connection back before record_poll writes,
+    # so record_poll never runs inside the transaction the failed channel left
+    # open. The per-entry `with conn.transaction()` savepoints hide this on the
+    # discovery path, so it is pinned here on the fetch-failure path. #192/#90.
+    conn = FakeConn()
+
+    def record_poll(c: Any, channel_id: str, error: str | None = None) -> PollHealth | None:
+        c.events.append(f"record_poll:{'fail' if error is not None else 'ok'}")
+        return PollHealth(CUTOFF, 1) if error is not None else PollHealth(None, 0)
+
+    monkeypatch.setattr(poll, "list_active_channels", lambda _c: [_channel("UCa")])
+    monkeypatch.setattr(poll, "record_poll", record_poll)
+
+    poll_channels(conn, FakeFeed({"UCa": ValueError("boom")}), FakeQueue())  # type: ignore[arg-type]
+
+    assert "rollback" in conn.events
+    assert conn.events.index("rollback") < conn.events.index("record_poll:fail")
+
+
 def test_channel_failing_over_three_polls_then_recovering_logs_each_failure_run(
     make_repo: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -879,6 +901,26 @@ def test_channel_failing_three_polls_keeps_its_start_then_recovers(
 
     poll_channels(conn, FakeFeed({"UCa": []}), queue)
     assert _health(conn)[:2] == (None, 0)
+
+
+@pytest.mark.integration
+def test_the_logged_failure_start_is_utc_whatever_the_session_timezone(
+    conn: psycopg.Connection[Any], queue: PostgresQueue, caplog: pytest.LogCaptureFixture
+) -> None:
+    # poll_failing_since comes back from the DB as an aware datetime in the
+    # session's timezone. The log must render it in UTC; under a non-UTC session
+    # TimeZone, dropping .astimezone(UTC) would emit the local offset. #192/#90.
+    _add_channel(conn)
+    conn.execute("SET TIME ZONE 'America/New_York'")
+    conn.commit()
+    caplog.set_level(logging.WARNING)
+
+    poll_channels(conn, FakeFeed({"UCa": ValueError("bad feed")}), queue)
+
+    logs = _failed_logs(caplog)
+    assert len(logs) == 1
+    rendered = logs[0].__dict__["poll_failing_since"]
+    assert rendered.endswith("+00:00"), rendered
 
 
 @pytest.mark.integration

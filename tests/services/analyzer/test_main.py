@@ -30,6 +30,7 @@ from typing import Any
 import pytest
 import structlog
 
+from adapters.summarize.ollama import HttpResponse
 from common.config import Settings, get_settings
 from common.errors import BugError, Defer
 from common.logging import configure_logging
@@ -141,6 +142,38 @@ def test_configure_logging_runs_before_anything_is_logged(
 
     assert code == 0
     assert order == ["configure_logging"]
+
+
+def test_the_startup_probe_resolves_through_the_module_level_transport(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The autouse _no_real_ollama_probe fixture patches
+    # analyzer_main.urllib_get_transport by name. monkeypatch.setattr already
+    # fails loudly if a refactor renames or removes it; this pins the other half
+    # - that main() with no probe_transport actually resolves the default probe
+    # through that module global, so a refactor that bypasses it (and would
+    # silently let tests reach the network) fails here too. #192/#84.
+    calls: list[str] = []
+
+    def recording(url: str, timeout: float) -> HttpResponse:
+        calls.append(url)
+        raise ConnectionRefusedError("recorded, not reached")
+
+    monkeypatch.setattr(analyzer_main, "urllib_get_transport", recording)
+    db = FakeDatabase()
+
+    code = analyzer_main.main(
+        settings=make_settings(),  # SUMMARIZER defaults to ollama, so the probe runs
+        connect=db.connect,
+        summarizer_factory=fake_summarizer_factory(),
+        handler_factory=spy_handler_factory()[0],
+        worker_options=worker_options(tmp_path),
+        max_iterations=1,
+    )
+
+    assert code == 0
+    assert len(calls) == 1
+    assert calls[0].endswith("/api/tags")
 
 
 def test_started_line_records_the_ollama_configuration(

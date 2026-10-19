@@ -85,6 +85,21 @@ def test_check_constraints_reject_inconsistent_rows(
         )
 
 
+def test_poll_failures_is_not_null_with_default_zero(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The consistency CHECK passes on a NULL poll_failures ((NULL = 0) is NULL,
+    # not FALSE), so making the column nullable would survive it. Pin NOT NULL
+    # and DEFAULT 0 directly (#192/#90).
+    command.upgrade(_config_for(postgres_dsn, monkeypatch), "head")
+    with psycopg.connect(postgres_dsn) as conn:
+        row = conn.execute(
+            "SELECT is_nullable, column_default FROM information_schema.columns"
+            " WHERE table_name = 'channels' AND column_name = 'poll_failures'"
+        ).fetchone()
+    assert row == ("NO", "0")
+
+
 def test_upgrade_downgrade_upgrade_succeeds_with_channel_rows(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
