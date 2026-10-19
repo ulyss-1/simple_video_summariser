@@ -125,6 +125,30 @@ def test_default_user_is_non_root_app_10001() -> None:
     assert _ok("id -un") == "app"
 
 
+def test_compose_run_applies_its_default_non_root_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Every other docker test passes --user explicitly, so the compose default
+    # (`user: "${BAKEOFF_UID:-1000}"`) is never exercised. Run through compose
+    # with no --user and assert it applies uid 1000 - not 0, and not the image's
+    # own 10001 (#191). The built test image is tagged as the compose image so
+    # `compose run` reuses it instead of rebuilding.
+    monkeypatch.delenv("BAKEOFF_UID", raising=False)
+    monkeypatch.delenv("BAKEOFF_GID", raising=False)
+    tagged = "ytdigest-bakeoff:latest"
+    assert _docker("tag", IMAGE, tagged).returncode == 0
+    try:
+        result = _docker(
+            "compose", "-f", "compose.bakeoff.yml", "run", "--rm", "--no-deps",
+            "--entrypoint", "sh", "bakeoff", "-c", "id -u",
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip().splitlines()[-1] == "1000"
+    finally:
+        _docker("compose", "-f", "compose.bakeoff.yml", "down", "-v")
+        _docker("image", "rm", "-f", tagged)
+
+
 def test_python_3_14_and_the_pinned_yt_dlp() -> None:
     assert _ok("python --version").startswith("Python 3.14.")
     assert _ok("which python") == "/opt/venv/bin/python"

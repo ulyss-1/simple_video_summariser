@@ -1,18 +1,24 @@
 """Static checks of the bake-off image inputs (issue #76, follow-up to #3).
 
-No Docker is invoked: these read `ops/Dockerfile.bakeoff`,
-`ops/Dockerfile.bakeoff.dockerignore`, `compose.bakeoff.yml` and `.gitignore`
-as text, so they run under `pytest -m "not integration"`.
-`test_bakeoff_image_docker.py` builds the image and checks the runtime.
+Most read `ops/Dockerfile.bakeoff`, `ops/Dockerfile.bakeoff.dockerignore`,
+`compose.bakeoff.yml` and `.gitignore` as text (or exercise `bakeoff.py`'s own
+functions), so they run under `pytest -m "not integration"`. One test is marked
+`integration`: it asks Docker to resolve `compose.bakeoff.yml` so the checks are
+whitespace-insensitive and see the resolved defaults (#191). It needs the Docker
+CLI and the compose plugin but builds no image. `test_bakeoff_image_docker.py`
+builds the image and checks the runtime.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 
@@ -135,6 +141,11 @@ def test_entrypoint_and_cmd_are_exec_form() -> None:
     assert entrypoints, "the harness must be the ENTRYPOINT so --help/usage work bare"
     for args in entrypoints:
         assert args.startswith("["), "shell-form ENTRYPOINT swallows SIGTERM"
+        # Exec form is not enough: ["sh", "-c", ...] is a JSON array too, but it
+        # swallows SIGTERM and is not PID 1. The interpreter must be invoked
+        # directly (#191).
+        parsed = json.loads(args)
+        assert parsed[:2] == ["python", "/app/bakeoff.py"], parsed
     for name, args in _steps():
         if name == "CMD":
             assert args.startswith("[")
@@ -184,6 +195,44 @@ def test_root_dockerignore_is_unchanged_and_still_excludes_scripts() -> None:
 
 def _bakeoff_text() -> str:
     return COMPOSE_BAKEOFF_YML.read_text()
+
+
+def _resolved_compose() -> dict[str, Any]:
+    """The compose config as Docker itself resolves it: whitespace-insensitive,
+    with ``${BAKEOFF_UID:-1000}`` and the like filled in."""
+    result = subprocess.run(
+        ["docker", "compose", "-f", str(COMPOSE_BAKEOFF_YML), "config", "--format", "json"],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)  # type: ignore[no-any-return]
+
+
+@pytest.mark.integration
+def test_resolved_compose_defaults_are_non_root_networked_and_read_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Checks against the config Docker resolves, not the source text: a
+    # whitespace variant (`internal:  true`), a non-root default
+    # (`user: ${BAKEOFF_UID:-0}`), `network_mode: none`, a `:ro` bind or a
+    # renamed project are all invisible to a text scan but caught here (#191).
+    monkeypatch.delenv("BAKEOFF_UID", raising=False)
+    monkeypatch.delenv("BAKEOFF_GID", raising=False)
+
+    config = _resolved_compose()
+
+    assert config["name"] == "ytdigest-bakeoff"
+    svc = config["services"]["bakeoff"]
+    assert svc.get("user") == "1000:1000"  # the default, never 0:0
+    assert svc.get("network_mode") is None  # must reach YouTube and PyPI
+    networks = config.get("networks") or {}
+    assert not any((net or {}).get("internal") for net in networks.values())
+    binds = [v for v in svc.get("volumes", []) if v.get("type") == "bind"]
+    assert binds, svc.get("volumes")
+    assert all(not v.get("read_only") for v in binds)  # /work is writable
 
 
 def test_compose_bakeoff_has_its_own_project_name() -> None:
@@ -308,6 +357,54 @@ def test_environment_overrides_the_default_paths(
     )
     assert args.engines_venv == Path("/opt/v")
     assert args.cache_dir == Path("/explicit")  # a flag still wins
+
+
+def test_install_engines_installs_wheels_only(
+    bakeoff: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The engine install's --only-binary lives in install_engines (the script),
+    # not the Dockerfile RUN line, so the Dockerfile-text check is satisfied by
+    # the yt-dlp line alone. Pin the engine install directly: dropping
+    # --only-binary here fails the fast suite too (#191).
+    calls: list[list[str]] = []
+
+    class _Result:
+        returncode = 0
+
+    def fake_run(cmd: list[str], *args: Any, **kwargs: Any) -> _Result:
+        calls.append(list(cmd))
+        return _Result()
+
+    monkeypatch.setattr(bakeoff.subprocess, "run", fake_run)
+
+    assert bakeoff.install_engines(tmp_path / "venv") == 0
+
+    pip_installs = [c for c in calls if "pip" in c and "install" in c]
+    assert pip_installs, calls
+    for cmd in pip_installs:
+        assert "--only-binary" in cmd and ":all:" in cmd, cmd
+
+
+def test_preinstalled_flag_never_installs_at_run_time(
+    bakeoff: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # With BAKEOFF_ENGINES_PREINSTALLED set (the image case), the engine venv is
+    # read-only and nothing is installed at run time. Stub both install steps to
+    # raise: ignoring the flag would call them and fail, rather than silently
+    # installing into a read-only venv (#191).
+    venv = tmp_path / "venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("")  # venv_python(venv).exists() -> True
+    monkeypatch.setenv("BAKEOFF_ENGINES_PREINSTALLED", "1")
+
+    def boom(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("must not install when preinstalled")
+
+    monkeypatch.setattr(bakeoff, "ensure_venv", boom)
+    monkeypatch.setattr(bakeoff, "pip_install", boom)
+    monkeypatch.setattr(bakeoff, "_family_install_cache", {})
+
+    assert bakeoff.ensure_family_installed(venv, "faster-whisper") is None
 
 
 def test_header_says_container_no_on_the_host(
