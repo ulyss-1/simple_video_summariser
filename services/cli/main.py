@@ -37,7 +37,7 @@ from adapters.youtube.metadata import YouTubeMetadata
 from adapters.youtube.subtitles import YouTubeSubtitles
 from adapters.youtube.ytdlp import CookieFileError, check_cookie_file
 from common.chunking import chunk_segments, chunk_strategy
-from common.config import Settings, get_settings
+from common.config import Settings, get_settings, summarizer_model
 from common.db import connect
 from common.errors import (
     BugError,
@@ -361,8 +361,13 @@ def _transcript_source(conn: psycopg.Connection[Any], analysis: Analysis) -> str
     return "unknown"
 
 
-def _print_result(conn: psycopg.Connection[Any], video_id: str) -> int:
-    analysis = latest_analysis(conn, video_id)
+def _print_result(conn: psycopg.Connection[Any], settings: Settings, video_id: str) -> int:
+    analysis = latest_analysis(
+        conn,
+        video_id,
+        prefer_model=summarizer_model(settings),
+        prefer_prompt_version=settings.PROMPT_VERSION,
+    )
     meta = get_video_meta(conn, video_id)
     conn.rollback()
     if analysis is None or meta is None:
@@ -487,6 +492,6 @@ def _run(video_id: str, deps: Deps | None, *, verbose: bool) -> int:
             if isinstance(err.cause, psycopg.errors.UndefinedTable):
                 return _schema_missing(["(a table the pipeline needs)"])
             return _report_failure(err.stage, err.cause, verbose=verbose)
-        return _print_result(conn, video_id)
+        return _print_result(conn, settings, video_id)
     finally:
         conn.close()

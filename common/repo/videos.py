@@ -385,7 +385,11 @@ _VIDEO_STATUS_JOINS = """
     LEFT JOIN LATERAL (
         SELECT a.created_at FROM analyses a
         WHERE a.video_id = v.video_id
-        ORDER BY a.created_at DESC, a.id DESC LIMIT 1
+        ORDER BY
+            COALESCE(a.model = %(prefer_model)s
+                     AND a.prompt_version = %(prefer_prompt_version)s, FALSE) DESC,
+            a.created_at DESC, a.id DESC
+        LIMIT 1
     ) la ON true
     LEFT JOIN LATERAL (
         SELECT j.id, j.kind, j.state FROM jobs j
@@ -435,6 +439,8 @@ def list_videos(
     sorts: Sequence[tuple[str, str]] | None = None,
     offset: int = 0,
     limit: int = 50,
+    prefer_model: str | None = None,
+    prefer_prompt_version: str | None = None,
 ) -> VideoPage:
     """One page of the library plus the total match count (#42).
 
@@ -473,6 +479,8 @@ def list_videos(
             "before": published_before,
             "offset": offset,
             "limit": limit,
+            "prefer_model": prefer_model,
+            "prefer_prompt_version": prefer_prompt_version,
         },
     ).fetchall()
     total = int(rows[0][0]) if rows else 0
@@ -480,9 +488,22 @@ def list_videos(
     return VideoPage(items=items, total=total)
 
 
-def get_video(conn: psycopg.Connection[Any], video_id: str) -> VideoSummary | None:
+def get_video(
+    conn: psycopg.Connection[Any],
+    video_id: str,
+    *,
+    prefer_model: str | None = None,
+    prefer_prompt_version: str | None = None,
+) -> VideoSummary | None:
     """One video with its derived status, or ``None`` without a ``videos`` row (#42)."""
-    row = conn.execute(f"{_VIDEO_READ} WHERE v.video_id = %s", (video_id,)).fetchone()
+    row = conn.execute(
+        f"{_VIDEO_READ} WHERE v.video_id = %(video_id)s",
+        {
+            "video_id": video_id,
+            "prefer_model": prefer_model,
+            "prefer_prompt_version": prefer_prompt_version,
+        },
+    ).fetchone()
     return None if row is None else _summary(row)
 
 

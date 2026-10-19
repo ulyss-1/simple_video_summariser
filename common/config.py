@@ -332,6 +332,16 @@ def _sanitised(exc: ValidationError) -> ValidationError:
     return ValidationError.from_exception_data(exc.title, line_errors, hide_input=True)
 
 
+def summarizer_model(settings: Settings) -> str:
+    """The model the configured summarizer uses: ``OLLAMA_MODEL`` or ``ANTHROPIC_MODEL``.
+
+    The display layer prefers the analysis made with this model and
+    ``PROMPT_VERSION`` (#146), so eval or re-analysis runs with another model do
+    not replace the production one.
+    """
+    return settings.OLLAMA_MODEL if settings.SUMMARIZER == "ollama" else settings.ANTHROPIC_MODEL
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Build and validate settings from the environment, once per process.

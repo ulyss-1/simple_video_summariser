@@ -112,6 +112,33 @@ def test_no_jobs_means_no_active_job_and_no_failure(conn: psycopg.Connection[Any
     assert (detail.active_job, detail.last_failure, detail.latest_analysis_at) == (None, None, None)
 
 
+def test_latest_analysis_at_prefers_the_configured_model_and_prompt(
+    conn: psycopg.Connection[Any],
+) -> None:
+    # Two analyses: an older 'prod' one and a newer 'eval' one (another model and
+    # prompt). The default is newest-wins; the configured preference picks the
+    # prod one so an eval run does not change the Library timestamp/status (#146).
+    seed.video(conn, "vprefer0001")
+    tid = seed.transcript(conn, "vprefer0001")
+    seed.analysis(conn, "vprefer0001", tid, created=1, model="prod", prompt_version="v1")
+    seed.analysis(conn, "vprefer0001", tid, created=5, model="eval", prompt_version="v2")
+
+    default = get_video(conn, "vprefer0001")
+    assert default is not None and default.latest_analysis_at == seed.at(5)
+
+    preferred = get_video(conn, "vprefer0001", prefer_model="prod", prefer_prompt_version="v1")
+    assert preferred is not None
+    assert preferred.latest_analysis_at == seed.at(1)
+    assert preferred.status == "done"  # preference falls back, never hides an analysis
+
+    [item] = [
+        v
+        for v in list_videos(conn, prefer_model="prod", prefer_prompt_version="v1").items
+        if v.video_id == "vprefer0001"
+    ]
+    assert item.latest_analysis_at == seed.at(1)
+
+
 def test_has_transcript_is_true_only_for_a_video_with_a_transcript(
     conn: psycopg.Connection[Any],
 ) -> None:

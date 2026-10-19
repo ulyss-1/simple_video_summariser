@@ -288,6 +288,55 @@ def test_get_analysis_matches_latest_analysis_for_the_latest_run(
     assert get_analysis(conn, "videoAAAAAA", newer) == latest_analysis(conn, "videoAAAAAA")
 
 
+# --- display preference: configured model+prompt wins, else newest (#146) ----
+
+
+def _prod_then_newer_eval(conn: psycopg.Connection, video_id: str) -> int:
+    """Seed a 'prod' analysis then a newer 'eval' one; return the transcript id."""
+    tid = save_transcript(conn, video_id, "whisper", "en", "none", (), None)
+    save_analysis(
+        conn, make_analysis(video_id, tid, model="prod-model", prompt_version="v1", tldr="prod")
+    )
+    save_analysis(  # newer, so newest-wins would pick this one
+        conn, make_analysis(video_id, tid, model="eval-model", prompt_version="v2", tldr="eval")
+    )
+    return tid
+
+
+def test_latest_analysis_prefers_the_configured_model_and_prompt(
+    conn: psycopg.Connection, video_id: str
+) -> None:
+    from common.repo.analyses import latest_analysis
+
+    _prod_then_newer_eval(conn, video_id)
+
+    def tldr(**kw: str | None) -> str | None:
+        got = latest_analysis(conn, video_id, **kw)
+        return got.tldr if got else None
+
+    assert tldr() == "eval"  # default: newest wins
+    assert tldr(prefer_model="prod-model", prefer_prompt_version="v1") == "prod"
+    # No match -> newest overall
+    assert tldr(prefer_model="missing", prefer_prompt_version="v9") == "eval"
+    # Both must match: the right model with the wrong prompt does not count
+    assert tldr(prefer_model="prod-model", prefer_prompt_version="v2") == "eval"
+
+
+def test_latest_analysis_run_prefers_the_configured_model_and_prompt(
+    conn: psycopg.Connection, video_id: str
+) -> None:
+    from common.repo.analyses import latest_analysis_run
+
+    _prod_then_newer_eval(conn, video_id)
+
+    newest = latest_analysis_run(conn, video_id)
+    assert newest is not None and newest.analysis.tldr == "eval"  # default: newest wins
+    preferred = latest_analysis_run(
+        conn, video_id, prefer_model="prod-model", prefer_prompt_version="v1"
+    )
+    assert preferred is not None and preferred.analysis.tldr == "prod"
+
+
 def test_get_analysis_does_not_commit(head_dsn: str) -> None:
     from common.repo.analyses import get_analysis
 

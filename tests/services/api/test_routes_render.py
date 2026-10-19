@@ -49,14 +49,21 @@ class Fakes:
             created_at=datetime(2026, 1, 3, tzinfo=UTC),
         )  # fmt: skip
         self.title: str | None = "Fake channel"
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[tuple[Any, ...]] = []
 
     def get_video_meta(self, conn: Any, video_id: str) -> VideoMeta | None:
         self.calls.append(("meta", video_id))
         return self.video
 
-    def latest_analysis(self, conn: Any, video_id: str) -> Analysis | None:
-        self.calls.append(("analysis", video_id))
+    def latest_analysis(
+        self,
+        conn: Any,
+        video_id: str,
+        *,
+        prefer_model: str | None = None,
+        prefer_prompt_version: str | None = None,
+    ) -> Analysis | None:
+        self.calls.append(("analysis", video_id, prefer_model, prefer_prompt_version))
         return self.analysis
 
     def get_channel_title(self, conn: Any, channel_id: str) -> str | None:

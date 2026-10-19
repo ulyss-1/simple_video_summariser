@@ -621,6 +621,15 @@ CREATE TABLE analyses (
 );
 CREATE INDEX analyses_video_idx ON analyses (video_id, created_at DESC);
 CREATE INDEX analyses_version_idx ON analyses (prompt_version, model);
+-- Which analysis a video DISPLAYS when it has several (#146): the read layer
+-- prefers the newest analysis whose (model, prompt_version) match the
+-- configured summarizer (common.config.summarizer_model + PROMPT_VERSION),
+-- falling back to the newest of any kind. So an eval run (#62) or a manual
+-- re-analysis with another model does not replace the production one in the
+-- Library, the detail view, the SSR render page or the CLI. One soft-preference
+-- ORDER BY, threaded through latest_analysis, latest_analysis_run and the
+-- Library's latest_analysis_at, so the paths never disagree; the full history
+-- is still listed newest-first at GET /videos/{id}/analyses.
 
 CREATE TABLE topics (
     id          BIGSERIAL PRIMARY KEY,
