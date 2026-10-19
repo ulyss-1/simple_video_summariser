@@ -170,6 +170,28 @@ def test_a_running_unforced_job_is_409_and_nothing_is_written(
     assert jobs(db) == before
 
 
+def test_a_contended_reanalysis_is_409_at_the_route(
+    api: TestClient, db: psycopg.Connection[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # request_reanalysis raising ReanalysisContended was tested, but not the
+    # route's mapping of it to 409 - changing that status to 200 survived (#203,
+    # #101). Force the raise and pin the HTTP response.
+    from services.api import routes_write
+
+    seed(db)  # a video with a transcript, so the 404/no-transcript guards pass
+
+    def contended(*_args: Any, **_kwargs: Any) -> Reanalysis:
+        raise ReanalysisContended
+
+    monkeypatch.setattr(routes_write, "request_reanalysis", contended)
+
+    response = api.post(f"/videos/{VID}/reanalyze")
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": routes_write.REANALYSIS_CONTENDED}
+    assert job_count(db) == 0
+
+
 # --- accepted ----------------------------------------------------------------
 
 

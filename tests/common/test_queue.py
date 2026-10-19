@@ -1936,6 +1936,28 @@ def test_raise_priority_changes_nothing_but_priority_and_inserts_nothing(
     assert _count(conn) == count
 
 
+def test_raise_priority_leaves_a_non_null_locked_by_and_state_untouched(
+    queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    # A pending job can carry a lock owner (e.g. a row a reap left pending).
+    # raise_priority writes only priority; adding `state = 'pending'` or
+    # `locked_by = NULL` to its SET clause is invisible unless locked_by starts
+    # non-NULL, which the other raise_priority tests never set (#203).
+    job_id = queue.enqueue("ingest", "v1", priority=-10)
+    assert job_id is not None
+    _set(conn, job_id, locked_by="worker-x")
+    before = _row(conn, job_id)
+    assert before["locked_by"] == "worker-x"
+    assert before["state"] == "pending"
+
+    assert queue.raise_priority("v1", 10) == [job_id]
+
+    after = _row(conn, job_id)
+    assert after["priority"] == 10
+    assert after["locked_by"] == "worker-x"
+    assert after["state"] == "pending"
+
+
 @pytest.mark.parametrize(
     ("kind", "state"),
     [

@@ -471,6 +471,36 @@ def test_a_submission_that_loses_the_enqueue_race_returns_the_winners_job(
     assert len(_jobs(db)) == 1
 
 
+def test_a_lost_enqueue_race_still_raises_the_winners_priority(
+    dsn: str, db: psycopg.Connection[Any]
+) -> None:
+    # The loser re-reads the winner and must raise its priority too (#103). The
+    # winner is seeded BELOW interactive so the raise is observable: a mutant
+    # that raises only on the non-race path leaves it low. #203.
+    db.execute("INSERT INTO videos (video_id, origin) VALUES (%s, 'rss')", (VID,))
+    with psycopg.connect(dsn) as first:
+        with first.transaction():
+            winner = PostgresQueue(first).enqueue("ingest", VID, priority=0)
+            assert winner is not None
+            result: dict[str, Any] = {}
+
+            def second() -> None:
+                with psycopg.connect(dsn, application_name="loser-raise") as conn:
+                    result["value"] = submit_video(conn, VID, queue=PostgresQueue(conn))
+                    conn.commit()
+
+            thread = threading.Thread(target=second)
+            thread.start()
+            _wait_until_blocked(db, "loser-raise")
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+
+    assert result["value"].job_id == winner
+    assert result["value"].created is False
+    priority = db.execute("SELECT priority FROM jobs WHERE id = %s", (winner,)).fetchone()
+    assert priority == (PRIORITY_INTERACTIVE,)
+
+
 def test_two_concurrent_http_submissions_both_succeed_with_one_job(
     dsn: str, db: psycopg.Connection[Any], logs: LogSink
 ) -> None:

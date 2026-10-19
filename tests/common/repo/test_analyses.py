@@ -349,6 +349,68 @@ def test_get_analysis_does_not_commit(head_dsn: str) -> None:
         assert get_analysis(conn, "vidrollbk01", aid) is None
 
 
+# --- start_sec ties are broken by id ASC (issue #203) -----------------------
+#
+# These seed two tied rows with EXPLICIT ids written in reverse order: the
+# higher id is inserted first, so the physical/insertion order is the opposite
+# of id order. Only the `id ASC` tiebreak recovers id order; without it the scan
+# returns the rows the other way round, and `id DESC` reverses them too. This
+# does not depend on HOT/VACUUM behaviour the way a double-UPDATE does (#203
+# item 1): claims.start_sec is indexed and quotes.start_sec is not, so a
+# double-UPDATE is non-HOT for one and HOT for the other, which is exactly the
+# fragility QA flagged.
+
+
+def _empty_analysis(conn: psycopg.Connection, video_id: str) -> int:
+    tid = save_transcript(conn, video_id, "whisper", "en", "none", (), None)
+    return save_analysis(conn, make_analysis(video_id, tid, topics=(), claims=(), quotes=()))
+
+
+def test_claims_tied_on_start_sec_come_back_in_id_order(
+    conn: psycopg.Connection, video_id: str
+) -> None:
+    from common.repo.analyses import get_analysis
+
+    aid = _empty_analysis(conn, video_id)
+    # Higher id ("second") inserted first, lower id ("first") second.
+    conn.execute(
+        "INSERT INTO claims (id, analysis_id, text, start_sec) VALUES (%s, %s, %s, %s)",
+        (9_000_002, aid, "second", 10),
+    )
+    conn.execute(
+        "INSERT INTO claims (id, analysis_id, text, start_sec) VALUES (%s, %s, %s, %s)",
+        (9_000_001, aid, "first", 10),
+    )
+
+    result = get_analysis(conn, video_id, aid)
+
+    assert result is not None
+    # id ASC: lower id first. Removing the tiebreak returns ["second","first"]
+    # (insertion order); id DESC returns ["second","first"] too.
+    assert [c.text for c in result.claims] == ["first", "second"]
+
+
+def test_quotes_tied_on_start_sec_come_back_in_id_order(
+    conn: psycopg.Connection, video_id: str
+) -> None:
+    from common.repo.analyses import get_analysis
+
+    aid = _empty_analysis(conn, video_id)
+    conn.execute(
+        "INSERT INTO quotes (id, analysis_id, text, start_sec) VALUES (%s, %s, %s, %s)",
+        (9_000_002, aid, "second", 10),
+    )
+    conn.execute(
+        "INSERT INTO quotes (id, analysis_id, text, start_sec) VALUES (%s, %s, %s, %s)",
+        (9_000_001, aid, "first", 10),
+    )
+
+    result = get_analysis(conn, video_id, aid)
+
+    assert result is not None
+    assert [q.text for q in result.quotes] == ["first", "second"]
+
+
 # -- cache tokens and call count (issue #139) ---------------------------------------------------
 
 
