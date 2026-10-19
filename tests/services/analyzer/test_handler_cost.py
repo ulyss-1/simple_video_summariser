@@ -6,7 +6,7 @@ from collections.abc import Callable
 
 import pytest
 
-from common.errors import LLMUnavailableError
+from common.errors import LLMInvalidOutputError, LLMUnavailableError
 from common.models import Segment
 from tests.services.analyzer.fakes import FakeSummarizer
 from tests.services.analyzer.test_handler import (
@@ -41,6 +41,27 @@ def test_cost_is_the_rounded_sum_of_roster_every_chunk_and_reduce(
     # 0.000011 + 3 * 0.000123 + 0.0000049 = 0.0003849, stored with 5 decimals.
     assert rig.latest().cost_usd == 0.00038
     assert _done_line(rig)["cost_usd"] == 0.00038
+
+
+def test_a_failed_roster_pass_counts_its_billed_tokens_and_cost(
+    rig_factory: Callable[..., Rig],  # noqa: F811
+) -> None:
+    # The roster pass failed (and fell back to an empty roster), but the provider
+    # billed it, so its tokens and cost are in the stored totals, not discarded (#151).
+    summarizer = FakeSummarizer(
+        fail_on={"roster": LLMInvalidOutputError("bad json")},
+        usage_on_fail=(40, 5),
+        costs={"roster": 0.002, "chunk": 0.01, "reduce": 0.003},
+    )
+    rig = rig_factory(summarizer, segments=THREE_CHUNKS)
+
+    rig.run()
+
+    got = rig.latest()
+    assert got.speaker_roster == {"speakers": []}  # fell back to empty
+    # roster(failed) 40/5 + 3 chunks 3*100/3*50 + reduce 20/10
+    assert (got.input_tokens, got.output_tokens) == (40 + 300 + 20, 5 + 150 + 10)
+    assert got.cost_usd == 0.035  # 0.002 + 3 * 0.01 + 0.003
 
 
 def test_distinct_costs_per_call_are_all_counted(
