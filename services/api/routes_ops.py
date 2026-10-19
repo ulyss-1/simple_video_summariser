@@ -272,6 +272,24 @@ def get_ops_jobs(
     )
 
 
+@router.get("/ops/planner", response_model=schemas.PlannerRunsOut)
+def get_ops_planner(
+    conn: Annotated[psycopg.Connection[Any], Depends(get_conn)],
+) -> schemas.PlannerRunsOut | JSONResponse:
+    """Each planner task's last run, ordered by task name (#98/#154). Read-only.
+
+    The api never writes ``planner_task_runs``; ``/metrics`` exposes a matching
+    per-task last-success gauge for alerting on a stalled planner.
+    """
+    try:
+        conn.read_only = True
+        runs = list_task_runs(conn)
+    except Exception:  # noqa: BLE001 - any database failure is "unavailable", never a 500
+        _log.exception("ops.planner database query failed")
+        return JSONResponse(status_code=503, content=UNAVAILABLE_BODY)
+    return schemas.ops_planner_runs(runs)
+
+
 def _retry_job_id(id: int) -> int:
     """The path id, validated before any dependency opens a connection."""
     if not 1 <= id <= _MAX_JOB_ID:

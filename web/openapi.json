@@ -1806,6 +1806,132 @@
         "title": "ProgressOut",
         "type": "object"
       },
+      "PlannerRunsOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PlannerTaskRunItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "PlannerRunsOut",
+        "type": "object"
+      },
+      "PlannerTaskRunItem": {
+        "properties": {
+          "interval_sec": {
+            "title": "Interval Sec",
+            "type": "number"
+          },
+          "last_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Count"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "last_finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Finished At"
+          },
+          "last_ok_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Ok At"
+          },
+          "last_outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ok",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Outcome"
+          },
+          "last_skipped_locked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Skipped Locked At"
+          },
+          "last_started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Started At"
+          },
+          "task_name": {
+            "title": "Task Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_name",
+          "interval_sec",
+          "last_started_at",
+          "last_finished_at",
+          "last_outcome",
+          "last_error",
+          "last_count",
+          "last_ok_at",
+          "last_skipped_locked_at"
+        ],
+        "title": "PlannerTaskRunItem",
+        "type": "object"
+      },
       "QuoteOut": {
         "properties": {
           "source_chunk_seq": {
@@ -3457,6 +3583,25 @@
           }
         },
         "summary": "Post Ops Job Retry"
+      }
+    },
+    "/ops/planner": {
+      "get": {
+        "description": "Each planner task's last run, ordered by task name (#98/#154). Read-only.\n\nThe api never writes ``planner_task_runs``; ``/metrics`` exposes a matching\nper-task last-success gauge for alerting on a stalled planner.",
+        "operationId": "get_ops_planner_ops_planner_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlannerRunsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Ops Planner"
       }
     },
     "/search": {

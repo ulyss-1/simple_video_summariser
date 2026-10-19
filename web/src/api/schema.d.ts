@@ -343,6 +343,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/ops/planner": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Ops Planner
+         * @description Each planner task's last run, ordered by task name (#98/#154). Read-only.
+         *
+         *     The api never writes ``planner_task_runs``; ``/metrics`` exposes a matching
+         *     per-task last-success gauge for alerting on a stalled planner.
+         */
+        get: operations["get_ops_planner_ops_planner_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/search": {
         parameters: {
             query?: never;
@@ -1081,6 +1104,32 @@ export interface components {
             percent: number | null;
             /** Updated At */
             updated_at: string | null;
+        };
+        /** PlannerRunsOut */
+        PlannerRunsOut: {
+            /** Items */
+            items: components["schemas"]["PlannerTaskRunItem"][];
+        };
+        /** PlannerTaskRunItem */
+        PlannerTaskRunItem: {
+            /** Interval Sec */
+            interval_sec: number;
+            /** Last Count */
+            last_count: number | null;
+            /** Last Error */
+            last_error: string | null;
+            /** Last Finished At */
+            last_finished_at: string | null;
+            /** Last Ok At */
+            last_ok_at: string | null;
+            /** Last Outcome */
+            last_outcome: ("ok" | "failed") | null;
+            /** Last Skipped Locked At */
+            last_skipped_locked_at: string | null;
+            /** Last Started At */
+            last_started_at: string | null;
+            /** Task Name */
+            task_name: string;
         };
         /** QuoteOut */
         QuoteOut: {
@@ -1863,6 +1912,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_ops_planner_ops_planner_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlannerRunsOut"];
                 };
             };
         };
