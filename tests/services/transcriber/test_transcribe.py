@@ -9,8 +9,10 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
+from datetime import UTC, datetime
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import psycopg
@@ -21,6 +23,7 @@ from common.chunking import chunk_segments
 from common.errors import (
     BugError,
     Cancelled,
+    Defer,
     JobError,
     PermanentSourceError,
     ResourceError,
@@ -31,7 +34,11 @@ from common.models import AudioRef, Chunk, Segment, TranscriptResult
 from common.queue import Job, PostgresQueue
 from common.repo.media import delete_media as real_delete_media
 from common.repo.transcripts import save_transcript
-from services.transcriber.transcribe import HEARTBEAT_SEC, make_transcribe_handler
+from services.transcriber.transcribe import (
+    HEARTBEAT_SEC,
+    LOW_DISK_DEFER,
+    make_transcribe_handler,
+)
 from tests.services.transcriber.fakes import make_ctx, make_job, make_settings
 
 pytestmark = pytest.mark.integration
@@ -160,6 +167,8 @@ class Rig:
         chunker: Callable[..., list[Chunk]] = chunk_segments,
         with_video: bool = True,
         clock: Callable[[], float] = time.monotonic,
+        disk_usage: Callable[[Path], Any] | None = None,
+        now: Callable[[], datetime] | None = None,
         **settings: Any,
     ) -> None:
         self.conn = conn
@@ -170,6 +179,16 @@ class Rig:
         self.transcriber = transcriber if transcriber is not None else FakeTranscriber()
         self.opened: list[psycopg.Connection[Any]] = []
         self.queue = SpyQueue(PostgresQueue(conn, settings=self.settings))
+        # Default to a volume with ample free space so the #152 guard never
+        # defers unless a test asks it to; tests must not depend on the host's
+        # real free space.
+        seams: dict[str, Any] = {
+            "disk_usage": disk_usage
+            if disk_usage is not None
+            else (lambda _path: SimpleNamespace(total=10**12, free=10**12)),
+        }
+        if now is not None:
+            seams["now"] = now
         self.handler = make_transcribe_handler(
             connect=self._connect,
             queue=self.queue,
@@ -178,6 +197,7 @@ class Rig:
             chunker=chunker,
             settings=self.settings,
             clock=clock,
+            **seams,
         )
         self.ctx, self.logs = make_ctx()
         if with_video:
@@ -396,6 +416,80 @@ def test_a_failed_fetch_writes_no_media_row_and_propagates_unchanged(
     assert raised.value is exc
     assert rig.media() == []
     assert rig.transcriber.calls == []
+
+
+# --- AUDIO_DIR free-space guard before the fetch (#152) ----------------------
+
+_FIXED_NOW = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
+
+
+def _disk(total: int, free: int) -> Callable[[Path], Any]:
+    return lambda _path: SimpleNamespace(total=total, free=free)
+
+
+def test_a_transcribe_job_defers_without_fetching_when_below_the_free_space_floor(
+    make_rig: Callable[..., Rig],
+) -> None:
+    # floor = 2 GB (decimal); 1 GB free is below it, so the job is deferred to
+    # now + LOW_DISK_DEFER without fetching, registering media or spending an
+    # attempt (Defer). #152.
+    rig = make_rig(
+        AUDIO_MIN_FREE_GB=2,
+        AUDIO_MIN_FREE_PCT=0,
+        disk_usage=_disk(total=10**12, free=1_000_000_000),
+        now=lambda: _FIXED_NOW,
+    )
+
+    with pytest.raises(Defer) as deferred:
+        rig.run()
+
+    assert deferred.value.until == _FIXED_NOW + LOW_DISK_DEFER
+    assert rig.audio.calls == []
+    assert rig.media() == []
+    assert rig.nothing_written()
+    assert any("floor_bytes" in r for r in rig.logs.records("warning"))
+
+
+def test_above_the_floor_the_audio_is_fetched_as_usual(
+    make_rig: Callable[..., Rig],
+) -> None:
+    rig = make_rig(
+        AUDIO_MIN_FREE_GB=2,
+        AUDIO_MIN_FREE_PCT=0,
+        disk_usage=_disk(total=10**12, free=500_000_000_000),
+    )
+
+    rig.run()
+
+    assert rig.audio.calls == [(VID, rig.audio_dir)]
+    assert rig.media()  # a media row was registered
+
+
+def test_a_failed_free_space_measurement_fetches_anyway(
+    make_rig: Callable[..., Rig],
+) -> None:
+    def boom(_path: Path) -> Any:
+        raise OSError("statvfs failed")
+
+    rig = make_rig(AUDIO_MIN_FREE_GB=2, disk_usage=boom)
+
+    rig.run()
+
+    assert rig.audio.calls == [(VID, rig.audio_dir)]
+    assert any("error" in r for r in rig.logs.records("warning"))
+
+
+def test_the_free_space_guard_is_off_when_both_floors_are_zero(
+    make_rig: Callable[..., Rig],
+) -> None:
+    def must_not_read(_path: Path) -> Any:
+        raise AssertionError("disk must not be read when the guard is off")
+
+    rig = make_rig(AUDIO_MIN_FREE_GB=0, AUDIO_MIN_FREE_PCT=0, disk_usage=must_not_read)
+
+    rig.run()
+
+    assert rig.audio.calls == [(VID, rig.audio_dir)]
 
 
 def test_a_permanent_source_error_marks_the_video_unavailable_and_commits_first(
