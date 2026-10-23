@@ -4,7 +4,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +102,39 @@ class CatalogSource(Protocol):
         §8.3.1, #107).
         """
         ...
+
+
+CatalogEnrichmentState = Literal["pending", "running", "done", "failed"]
+VideoProcessingStatus = Literal["done", "processing", "unavailable", "failed", "idle"]
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogVideo:
+    channel_id: str
+    video_id: str
+    position: int
+    title: str | None
+    description: str | None
+    published_at: datetime | None
+    enrichment_state: CatalogEnrichmentState
+    enrichment_error: str | None
+    known: bool
+    processing_status: VideoProcessingStatus | None
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogPage:
+    channel_id: str
+    limit: int
+    total_count: int | None
+    items: tuple[CatalogVideo, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogClaim:
+    channel_id: str
+    video_id: str
+    attempts: int
 
 
 # Channel, Transcript, Chunk, Analysis, Topic, Claim and Quote, below,

@@ -30,7 +30,7 @@ def _table_exists(dsn: str) -> bool:
     return bool(row[0] == "deleted_videos")
 
 
-def test_0016_is_the_only_head_and_is_chained_to_0015() -> None:
+def test_0016_is_chained_to_0015_and_0017_is_its_only_child() -> None:
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "migrations"))
     script = ScriptDirectory.from_config(config)
@@ -39,7 +39,8 @@ def test_0016_is_the_only_head_and_is_chained_to_0015() -> None:
 
     assert revision is not None
     assert revision.down_revision == "0015"
-    assert script.get_heads() == ["0016"]
+    assert revision.nextrev == frozenset({"0017"})
+    assert script.get_heads() == ["0017"]
 
 
 def test_upgrade_creates_tombstones_and_downgrade_removes_only_them(
