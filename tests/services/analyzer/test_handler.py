@@ -777,8 +777,8 @@ def test_an_invalid_roster_falls_back_to_an_empty_one_with_a_warning(
     assert got.speaker_roster == {"speakers": []}
     assert [c.speaker for c in got.claims] == ["unknown"]
     assert summarizer.calls[1][2].speakers == ()
-    # roster tokens (failed) are not counted; chunk 100/50 + reduce 20/10 are
-    assert (got.input_tokens, got.output_tokens) == (120, 60)
+    # the failed roster call is billed too (#139/#151): 9/9 + chunk 100/50 + reduce 20/10
+    assert (got.input_tokens, got.output_tokens) == (129, 69)
 
 
 @integration

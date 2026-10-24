@@ -35,6 +35,8 @@ class FakeSummarizer:
     call reports, and a failed call of that kind leaves the same cost pending
     (``None`` = priced unknown); a kind not listed reports no call at
     all (``Usage.calls == 0``), like a summarizer that does not track calls.
+    ``extra_usage`` maps a call kind to ``(cache_read_tokens, cache_write_tokens,
+    calls)`` that every call of that kind, failed ones too, leaves pending (#139).
     """
 
     def __init__(
@@ -51,6 +53,7 @@ class FakeSummarizer:
         usage_on_fail: tuple[int, int] = (0, 0),
         on_call: Callable[[str], None] | None = None,
         costs: dict[str, float | None] | None = None,
+        extra_usage: dict[str, tuple[int, int, int]] | None = None,
     ) -> None:
         self.name = name
         self.model = model
@@ -63,10 +66,12 @@ class FakeSummarizer:
         self.usage_on_fail = usage_on_fail
         self.on_call = on_call
         self.costs = costs or {}
+        self.extra_usage = extra_usage or {}
         self.calls: list[tuple[Any, ...]] = []
         self.take_usage_calls = 0
         self._pending = [0, 0]
         self._calls = 0
+        self._cache = [0, 0]
         self._cost: float | None = None
         self._cost_unknown = False
 
@@ -93,6 +98,11 @@ class FakeSummarizer:
         self._count_cost(kind)
 
     def _count_cost(self, kind: str) -> None:
+        if kind in self.extra_usage:
+            read, write, calls = self.extra_usage[kind]
+            self._cache[0] += read
+            self._cache[1] += write
+            self._calls += calls
         if kind in self.costs:
             self._calls += 1
             cost = self.costs[kind]
@@ -124,11 +134,14 @@ class FakeSummarizer:
         usage = Usage(
             input_tokens=self._pending[0],
             output_tokens=self._pending[1],
+            cache_read_tokens=self._cache[0],
+            cache_write_tokens=self._cache[1],
             calls=self._calls,
             cost_usd=None if self._cost_unknown else self._cost,
         )
         self._pending = [0, 0]
         self._calls = 0
+        self._cache = [0, 0]
         self._cost = None
         self._cost_unknown = False
         return usage

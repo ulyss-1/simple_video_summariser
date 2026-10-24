@@ -29,8 +29,8 @@ def save_analysis(conn: psycopg.Connection[Any], analysis: Analysis) -> int:
         INSERT INTO analyses
             (video_id, transcript_id, chunk_strategy, model, prompt_version,
              tldr, speaker_roster, input_tokens, output_tokens, cost_usd,
-             duration_ms, speakers_coerced)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             duration_ms, speakers_coerced, cache_read_tokens, cache_write_tokens, calls)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
         (
@@ -46,6 +46,9 @@ def save_analysis(conn: psycopg.Connection[Any], analysis: Analysis) -> int:
             analysis.cost_usd,
             analysis.duration_ms,
             analysis.speakers_coerced,
+            analysis.cache_read_tokens,
+            analysis.cache_write_tokens,
+            analysis.calls,
         ),
     ).fetchone()
     assert row is not None
@@ -127,7 +130,7 @@ def analysis_exists(
 _ANALYSIS_COLUMNS = """
     id, video_id, transcript_id, chunk_strategy, model, prompt_version, tldr,
     speaker_roster, input_tokens, output_tokens, cost_usd, duration_ms,
-    created_at, speakers_coerced
+    created_at, speakers_coerced, cache_read_tokens, cache_write_tokens, calls
 """
 
 
@@ -183,6 +186,9 @@ def _with_children(conn: psycopg.Connection[Any], row: tuple[Any, ...]) -> Analy
         duration_ms,
         created_at,
         speakers_coerced,
+        cache_read_tokens,
+        cache_write_tokens,
+        calls,
     ) = row
 
     topics = conn.execute(
@@ -221,6 +227,9 @@ def _with_children(conn: psycopg.Connection[Any], row: tuple[Any, ...]) -> Analy
         cost_usd=float(cost_usd) if cost_usd is not None else None,
         duration_ms=duration_ms,
         speakers_coerced=speakers_coerced,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
+        calls=calls,
         created_at=created_at,
         topics=tuple(_topic(item) for item in topics),
         claims=tuple(_claim(item) for item in claims),
@@ -269,8 +278,13 @@ def _quote(row: tuple[Any, ...]) -> Quote:
 _RUN_COLUMNS = """
     a.id, a.video_id, a.transcript_id, a.chunk_strategy, a.model, a.prompt_version,
     a.tldr, a.speaker_roster, a.input_tokens, a.output_tokens, a.cost_usd,
-    a.duration_ms, a.created_at, a.speakers_coerced, t.source
+    a.duration_ms, a.created_at, a.speakers_coerced, a.cache_read_tokens,
+    a.cache_write_tokens, a.calls, t.source
 """
+
+
+#: ``_RUN_COLUMNS`` before ``t.source``: the analysis columns, read by position.
+_RUN_ANALYSIS_WIDTH = 17
 
 
 def latest_analysis_run(conn: psycopg.Connection[Any], video_id: str) -> AnalysisRun | None:
@@ -363,9 +377,9 @@ def _runs(
             quotes[int(row[0])].append(_quote(row[1:]))
     return tuple(
         AnalysisRun(
-            analysis=_analysis(row[:14], topics[int(row[0])], claims[int(row[0])],
+            analysis=_analysis(row[:_RUN_ANALYSIS_WIDTH], topics[int(row[0])], claims[int(row[0])],
                                quotes[int(row[0])]),
-            transcript_source=row[14],
+            transcript_source=row[_RUN_ANALYSIS_WIDTH],
         )
         for row in rows
     )
@@ -377,7 +391,7 @@ def _analysis(
     (
         analysis_id, video_id, transcript_id, chunk_strategy, model, prompt_version, tldr,
         speaker_roster, input_tokens, output_tokens, cost_usd, duration_ms, created_at,
-        speakers_coerced,
+        speakers_coerced, cache_read_tokens, cache_write_tokens, calls,
     ) = row
     return Analysis(
         id=int(analysis_id),
@@ -393,6 +407,9 @@ def _analysis(
         cost_usd=float(cost_usd) if cost_usd is not None else None,
         duration_ms=duration_ms,
         speakers_coerced=speakers_coerced,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
+        calls=calls,
         created_at=created_at,
         topics=tuple(topics),
         claims=tuple(claims),
@@ -400,12 +417,22 @@ def _analysis(
     )
 
 
-def token_usage_by_model(conn: psycopg.Connection[Any]) -> dict[str, tuple[int, int]]:
-    """``model -> (SUM(input_tokens), SUM(output_tokens))`` over all analyses (#60)."""
+def token_usage_by_model(conn: psycopg.Connection[Any]) -> dict[str, tuple[int, ...]]:
+    """``model -> (input, output, cache read, cache write tokens, calls)`` summed over analyses.
+
+    One statement (#60, #139). ``NULL`` values contribute nothing, so a column that is
+    ``NULL`` in every row of a model sums to 0.
+    """
     rows = conn.execute(
-        "SELECT model, SUM(input_tokens), SUM(output_tokens) FROM analyses GROUP BY model"
+        """
+        SELECT model,
+               COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
+               COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0),
+               COALESCE(SUM(calls), 0)
+        FROM analyses GROUP BY model
+        """
     ).fetchall()
-    return {str(model): (int(inp), int(out)) for model, inp, out in rows}
+    return {str(row[0]): tuple(int(v) for v in row[1:]) for row in rows}
 
 
 def total_cost_usd(conn: psycopg.Connection[Any]) -> float | None:

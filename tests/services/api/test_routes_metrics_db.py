@@ -283,3 +283,34 @@ def test_a_scrape_cannot_write_to_the_database(
     assert response.status_code == 503
     assert response.text == "database unavailable\n"
     assert db.execute("SELECT count(*) FROM videos").fetchone() == (0,)
+
+
+def test_cache_tokens_and_calls_sum_over_recorded_rows_and_null_adds_nothing(
+    api: TestClient, db: psycopg.Connection[Any]
+) -> None:
+    db.execute("INSERT INTO videos (video_id) VALUES ('v1')")
+    row = db.execute(
+        "INSERT INTO transcripts (video_id, source, segments, full_text)"
+        " VALUES ('v1', 'whisper', '[]', 't') RETURNING id"
+    ).fetchone()
+    assert row is not None
+    # a pre-migration row (NULL usage) and a row that recorded 5 / 7 / 2
+    for version, tokens, usage in (
+        ("v1", (100, 10), (None, None, None)),
+        ("v2", (20, 3), (5, 7, 2)),
+    ):
+        db.execute(
+            "INSERT INTO analyses (video_id, transcript_id, chunk_strategy, model, prompt_version,"
+            " tldr, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, calls)"
+            " VALUES ('v1', %s, 's', 'claude', %s, 't', %s, %s, %s, %s, %s)",
+            (row[0], version, *tokens, *usage),
+        )
+
+    body = api.get("/metrics").text
+
+    prefix = 'llm_tokens_total{model="claude",direction='
+    assert _sample(body, prefix + '"input"}') == "120"
+    assert _sample(body, prefix + '"output"}') == "13"
+    assert _sample(body, prefix + '"cache_read"}') == "5"
+    assert _sample(body, prefix + '"cache_write"}') == "7"
+    assert _sample(body, 'llm_calls_total{model="claude"}') == "2"

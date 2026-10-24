@@ -52,6 +52,8 @@ DURATION_BUCKETS: tuple[int, ...] = (1, 5, 15, 60, 300, 900, 1800, 3600, 7200, 1
 
 MAX_LABEL_CHARS = 128
 MAX_MODELS = 20
+#: Numbers per model in ``MetricsSnapshot.token_usage``.
+USAGE_FIELDS = 5
 
 _REPLACEMENT = "\ufffd"
 _BAD_CATEGORIES = frozenset({"Cc", "Cs", "Zl", "Zp"})
@@ -78,8 +80,9 @@ class MetricsSnapshot:
     feed_gap_channels: Mapping[str, int]
     job_durations: Mapping[str, DurationHistogram]
     whisper_rtf: float | None
-    #: model name -> (input tokens, output tokens)
-    token_usage: Mapping[str, tuple[int, int]]
+    #: model name -> (input, output, cache read, cache write tokens, calls); missing
+    #: trailing numbers count as 0
+    token_usage: Mapping[str, tuple[int, ...]]
     #: ``None`` when no analysis has a known price
     llm_cost_usd: float | None
     speaker_coercions: int
@@ -183,32 +186,57 @@ def _duration_samples(durations: Mapping[str, DurationHistogram]) -> list[str]:
     return lines
 
 
-def bound_models(usage: Mapping[str, tuple[int, int]]) -> dict[str, tuple[int, int]]:
-    """Sanitise model names, merge collisions, keep the top ``MAX_MODELS`` by total tokens.
+def _padded(values: Sequence[int]) -> tuple[int, ...]:
+    """``values`` zero-padded on the right to ``USAGE_FIELDS`` numbers."""
+    return (*values, *(0,) * (USAGE_FIELDS - len(values)))
 
-    Ties are broken by (sanitised) name. The rest is summed into ``"other"``.
+
+def bound_models(
+    usage: Mapping[str, tuple[int, ...]], *, cap: int = MAX_MODELS
+) -> dict[str, tuple[int, ...]]:
+    """Sanitise model names, merge collisions, keep the top ``cap`` by input + output tokens.
+
+    Each value is a tuple of sums (input, output, cache read, cache write, calls; trailing
+    fields may be missing and count as 0); merging and folding sum every field. The ranking
+    uses input + output only, so cache tokens and calls never change which models stay.
+    Ties are broken by (sanitised) name. The rest is summed into ``"other"``. Every result
+    value has the length of the longest input tuple.
     """
-    merged: dict[str, tuple[int, int]] = {}
-    for model, (inp, out) in usage.items():
+    width = max((len(v) for v in usage.values()), default=0)
+    merged: dict[str, tuple[int, ...]] = {}
+    for model, values in usage.items():
         key = sanitize_label_value(model)
-        prev_in, prev_out = merged.get(key, (0, 0))
-        merged[key] = (prev_in + inp, prev_out + out)
+        prev = merged.get(key, (0,) * width)
+        merged[key] = tuple(a + b for a, b in zip(prev, _padded(values), strict=False))
     ranked = sorted(merged.items(), key=lambda item: (-(item[1][0] + item[1][1]), item[0]))
-    result: dict[str, tuple[int, int]] = dict(ranked[:MAX_MODELS])
-    rest_in = sum(v[0] for _, v in ranked[MAX_MODELS:])
-    rest_out = sum(v[1] for _, v in ranked[MAX_MODELS:])
-    if ranked[MAX_MODELS:]:
-        prev_in, prev_out = result.get(OTHER, (0, 0))
-        result[OTHER] = (prev_in + rest_in, prev_out + rest_out)
+    result: dict[str, tuple[int, ...]] = dict(ranked[:cap])
+    rest = ranked[cap:]
+    if rest:
+        folded = result.get(OTHER, (0,) * width)
+        for _, values in rest:
+            folded = tuple(a + b for a, b in zip(folded, values, strict=True))
+        result[OTHER] = folded
     return result
 
 
-def _token_samples(usage: Mapping[str, tuple[int, int]]) -> list[str]:
+_DIRECTIONS: tuple[str, ...] = ("input", "output", "cache_read", "cache_write")
+
+
+def _token_samples(usage: Mapping[str, tuple[int, ...]]) -> list[str]:
     lines: list[str] = []
-    for model, (inp, out) in sorted(bound_models(usage).items()):
-        lines.append(_sample("llm_tokens_total", (("model", model), ("direction", "input")), inp))
-        lines.append(_sample("llm_tokens_total", (("model", model), ("direction", "output")), out))
+    for model, values in sorted(bound_models(usage).items()):
+        for direction, value in zip(_DIRECTIONS, _padded(values), strict=False):
+            lines.append(
+                _sample("llm_tokens_total", (("model", model), ("direction", direction)), value)
+            )
     return lines
+
+
+def _call_samples(usage: Mapping[str, tuple[int, ...]]) -> list[str]:
+    return [
+        _sample("llm_calls_total", (("model", model),), _padded(values)[4])
+        for model, values in sorted(bound_models(usage).items())
+    ]
 
 
 def _completed_planner_runs(runs: Sequence[PlannerTaskRun]) -> list[PlannerTaskRun]:
@@ -260,9 +288,18 @@ def render(snapshot: MetricsSnapshot) -> str:
     lines += _family(
         "llm_tokens_total",
         "counter",
-        "Tokens recorded on analyses, by model and direction. Sum over stored rows: "
-        "deleting a video can lower it.",
+        "Tokens recorded on analyses, by model and direction. Analyses recorded before "
+        "cache tokens were tracked are not included in the cache_read and cache_write "
+        "directions. Sum over stored rows: deleting a video can lower it.",
         _token_samples(snapshot.token_usage),
+    )
+    lines += _family(
+        "llm_calls_total",
+        "counter",
+        "Model requests recorded on analyses, by model, repair attempts included. Analyses "
+        "from before calls were tracked are not included. Sum over stored rows: deleting a "
+        "video can lower it.",
+        _call_samples(snapshot.token_usage),
     )
     cost = snapshot.llm_cost_usd
     lines += _family(
