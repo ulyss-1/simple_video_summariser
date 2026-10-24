@@ -1,0 +1,55 @@
+# Override for tests/test_pipeline_smoke_docker.py (issue #137). Used as
+# `-f compose.yml -f tests/fixtures/smoke/compose.smoke.yml`; never merged with
+# compose.override.yml. Relative paths resolve against compose.yml's folder.
+#
+# Everything the run depends on is a literal, not `${...}`, so an exported
+# shell variable cannot change it. The one exception is OLLAMA_MODEL, which the
+# stub and the analyzer must share: both use compose.yml's default.
+
+x-pinned: &pinned
+  SUMMARIZER: ollama
+  PROMPT_VERSION: v1
+  CHUNK_SEC: "900"
+  OVERLAP_SEC: "60"
+
+services:
+  api:
+    environment: *pinned
+  planner:
+    environment: *pinned
+    networks: !override [internal]
+  analyzer:
+    environment:
+      <<: *pinned
+      OLLAMA_HOST: http://fake-ollama:11434
+      ANTHROPIC_API_KEY: ""
+    networks: !override [internal]
+    depends_on:
+      fake-ollama: {condition: service_healthy}
+  transcriber:
+    environment:
+      <<: *pinned
+      PYTHONPATH: /smoke/site:/app
+    networks: !override [internal]
+    volumes:
+      - ./tests/fixtures/smoke/yt_dlp:/smoke/site/yt_dlp:ro
+      - ./tests/adapters/youtube/fixtures/metadata/manual_en.json:/smoke/fixtures/manual_en.json:ro
+      - ./tests/fixtures/vtt/youtube_manual_iG9CE55wbtY.en.vtt:/smoke/fixtures/youtube_manual_iG9CE55wbtY.en.vtt:ro
+  fake-ollama:
+    image: ytdigest-backend:latest
+    pull_policy: never    # built by `migrate` in the same `up --build`
+    command: python /smoke/fake_ollama.py ${OLLAMA_MODEL:-qwen3.5:4b} 11434
+    volumes:
+      - ./tests/fixtures/smoke/fake_ollama.py:/smoke/fake_ollama.py:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:11434/api/tags"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+      start_interval: 1s
+    networks: !override [internal]
+  web:
+    # Loopback only, on a port Docker picks: a fixed 8080 would collide with
+    # whatever already holds it (see the test's docstring).
+    ports: !override ["127.0.0.1::8080"]

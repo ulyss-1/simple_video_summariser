@@ -52,6 +52,12 @@ Activate `.venv` first; all Python commands assume it.
 - `pytest` - the whole suite; requires Docker Desktop running
 - `pytest tests/test_queue.py` - one test file
 - `ruff check .` and `mypy .` - lint and types
+- `pytest tests/test_pipeline_smoke_docker.py -m image` - the hermetic
+  one-video smoke (#137): brings up the real compose stack in a throwaway
+  `ytdigest-t137-*` project and takes one video from `POST /api/videos` to
+  `done` (recorded captions, stub Ollama). Needs Docker Desktop; uses no
+  network or API key. It publishes `web` on a Docker-picked loopback port, so
+  it does not need a free 8080 on a machine where 8080 is taken
 - `docker compose up -d db` - bring up just the dev Postgres (task #7);
   refuses to start without `POSTGRES_PASSWORD` set
 - `alembic upgrade head` / `alembic downgrade base` - from the host venv,
