@@ -4,7 +4,7 @@
 #   docker build -f ops/Dockerfile.backend -t ytdigest-backend:latest .
 
 # ---- builder ----
-FROM python:3.14-slim AS builder
+FROM python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8 AS builder
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential && rm -rf /var/lib/apt/lists/*
@@ -16,7 +16,7 @@ RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip install -r requirements.backend.txt
 
 # ---- runtime ----
-FROM python:3.14-slim
+FROM python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg curl && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /opt/venv /opt/venv

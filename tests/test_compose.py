@@ -406,7 +406,10 @@ def test_compose_yml_does_not_depend_on_the_override() -> None:
 def test_db_service_uses_postgres_18_alpine_at_least_18_6() -> None:
     block = _service_block(COMPOSE_YML.read_text(), "db")
     # >=18.6 per architecture.md 16.1: pinned to the exact tag, not `:18`.
-    assert "image: postgres:18-alpine" in block
+    # Digest-pinned (#249): a bare tag fails; the comment stays.
+    assert re.search(
+        r"^\s+image: postgres:18-alpine@sha256:[0-9a-f]{64}\s+# >=18\.6", block, re.MULTILINE
+    )
 
 
 def test_db_service_has_a_named_pgdata_volume() -> None:
@@ -604,7 +607,7 @@ def test_overlay_adds_no_extra_reloader_package() -> None:
 
 def test_overlay_web_runs_the_vite_dev_server_from_the_node_image() -> None:
     block = _override_block("web")
-    assert "image: node:24-alpine" in block
+    assert re.search(r"^\s+image: node:24-alpine@sha256:[0-9a-f]{64}\s*$", block, re.MULTILINE)
     assert "working_dir: /home/node/app" in block
     # Check the command's own lines: a comment in the block mentions
     # --strictPort too, so a whole-block substring check cannot catch its removal.
