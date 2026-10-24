@@ -1,5 +1,5 @@
-import { Fragment, useEffect } from 'react'
-import { Link, useParams } from 'react-router'
+import { Fragment, useEffect, useRef, useState } from 'react'
+import { Link, useNavigate, useParams } from 'react-router'
 import type { components } from '../api'
 import { AnalysisView } from '../components/AnalysisView'
 import { JobProgress } from '../components/JobProgress'
@@ -7,6 +7,7 @@ import { Player } from '../components/Player'
 import { buildWatchUrl } from '../components/player/youtubeTransport'
 import { formatTimestamp } from '../components/Timestamp'
 import { useAnalysisTotal } from '../hooks/useAnalyses'
+import { deleteErrorMessage, useDeleteVideo } from '../hooks/useDeleteVideo'
 import { useVideo, VideoApiError } from '../hooks/useVideo'
 import { parseVideoId } from '../lib/videoId'
 
@@ -59,6 +60,72 @@ function NotFound() {
   )
 }
 
+/** Inline confirmation for deleting the video (design-system §7.7), never a modal. */
+function DeleteVideo({ videoId, name, onGone }: { videoId: string; name: string; onGone: () => void }) {
+  const navigate = useNavigate()
+  const del = useDeleteVideo(videoId, () => {
+    onGone()
+    return navigate('/', { state: { notice: 'Video deleted' } })
+  })
+  const [confirming, setConfirming] = useState(false)
+  const openRef = useRef<HTMLButtonElement>(null)
+  const cancelRef = useRef<HTMLButtonElement>(null)
+  const restoreFocus = useRef(false)
+  // Set synchronously on click: isPending only turns true on a later render.
+  const sent = useRef(false)
+
+  useEffect(() => {
+    if (confirming) cancelRef.current?.focus()
+    else if (restoreFocus.current) {
+      restoreFocus.current = false
+      openRef.current?.focus()
+    }
+  }, [confirming])
+
+  const close = () => {
+    restoreFocus.current = true
+    del.reset()
+    setConfirming(false)
+  }
+
+  const confirm = () => {
+    if (sent.current) return
+    sent.current = true
+    del.mutate(undefined, {
+      onSettled: () => {
+        sent.current = false
+      },
+    })
+  }
+
+  if (!confirming) {
+    return (
+      <p>
+        <button type="button" ref={openRef} onClick={() => setConfirming(true)}>
+          Delete video
+        </button>
+      </p>
+    )
+  }
+  return (
+    <div
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && !del.isPending) close()
+      }}
+    >
+      <p>Delete {name}?</p>
+      <p>The transcript, summaries and stored audio will be permanently removed.</p>
+      {del.isError && <p role="alert">{deleteErrorMessage(del.error)}</p>}
+      <button type="button" disabled={del.isPending} onClick={confirm}>
+        Delete video
+      </button>{' '}
+      <button type="button" ref={cancelRef} disabled={del.isPending} onClick={close}>
+        Cancel
+      </button>
+    </div>
+  )
+}
+
 export function VideoDetail() {
   const videoId = parseVideoId(useParams().videoId)
   if (videoId === null) return <NotFound />
@@ -67,9 +134,12 @@ export function VideoDetail() {
 }
 
 function VideoPage({ videoId }: { videoId: string }) {
-  const query = useVideo(videoId)
+  // Set once the video is deleted: the queries below stop watching it, so
+  // removing their cache entries cannot make them fetch the video again.
+  const [gone, setGone] = useState(false)
+  const query = useVideo(gone ? null : videoId)
   // Only the count is needed for the Compare link; a failure just hides it.
-  const analysisTotal = useAnalysisTotal(videoId).data
+  const analysisTotal = useAnalysisTotal(gone ? null : videoId).data
   const video = query.data
   const heading = video ? video.title || videoId : null
 
@@ -154,6 +224,7 @@ function VideoPage({ videoId }: { videoId: string }) {
           <JobProgress kind={video.active_job.kind} state={video.active_job.state} progress={video.progress} />
         </div>
       )}
+      <DeleteVideo videoId={videoId} name={heading ?? videoId} onGone={() => setGone(true)} />
     </article>
   )
 }

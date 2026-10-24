@@ -1,5 +1,5 @@
-import { useEffect } from 'react'
-import { Link, useSearchParams } from 'react-router'
+import { useEffect, useState } from 'react'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router'
 import { AddVideoForm } from '../components/AddVideoForm'
 import { ApiError, useVideos } from '../hooks/useVideos'
 import {
@@ -27,6 +27,19 @@ import {
 export function Library() {
   const [params, setParams] = useSearchParams()
   const { state, invalid } = parseLibraryParams(params)
+
+  // One-shot notice passed by a delete on the video page (#232). It is read
+  // once, then dropped from the history entry so a reload does not repeat it.
+  const location = useLocation()
+  const navigate = useNavigate()
+  const [notice] = useState(() => {
+    const value = (location.state as { notice?: unknown } | null)?.notice
+    return value === 'Video deleted' ? value : null
+  })
+  const hasNotice = location.state !== null && location.state !== undefined
+  useEffect(() => {
+    if (hasNotice) void navigate({ pathname: location.pathname, search: location.search }, { replace: true, state: null })
+  }, [hasNotice, location.pathname, location.search, navigate])
 
   // An invalid parameter is dropped from the URL (replace, not push). This
   // render already ignores it, so nothing invalid is ever requested.
@@ -80,6 +93,7 @@ export function Library() {
   return (
     <section className="page">
       <h1>Library</h1>
+      <p aria-live="polite">{notice}</p>
 
       <AddVideoForm />
 
