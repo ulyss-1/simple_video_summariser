@@ -22,9 +22,11 @@ RUN npm run build
 # ---- runtime ----
 # nginx's maintained stable line, in the unprivileged variant (#140): it listens
 # on 8080 and keeps the pid file and temp paths under /tmp, so it runs as a
-# non-root user with a read-only root filesystem. Pinned by tag, not digest
-# (digest pinning is #241).
-FROM nginx/nginx-unprivileged:1.30-alpine
+# non-root user with a read-only root filesystem. The digest is deliberate (#241):
+# every build uses the same bytes. scripts/base_image_digest_check.py, run daily
+# by .github/workflows/base-image-digest-check.yml, goes red when upstream
+# rebuilds the tag; a human bumps it (architecture.md 11.3).
+FROM nginx/nginx-unprivileged:1.30-alpine@sha256:517607ae849a46afbd400616a783e4ead0290f52d20ccc0618ccea1a49362474
 # Root only for the build-time cleanup below; the container starts as 101.
 USER root
 # The base image ships its own index.html and 50x.html; the served tree must

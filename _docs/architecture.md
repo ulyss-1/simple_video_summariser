@@ -1251,7 +1251,7 @@ ARG VITE_API_BASE=/api
 RUN npm run build               # prebuild runs gen:api first → /src/dist
 
 # ---- runtime ----
-FROM nginx/nginx-unprivileged:1.30-alpine
+FROM nginx/nginx-unprivileged:1.30-alpine@sha256:517607ae849a46afbd400616a783e4ead0290f52d20ccc0618ccea1a49362474
 USER root                       # build-time cleanup only; nothing starts as root
 RUN rm -rf /usr/share/nginx/html/*   # the base image's own index.html, 50x.html
 COPY --from=build /src/dist /usr/share/nginx/html
@@ -1262,8 +1262,22 @@ USER 101                        # numeric non-root runtime user
 The runtime is the maintained nginx stable line (1.30) in its unprivileged
 variant (#140): nginx listens on container port **8080**, the pid file and
 temporary paths live under `/tmp`, and the container runs as uid 101, so it also
-starts with `--read-only --tmpfs /tmp`. The tag is pinned, not the digest
-(digest pinning is #241).
+starts with `--read-only --tmpfs /tmp`.
+
+The stage is pinned by tag **and** digest (#241), the multi-platform index
+digest, so every build uses the same bytes. Upstream rebuilds a stable tag
+for security fixes, so a pin goes stale silently unless something looks: the
+daily `base image digest check` workflow
+(`.github/workflows/base-image-digest-check.yml`, running
+`scripts/base_image_digest_check.py ops/Dockerfile.frontend`) goes red, naming
+the pinned and the upstream digest. It only reports; a human bumps the pin, as
+for yt-dlp (§16.11). To bump: run
+`docker buildx imagetools inspect nginx/nginx-unprivileged:1.30-alpine`,
+replace the digest in `ops/Dockerfile.frontend` and in the listing above, open
+a PR, and deploy. A side benefit is build-cache correctness: a changed digest
+changes the `FROM` line, so the next `docker compose -f compose.yml up -d
+--build` on the host is guaranteed to fetch the new base, which a tag-only
+`FROM` does not guarantee without `--pull`.
 
 **This is where D12's "no Node in production" becomes literal.** Node exists
 only in the `build` stage; the shipped image is nginx plus static files, ~30 MB,

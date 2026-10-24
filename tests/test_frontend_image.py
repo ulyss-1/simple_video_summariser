@@ -133,10 +133,10 @@ OWN_LOCATIONS = [h for h in _all_locations() if h not in PROXY_LOCATIONS]
 
 def test_stages_are_node_24_alpine_build_then_unprivileged_nginx_1_30_alpine() -> None:
     froms = [args for name, args in _steps() if name == "FROM"]
-    assert froms == [
-        "node:24-alpine AS build",
-        "nginx/nginx-unprivileged:1.30-alpine",
-    ]
+    assert len(froms) == 2
+    assert froms[0] == "node:24-alpine AS build"
+    # Digest-pinned (#241): a bare tag fails.
+    assert re.fullmatch(r"nginx/nginx-unprivileged:1\.30-alpine@sha256:[0-9a-f]{64}", froms[1])
 
 
 def test_build_installs_with_npm_ci_and_no_escape_hatches() -> None:
