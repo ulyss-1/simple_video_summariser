@@ -312,7 +312,9 @@ on container port 8080 and is published on `127.0.0.1:8080` only
 (`127.0.0.1:8080:8080`); put it behind the host reverse
 proxy (#141) for TLS. Updates are `git pull` of `master`, then
 `docker compose run --rm migrate` (if there is a new revision) and
-`docker compose -f compose.yml up -d --build`.
+`docker compose -f compose.yml up -d --build`. A red "base image digest check"
+run means bump the frontend base-image digest per architecture.md §11.3, then
+follow the usual update steps.
 
 ---
 
