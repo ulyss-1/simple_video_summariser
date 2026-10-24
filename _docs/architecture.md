@@ -562,6 +562,9 @@ CREATE TABLE analyses (
     speaker_roster JSONB,              -- LLM-derived, versioned  (C3)
     input_tokens   INTEGER NOT NULL DEFAULT 0,
     output_tokens  INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens  INTEGER,        -- (#139) NULL = not recorded (pre-0018 rows)
+    cache_write_tokens INTEGER,        -- (#139) NULL = not recorded
+    calls          INTEGER,            -- (#139) model requests of the job, repairs included; NULL = not recorded
     cost_usd       NUMERIC(10,5),
     duration_ms    INTEGER,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -1792,7 +1795,9 @@ gauges, no tracing stack.
   every line. One correlation id per job, propagated through adapter calls.
 - **Key metrics** (exposed at `/metrics`, scraped or just curl'd):
   `queue_depth{kind,state}`, `job_duration_seconds{kind}`,
-  `whisper_rtf`, `llm_tokens_total{model,direction}`, `llm_cost_usd_total`,
+  `whisper_rtf`, `llm_tokens_total{model,direction}` (directions `input`,
+  `output`, `cache_read`, `cache_write`), `llm_calls_total{model}` (#139),
+  `llm_cost_usd_total`,
   `speaker_coercions_total` (§8.1 — the D4b quality canary),
   `audio_bytes_used`, and zero-filled
   `feed_gap_channels{reason="suspected|no_anchor|listing_window_exhausted"}`.

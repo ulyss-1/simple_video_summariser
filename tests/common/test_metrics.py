@@ -47,6 +47,7 @@ FAMILIES = [
     "job_duration_seconds",
     "whisper_rtf",
     "llm_tokens_total",
+    "llm_calls_total",
     "llm_cost_usd_total",
     "speaker_coercions_total",
     "audio_bytes_used",
@@ -106,6 +107,7 @@ def test_metric_types_follow_the_spec() -> None:
         "job_duration_seconds": "histogram",
         "whisper_rtf": "gauge",
         "llm_tokens_total": "counter",
+        "llm_calls_total": "counter",
         "llm_cost_usd_total": "counter",
         "speaker_coercions_total": "counter",
         "audio_bytes_used": "gauge",
@@ -377,9 +379,10 @@ def test_an_inconsistent_histogram_is_rejected(bad: DurationHistogram) -> None:
 # -- llm_tokens_total and the model label ------------------------------------------------------
 
 
-def test_tokens_have_exactly_two_directions_sorted_by_model() -> None:
+def test_input_and_output_lines_are_unchanged_and_sorted_by_model() -> None:
     snap = replace(EMPTY, token_usage={"zeta": (1, 2), "alpha": (3, 4)})
-    assert samples(snap, "llm_tokens_total") == [
+    in_out = [ln for ln in samples(snap, "llm_tokens_total") if 'direction="cache' not in ln]
+    assert in_out == [
         'llm_tokens_total{model="alpha",direction="input"} 3',
         'llm_tokens_total{model="alpha",direction="output"} 4',
         'llm_tokens_total{model="zeta",direction="input"} 1',
@@ -441,10 +444,11 @@ def test_models_that_collide_after_truncation_are_one_series() -> None:
     long = "x" * MAX_LABEL_CHARS
     snap = replace(EMPTY, token_usage={long + "a": (1, 2), long + "b": (10, 20)})
     out = samples(snap, "llm_tokens_total")
-    assert out == [
+    assert out[:2] == [
         f'llm_tokens_total{{model="{long}",direction="input"}} 11',
         f'llm_tokens_total{{model="{long}",direction="output"}} 22',
     ]
+    assert len(out) == 4
 
 
 def test_a_real_model_named_other_is_summed_with_the_overflow() -> None:
@@ -469,7 +473,7 @@ def test_hostile_model_names_cannot_break_a_line_or_inject_a_sample(model: str) 
 
     for ln in out:
         assert ln.startswith("# ") or SAMPLE.match(ln), ln
-    assert len(samples(replace(EMPTY, token_usage={model: (1, 2)}), "llm_tokens_total")) == 2
+    assert len(samples(replace(EMPTY, token_usage={model: (1, 2)}), "llm_tokens_total")) == 4
     assert not any(ln.startswith("evil") for ln in out)
     assert "\r" not in render(replace(EMPTY, token_usage={model: (1, 2)}))
 
@@ -495,8 +499,8 @@ def test_every_output_line_is_a_comment_or_a_sample_and_labels_round_trip(model:
         assert ln.startswith("# ") or SAMPLE.match(ln), repr(ln)
     got = [m.group(2) for ln in samples(snap, "llm_tokens_total") for m in LABEL.finditer(ln) if m.group(1) == "model"]
     expected = sanitize_label_value(model)
-    assert got == [escape_label_value(expected)] * 2
-    assert [unescape(g) for g in got] == [expected] * 2
+    assert got == [escape_label_value(expected)] * 4
+    assert [unescape(g) for g in got] == [expected] * 4
     assert len(expected) <= MAX_LABEL_CHARS
 
 
@@ -541,3 +545,95 @@ def test_only_the_documented_label_keys_exist() -> None:
 def test_help_text_is_a_single_line() -> None:
     for ln in lines(EMPTY):
         assert "\n" not in ln
+
+
+# -- cache directions and llm_calls_total (issue #139) -----------------------------------------
+
+
+def test_each_model_emits_input_output_cache_read_cache_write_in_that_order() -> None:
+    snap = replace(EMPTY, token_usage={"zeta": (1, 2, 3, 4, 5), "alpha": (6, 7, 8, 9, 10)})
+
+    assert samples(snap, "llm_tokens_total") == [
+        'llm_tokens_total{model="alpha",direction="input"} 6',
+        'llm_tokens_total{model="alpha",direction="output"} 7',
+        'llm_tokens_total{model="alpha",direction="cache_read"} 8',
+        'llm_tokens_total{model="alpha",direction="cache_write"} 9',
+        'llm_tokens_total{model="zeta",direction="input"} 1',
+        'llm_tokens_total{model="zeta",direction="output"} 2',
+        'llm_tokens_total{model="zeta",direction="cache_read"} 3',
+        'llm_tokens_total{model="zeta",direction="cache_write"} 4',
+    ]
+    assert samples(snap, "llm_calls_total") == [
+        'llm_calls_total{model="alpha"} 10',
+        'llm_calls_total{model="zeta"} 5',
+    ]
+
+
+def test_llm_calls_total_is_a_counter_family_right_after_llm_tokens_total() -> None:
+    snap = replace(EMPTY, token_usage={"m": (1, 2, 3, 4, 5)})
+    headers = [ln for ln in lines(snap) if ln.startswith("# TYPE ")]
+    names = [ln.split()[2] for ln in headers]
+
+    assert names[names.index("llm_tokens_total") + 1] == "llm_calls_total"
+    assert "# TYPE llm_calls_total counter" in headers
+    (help_line,) = [ln for ln in lines(snap) if ln.startswith("# HELP llm_calls_total ")]
+    for phrase in ("repair attempts", "before calls were tracked", "deleting a video"):
+        assert phrase in help_line
+    (tokens_help,) = [ln for ln in lines(snap) if ln.startswith("# HELP llm_tokens_total ")]
+    assert "before cache tokens were tracked" in tokens_help
+
+
+def test_a_model_with_no_recorded_calls_emits_zero_and_no_analyses_emit_no_samples() -> None:
+    assert samples(replace(EMPTY, token_usage={"m": (1, 2, 0, 0, 0)}), "llm_calls_total") == [
+        'llm_calls_total{model="m"} 0'
+    ]
+    assert samples(EMPTY, "llm_calls_total") == []
+    assert samples(EMPTY, "llm_tokens_total") == []
+
+
+def test_cache_tokens_and_calls_fold_into_other_and_ranking_ignores_them() -> None:
+    usage = {
+        "big": (100, 100, 0, 0, 1),
+        "mid": (10, 10, 5, 6, 7),
+        "small": (1, 1, 1000, 2000, 3000),  # huge cache and calls, still last
+        "tiny": (1, 0, 4, 8, 16),
+    }
+
+    bounded = metrics.bound_models(usage, cap=2)
+
+    assert bounded == {
+        "big": (100, 100, 0, 0, 1),
+        "mid": (10, 10, 5, 6, 7),
+        "other": (2, 1, 1004, 2008, 3016),
+    }
+
+
+def test_both_families_carry_the_same_models_when_the_cap_is_exceeded() -> None:
+    usage = {f"m{i:02d}": (1000 - i, 0, i, i, i) for i in range(MAX_MODELS + 2)}
+    snap = replace(EMPTY, token_usage=usage)
+
+    tokens = {m.group(1) for ln in samples(snap, "llm_tokens_total") if (m := re.search(r'model="([^"]*)"', ln))}
+    calls = {m.group(1) for ln in samples(snap, "llm_calls_total") if (m := re.search(r'model="([^"]*)"', ln))}
+
+    assert tokens == calls
+    assert len(calls) == MAX_MODELS + 1
+    (other_calls,) = [ln for ln in samples(snap, "llm_calls_total") if 'model="other"' in ln]
+    assert other_calls == f'llm_calls_total{{model="other"}} {20 + 21}'
+
+
+def test_bound_models_cap_defaults_to_max_models() -> None:
+    usage = {f"m{i:02d}": (1000 - i, 0, 1, 1, 1) for i in range(MAX_MODELS + 2)}
+
+    assert len(metrics.bound_models(usage)) == MAX_MODELS + 1  # 20 models plus other
+
+
+def test_a_hostile_model_is_sanitised_and_escaped_in_both_families() -> None:
+    model = 'a"b\\c\nd\x1be'
+    snap = replace(EMPTY, token_usage={model: (1, 2, 3, 4, 5)})
+
+    out = lines(snap)
+
+    for ln in out:
+        assert ln.startswith("# ") or SAMPLE.match(ln), ln
+    assert 'llm_calls_total{model="a\\"b\\\\c\\nd�e"} 5' in out
+    assert 'llm_tokens_total{model="a\\"b\\\\c\\nd�e",direction="cache_write"} 4' in out

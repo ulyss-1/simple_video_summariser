@@ -261,6 +261,10 @@ class Analysis:
     duration_ms: int | None = None
     #: Speakers the analyzer coerced to ``unknown`` (#60); ``None`` = not recorded.
     speakers_coerced: int | None = None
+    #: Prompt-cache tokens and model calls of the job (#139); ``None`` = not recorded.
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    calls: int | None = None
     topics: tuple[Topic, ...] = ()
     claims: tuple[Claim, ...] = ()
     quotes: tuple[Quote, ...] = ()
