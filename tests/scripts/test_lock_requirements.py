@@ -302,9 +302,13 @@ class FakePip:
         self.rc = rc
         self.calls: list[list[str]] = []
         self.constraints: list[str] = []
+        self.requirements: list[str] = []  # text of every -r file, read while it exists
 
     def __call__(self, args: list[str]) -> tuple[int, str]:
         self.calls.append(args)
+        self.requirements += [
+            Path(args[i + 1]).read_text() for i, a in enumerate(args) if a == "-r"
+        ]
         if "-c" in args:
             self.constraints.append(Path(args[args.index("-c") + 1]).read_text())
         if self.rc:
@@ -652,8 +656,8 @@ def test_generate_dev_resolves_on_both_locks_and_writes_only_what_it_adds(tmp_pa
     assert not any("/foo/" in u or "/dep/" in u for u in fetch.requested)
     constraints = set(pip.constraints[-1].splitlines())
     assert {"foo==1.0", "w==3.0", "wdep==7"} <= constraints  # both locks are constraints
-    resolved = [Path(a).read_text() for a in args if a.endswith("dev-requirements.txt")]
-    assert "Testcontainers[postgres]==4.0" in resolved[0] and "setuptools==80.0.0" in resolved[0]
+    resolved = pip.requirements[-1]
+    assert "Testcontainers[postgres]==4.0" in resolved and "setuptools==80.0.0" in resolved
 
 
 def test_dev_keeps_its_own_entries_as_constraints_and_upgrade_package_drops_one(tmp_path: Path) -> None:
