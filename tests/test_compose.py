@@ -580,6 +580,7 @@ def test_overlay_mounts_nothing_else_from_the_repo() -> None:
         "./web/src",
         "./web/index.html",
         "./web/index.css",
+        "./web/public",
         "./web/package.json",
         "./web/package-lock.json",
         "./web/tsconfig.json",

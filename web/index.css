@@ -798,9 +798,17 @@ mark {
   margin: 0;
 }
 
-/* Nine columns need more room than the shared .table minimum before they scroll. */
+/* Ten columns need more room than the shared .table minimum before they scroll;
+ * headers stay on one line so a narrow column never breaks "State" mid-word. */
 .ops__jobs {
-  min-width: 64rem;
+  min-width: 80rem;
+}
+
+.ops__jobs th,
+.ops__jobs td:nth-child(3),
+.ops__jobs td:nth-child(4) {
+  overflow-wrap: normal;
+  white-space: nowrap;
 }
 
 .ops__depth {
