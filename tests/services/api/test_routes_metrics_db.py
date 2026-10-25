@@ -9,15 +9,22 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
-from common.config import get_settings
+from common.config import Settings, get_settings
 from services.api import routes_ops
 from services.api.main import create_app
+from services.planner.main import (
+    PostgresAdvisoryLocks,
+    PostgresRunRecorder,
+    build_registry,
+)
+from services.planner.scheduler import Scheduler
 from tests.services.api.conftest import LogSink
 
 pytestmark = pytest.mark.integration
@@ -75,6 +82,13 @@ def test_an_empty_database_gives_zero_filled_metrics(api: TestClient) -> None:
     assert response.status_code == 200
     body = response.text
     assert len(re.findall(r"^queue_depth\{", body, re.MULTILINE)) == 12
+    assert [
+        line for line in body.splitlines() if line.startswith("feed_gap_channels{")
+    ] == [
+        'feed_gap_channels{reason="suspected"} 0',
+        'feed_gap_channels{reason="no_anchor"} 0',
+        'feed_gap_channels{reason="listing_window_exhausted"} 0',
+    ]
     assert _sample(body, "llm_cost_usd_total") == "0"
     assert _sample(body, "speaker_coercions_total") == "0"
     assert _sample(body, "audio_bytes_used") == "0"
@@ -88,6 +102,16 @@ def test_an_empty_database_gives_zero_filled_metrics(api: TestClient) -> None:
 def test_every_metric_is_derived_from_the_seeded_rows(
     api: TestClient, db: psycopg.Connection[Any]
 ) -> None:
+    for channel_id, reason in (
+        ("UCgap1", "suspected"),
+        ("UCgap2", "suspected"),
+        ("UCgap3", "no_anchor"),
+        ("UCgap4", "listing_window_exhausted"),
+    ):
+        db.execute(
+            "INSERT INTO channels (channel_id, feed_gap_detected_at, feed_gap_reason) VALUES (%s, %s, %s)",
+            (channel_id, T0, reason),
+        )
     for vid in ("v1", "v2", "v3", "v4"):
         db.execute("INSERT INTO videos (video_id, title) VALUES (%s, %s)", (vid, f"{MARK}-title"))
     # jobs: several kinds and states, one unknown kind, durations on bucket edges
@@ -141,6 +165,9 @@ def test_every_metric_is_derived_from_the_seeded_rows(
     assert _sample(body, 'queue_depth{kind="transcribe",state="running"}') == "1"
     assert _sample(body, 'queue_depth{kind="other",state="pending"}') == "1"
     assert _sample(body, 'queue_depth{kind="analyze",state="done"}') == "3"
+    assert _sample(body, 'feed_gap_channels{reason="suspected"}') == "2"
+    assert _sample(body, 'feed_gap_channels{reason="no_anchor"}') == "1"
+    assert _sample(body, 'feed_gap_channels{reason="listing_window_exhausted"}') == "1"
     assert _sample(body, 'job_duration_seconds_bucket{kind="analyze",le="5"}') == "1"
     assert _sample(body, 'job_duration_seconds_bucket{kind="analyze",le="15"}') == "1"
     assert _sample(body, 'job_duration_seconds_bucket{kind="analyze",le="60"}') == "2"  # 60.0 yes, 60.001 no
@@ -166,7 +193,46 @@ def test_every_metric_is_derived_from_the_seeded_rows(
     for marker in (MARK, API_KEY, "v1", "v2", "v3", "v4", "password", "@"):
         assert marker not in body.replace("# ", ""), marker
     label_keys = set(re.findall(r"[{,]([a-z]+)=", body))
-    assert label_keys == {"kind", "state", "model", "direction", "le"}
+    assert label_keys == {"kind", "state", "model", "direction", "le", "reason"}
+
+
+def test_registered_reaper_run_is_persisted_and_scraped(
+    api: TestClient,
+    db: psycopg.Connection[Any],
+    head_dsn: str,
+    tmp_path: Path,
+) -> None:
+    db.execute("INSERT INTO videos (video_id) VALUES ('stale-job')")
+    db.execute(
+        "INSERT INTO jobs (video_id, kind, state, dedupe_key, attempts, locked_by, locked_at, heartbeat_at) "
+        "VALUES ('stale-job', 'ingest', 'running', 'default', 1, 'lost', now() - interval '10 minutes', "
+        "now() - interval '10 minutes')"
+    )
+    settings = Settings(DATABASE_URL=head_dsn, AUDIO_DIR=tmp_path, REAP_AFTER_SEC=300)  # type: ignore[arg-type]
+    connect = lambda: psycopg.connect(head_dsn)
+    reap_task = build_registry(settings, connect)[0]
+    locks = PostgresAdvisoryLocks(connect)
+    recorder = PostgresRunRecorder(connect)
+    scheduler = Scheduler(
+        [reap_task],
+        locks,
+        recorder=recorder,
+        sleep=lambda _seconds: None,
+        install_signal_handlers=False,
+    )
+    try:
+        assert scheduler.run_once() is True
+        first = api.get("/metrics").text
+        assert _sample(first, "reaped_jobs_total") == "1"
+        assert _sample(first, 'planner_task_last_success{task="reap"}') == "1"
+        float(_sample(first, 'planner_task_last_run_timestamp_seconds{task="reap"}'))
+
+        assert scheduler.run_once() is True
+        second = api.get("/metrics").text
+        assert _sample(second, "reaped_jobs_total") == "1"
+    finally:
+        recorder.close()
+        locks.close()
 
 
 def test_two_scrapes_of_an_unchanged_database_are_byte_identical(
@@ -217,3 +283,34 @@ def test_a_scrape_cannot_write_to_the_database(
     assert response.status_code == 503
     assert response.text == "database unavailable\n"
     assert db.execute("SELECT count(*) FROM videos").fetchone() == (0,)
+
+
+def test_cache_tokens_and_calls_sum_over_recorded_rows_and_null_adds_nothing(
+    api: TestClient, db: psycopg.Connection[Any]
+) -> None:
+    db.execute("INSERT INTO videos (video_id) VALUES ('v1')")
+    row = db.execute(
+        "INSERT INTO transcripts (video_id, source, segments, full_text)"
+        " VALUES ('v1', 'whisper', '[]', 't') RETURNING id"
+    ).fetchone()
+    assert row is not None
+    # a pre-migration row (NULL usage) and a row that recorded 5 / 7 / 2
+    for version, tokens, usage in (
+        ("v1", (100, 10), (None, None, None)),
+        ("v2", (20, 3), (5, 7, 2)),
+    ):
+        db.execute(
+            "INSERT INTO analyses (video_id, transcript_id, chunk_strategy, model, prompt_version,"
+            " tldr, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, calls)"
+            " VALUES ('v1', %s, 's', 'claude', %s, 't', %s, %s, %s, %s, %s)",
+            (row[0], version, *tokens, *usage),
+        )
+
+    body = api.get("/metrics").text
+
+    prefix = 'llm_tokens_total{model="claude",direction='
+    assert _sample(body, prefix + '"input"}') == "120"
+    assert _sample(body, prefix + '"output"}') == "13"
+    assert _sample(body, prefix + '"cache_read"}') == "5"
+    assert _sample(body, prefix + '"cache_write"}') == "7"
+    assert _sample(body, 'llm_calls_total{model="claude"}') == "2"

@@ -3,7 +3,7 @@
 How to prepare the Ubuntu server that runs the ytdigest stack
 (`compose.yml`, architecture §11) and the #3 transcription bake-off. Follow the
 sections in order, then run `ops/host/preflight.sh` to confirm the host is
-ready, then do the first deploy.
+ready, then do the first deploy, then run the smoke check (§12).
 
 > **This host, specifically.** The target is an Ubuntu 26.10 box (Intel Core
 > i7-4712MQ, 4C/8T; 16 GB RAM). The architecture names Ubuntu 26.04 LTS
@@ -113,13 +113,14 @@ docker info --format '{{.DockerRootDir}}'       # confirm the new path
 
 **Sizing** (adds up to the preflight's 40 GB default):
 
-| Item | Approx size |
-|---|---|
-| Images: backend, whisper (+~2 GB over backend), web, bake-off (#76) | ~6–8 GB |
-| `whisper-models` volume (~3 GB per large model; ~3 GB for the #3 bake-off set) | ~3–6 GB |
-| `audio` volume (`AUDIO_MAX_GB`, default 20) | ≤ 20 GB |
-| `pgdata` volume | grows with history |
-| build cache | a few GB |
+| Item | Reserved size |
+|---|---:|
+| Images: backend, whisper (+~2 GB over backend), web, bake-off (#76) | 8 GB |
+| `whisper-models` volume (~3 GB per large model; ~3 GB for the #3 bake-off set) | 3 GB |
+| `audio` volume (`AUDIO_MAX_GB`, default 20) | 20 GB |
+| `pgdata` volume | 4 GB |
+| build cache | 5 GB |
+| **Total** | **40 GB** |
 
 Reclaim space with `docker builder prune` and `docker image prune`.
 **`docker compose down -v` deletes `pgdata`** — never run it on the server.
@@ -255,13 +256,23 @@ drop-in sets `After=docker.service`). Pull the model:
 OLLAMA_HOST=172.17.0.1:11434 ollama pull "${OLLAMA_MODEL:-qwen3.5:4b}"
 ```
 
-**Alternative: bind to `0.0.0.0` with a firewall rule** that allows 11434 only
-from Docker's bridge address pools and denies it everywhere else. This keeps
-Ollama on `127.0.0.1` for host clients but needs the firewall rule to be
-correct and maintained. If you use it, set `OLLAMA_HOST=0.0.0.0:11434` and add
-the rule; note that an active `ufw` default-deny also blocks
-container-to-host traffic unless the Docker bridge ranges are allowed. The
-bridge-gateway default above avoids both.
+**Alternative: bind to `0.0.0.0` with firewall rules** that allow 11434 only
+from Docker's default bridge address pool and deny it everywhere else. This
+also keeps Ollama available to host-local clients but requires maintained
+firewall policy. Set `OLLAMA_HOST=0.0.0.0:11434`, then apply these rules.
+**(sudo)**
+
+```bash
+sudo ufw allow in on docker0 from 172.17.0.0/16 to any port 11434 proto tcp
+sudo ufw deny in to any port 11434 proto tcp
+sudo ufw status numbered
+```
+
+If Docker uses additional bridge pools, add one equally scoped allow rule per
+pool before the deny rule. An active `ufw` default-deny also blocks
+container-to-host traffic unless those Docker bridge ranges are allowed. Never
+use a broad `ufw allow 11434/tcp`; the bridge-gateway default above avoids this
+firewall maintenance.
 
 ---
 
@@ -344,7 +355,236 @@ docker compose config | grep -E 'type: bind|WHISPER_MODEL:\s*"?tiny"?' || echo "
 docker compose ps          # services healthy
 ```
 
-`web` is published on `127.0.0.1:8080` only; put it behind the host reverse
+`web` runs nginx as a non-root user (`nginx/nginx-unprivileged:1.30-alpine`)
+on container port 8080 and is published on `127.0.0.1:8080` only
+(`127.0.0.1:8080:8080`); put it behind the host reverse
 proxy (#141) for TLS. Updates are `git pull` of `master`, then
 `docker compose run --rm migrate` (if there is a new revision) and
-`docker compose -f compose.yml up -d --build`.
+`docker compose -f compose.yml up -d --build`. A red "base image digest check"
+run means bump the frontend base-image digest per architecture.md §11.3, then
+follow the usual update steps. After an update, re-run §12.
+
+---
+
+## 12. Smoke check
+
+A manual operator step. It sends one real video through the freshly deployed
+stack over the public network (real YouTube through yt-dlp) and the host
+Ollama (§8). With the default `SUMMARIZER=ollama` it costs no API money. Pytest
+and CI never run it: `tests/test_pipeline_smoke_docker.py` (#137) is the
+automated, hermetic counterpart, with a fake `yt_dlp`, a stub Ollama and no
+egress. This step proves what #137 cannot: the real extractor, the analyzer
+reaching the host Ollama through `host-gateway`, and a real model producing a
+valid analysis.
+
+The video is `iG9CE55wbtY` (TED, "Do schools kill creativity?", 1203 s), the
+same one #137 replays. It has manual English captions, so the path is
+`ingest` then `analyze` with no `transcribe` job.
+
+**Preconditions**
+
+- §11 is done and `docker compose ps` shows the services healthy.
+- The Ollama model was pulled (§8).
+- Commands run on the deploy host against `127.0.0.1:8080` (the `web` port), never
+  through the public tunnel hostname, which Cloudflare Access fronts.
+
+API calls used below (nginx strips `/api`): `POST /api/videos`,
+`GET /api/videos/{video_id}`, `DELETE /api/videos/{video_id}` and
+`GET /api/ops/jobs`.
+
+### Guard: no spend
+
+Show the analyzer's summarizer and model before submitting anything:
+
+```bash
+docker compose exec analyzer printenv SUMMARIZER OLLAMA_MODEL
+```
+
+**Stop** unless the first line is `ollama`. Any other value can spend money on
+a real key. Note the second line: the pass check compares it with
+`analysis.model`.
+
+### Clean start
+
+Delete any earlier copy. It prints only the HTTP status code:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X DELETE \
+  http://127.0.0.1:8080/api/videos/iG9CE55wbtY
+```
+
+- `204` or `404`: continue.
+- `409`: a job is still running. Wait for it, or check `GET /api/ops/jobs`
+  (see "When it fails"), then repeat the delete.
+
+Why: a re-submit of an existing video answers `200` with `"created": false`
+and nothing new runs, so it proves nothing. Delete removes the video's jobs;
+the submit below clears the deletion tombstone and starts one new `ingest`.
+
+### Submit
+
+```bash
+curl -s -w '\n%{http_code}\n' -X POST http://127.0.0.1:8080/api/videos \
+  -H 'Content-Type: application/json' \
+  -d '{"url": "https://www.youtube.com/watch?v=iG9CE55wbtY"}'
+```
+
+Expected: `202` with `"created": true` and a `job_id`. A `200` with
+`"created": false` means the clean start was skipped: go back to it. A `422`
+means the URL was mistyped. Always send the full watch URL, never a bare ID (an
+ID can start with `-`).
+
+### Wait
+
+One loop, polling every 30 s with a deadline of 70 minutes. The deadline is
+`INGEST_MAX_RUNTIME_SEC` + `ANALYZE_MAX_RUNTIME_SEC`, 600 + 3600 s by default.
+It stops early on `done`, `failed` or `unavailable`, and at the deadline it
+prints the last status it saw instead of waiting forever:
+
+```bash
+deadline=$((SECONDS + 4200))
+while :; do
+  status=$(curl -s http://127.0.0.1:8080/api/videos/iG9CE55wbtY |
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])') || status=unknown
+  status=${status:-unknown}
+  echo "$(date +%T) status=$status"
+  case "$status" in done|failed|unavailable) break ;; esac
+  if [ "$SECONDS" -ge "$deadline" ]; then
+    echo "deadline reached, last status: $status"
+    break
+  fi
+  sleep 30
+done
+```
+
+A 4B model on this CPU is slow (architecture.md §16.7), so most of the wait is
+the `analyze` job.
+
+### Pass criteria
+
+Read them from `GET /api/videos/iG9CE55wbtY` and `GET /api/ops/jobs`:
+
+- `status` is `done`
+- `transcript.source` is `youtube_manual` and `transcript.language` is `en`
+- `analysis.model` equals the `OLLAMA_MODEL` printed by the guard
+- `analysis.tldr` is non-empty
+- the video's jobs are exactly one `ingest` and one `analyze`, both
+  `state: done`, with **no** `transcribe` job
+
+```bash
+curl -s http://127.0.0.1:8080/api/videos/iG9CE55wbtY | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+t, a = v.get("transcript") or {}, v.get("analysis") or {}
+print("status", v["status"])
+print("transcript", t.get("source"), t.get("language"))
+print("model", a.get("model"), "| tldr non-empty:", bool(a.get("tldr")))'
+```
+
+The jobs come from the listing in "When it fails". The analysis text is a real
+model's output, so it differs from #137's stub; only the structure above is
+compared.
+
+A `done` with the wrong structure is not a pass. If `transcript.source` is not
+`youtube_manual`, or a `transcribe` job exists, real caption detection no
+longer matches the recorded fixture. Report it as an issue.
+
+### When it fails
+
+List this video's jobs. `GET /api/ops/jobs` has no video filter, newest first,
+so the script filters by `video_id` and follows `next_before_id` (at most five
+pages of 200, because on a live server planner polls and backfills also
+enqueue jobs):
+
+```bash
+python3 - <<'PY'
+import json, urllib.request
+base = "http://127.0.0.1:8080/api/ops/jobs?limit=200"
+url = base
+for _ in range(5):
+    with urllib.request.urlopen(url) as r:
+        page = json.load(r)
+    for j in page["items"]:
+        if j["video_id"] == "iG9CE55wbtY":
+            print(j["kind"], j["state"], j["attempts"], j["error_class"], j["last_error"])
+    if page["next_before_id"] is None:
+        break
+    url = base + "&before_id=" + str(page["next_before_id"])
+PY
+```
+
+Each line is `kind state attempts error_class last_error`. Then read the worker
+logs:
+
+```bash
+docker compose logs --tail 200 transcriber analyzer
+```
+
+| `error_class` | Meaning and where to look |
+|---|---|
+| `TRANSIENT_NETWORK` | Egress is blocked or flaky: §7. |
+| `RATE_LIMITED` | YouTube throttling or its bot check (`HTTP Error 429`, "Sign in to confirm you're not a bot"). The remedy is the optional cookie file (#63); see the comment in `compose.yml`'s `transcriber` service. |
+| `PERMANENT_SOURCE` | The video itself; `status: unavailable` with `removed`, `private`, `geoblocked` or `agegated`. Replace the ID in this section, in a reviewed change, with another public video that has manual English captions. |
+| `LLM_UNAVAILABLE` | Ollama binding and model: §8. |
+| `LLM_INVALID_OUTPUT` | The model's reply failed validation. It is retried; report a `dead` analyze job as an issue. |
+
+A log line `No supported JavaScript runtime` is yt-dlp noise until #134 is
+decided; do not chase it.
+
+### Cleanup
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X DELETE \
+  http://127.0.0.1:8080/api/videos/iG9CE55wbtY
+```
+
+Expect `204`. You may keep the video instead: the next run's clean start
+deletes it anyway.
+
+---
+
+## Public access (Cloudflare Tunnel)
+
+Optional. The tunnel is a **host systemd service** (`cloudflared.service`),
+not a compose service: `web` stays on `127.0.0.1:8080` and `cloudflared`
+dials out to Cloudflare and forwards to it. Nothing listens inbound. Do not
+also run a second connector for the same tunnel in a container.
+
+The service runs `cloudflared --no-autoupdate --config /etc/cloudflared/config.yml
+tunnel run`. The config holds no secrets of its own; the credentials JSON
+sits next to it and is root-only:
+
+```yaml
+tunnel: <tunnel-id>
+credentials-file: /etc/cloudflared/<tunnel-id>.json
+
+ingress:
+  - hostname: dev-ytdigest.devopsdojo.click
+    service: http://127.0.0.1:8080
+  - service: http_status:404       # required catch-all
+```
+
+One-time setup, on a machine where `cloudflared tunnel login` was done for
+the zone:
+
+```bash
+cloudflared tunnel create ytdigest
+cloudflared tunnel route dns <tunnel-id> dev-ytdigest.devopsdojo.click
+# route by ID: right after `create`, the name can briefly be "not found"
+sudo cp ~/.cloudflared/<tunnel-id>.json /etc/cloudflared/   # then write config.yml above
+sudo chmod 600 /etc/cloudflared/<tunnel-id>.json
+sudo systemctl enable --now cloudflared
+```
+
+Check: `systemctl status cloudflared`, `cloudflared tunnel list` (the tunnel
+shows connections), then `curl -I https://dev-ytdigest.devopsdojo.click/`.
+
+The app has no login of its own, so **put a Cloudflare Access policy in front
+before sharing the hostname**. In the Zero Trust dashboard (not in this repo):
+Access -> Applications -> Add -> Self-hosted, domain
+`dev-ytdigest.devopsdojo.click`, policy "Allow" for your email with the
+one-time PIN login method. Until that exists the URL is open to anyone, and
+`POST /api/videos` spends transcription and LLM time.
+
+Revoke: `sudo systemctl disable --now cloudflared`, then
+`cloudflared tunnel delete ytdigest` and remove the DNS record.

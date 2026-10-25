@@ -115,12 +115,17 @@ export interface paths {
         put?: never;
         /**
          * Post Channel Backfill Cancel
-         * @description Cancel one real backfill's still-pending ``ingest`` jobs (#116).
+         * @description Cancel one backfill's pending work (#116, #166).
          *
-         *     Deletes only jobs that are ``pending``, ``ingest``, at ``PRIORITY_BACKFILL``,
-         *     tagged with ``backfill_id`` and belonging to this channel; running jobs,
-         *     follow-up jobs and jobs from RSS, ``POST /videos`` or another backfill are
-         *     untouched. An unknown ``backfill_id`` cancels nothing (200, ``cancelled: 0``).
+         *     Ends the matching active backfill request so the planner cannot enqueue
+         *     another slice. Deletes only jobs that are ``pending``, ``ingest``, at
+         *     ``PRIORITY_BACKFILL``, tagged with ``backfill_id`` and belonging to this
+         *     channel. A matching ``ingest`` already running finishes normally; it is
+         *     not included in ``cancelled`` or ``video_ids``, and its job row is unchanged.
+         *     Already-created ``transcribe`` and ``analyze`` jobs are not cancelled. Jobs
+         *     from RSS, ``POST /videos`` or another backfill are untouched. An unknown
+         *     ``backfill_id`` cancels nothing (200, ``cancelled: 0``).
+         *
          *     Each cancelled job's ``videos`` row is removed too, unless something else
          *     depends on it (a transcript, another job); those are ``videos_kept``. A kept
          *     video is no longer picked up by backfill, so re-submit it with
@@ -145,6 +150,23 @@ export interface paths {
          * @description Liveness plus queue depth by kind and state; 503 when the database is not usable.
          */
         get: operations["healthz_healthz_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ops/channels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Ops Channels */
+        get: operations["get_ops_channels_ops_channels_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -255,7 +277,7 @@ export interface paths {
         };
         /**
          * Get Videos
-         * @description The library, newest published first; ``total`` counts every match.
+         * @description The filtered library in the requested multi-column order.
          */
         get: operations["get_videos_videos_get"];
         put?: never;
@@ -281,7 +303,8 @@ export interface paths {
         get: operations["get_video_detail_videos__video_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** Delete Stored Video */
+        delete: operations["delete_stored_video_videos__video_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -401,6 +424,12 @@ export interface components {
         };
         /** AnalysisOut */
         AnalysisOut: {
+            /** Cache Read Tokens */
+            cache_read_tokens: number | null;
+            /** Cache Write Tokens */
+            cache_write_tokens: number | null;
+            /** Calls */
+            calls: number | null;
             /** Chunk Strategy */
             chunk_strategy: string;
             /** Claims */
@@ -784,6 +813,7 @@ export interface components {
             locked_by: string | null;
             /** Priority */
             priority: number;
+            progress: components["schemas"]["ProgressOut"] | null;
             /**
              * Run After
              * Format: date-time
@@ -807,6 +837,55 @@ export interface components {
             job_id: number;
             /** Kind */
             kind: string;
+        };
+        /** OpsChannelListOut */
+        OpsChannelListOut: {
+            /** Items */
+            items: components["schemas"]["OpsChannelOut"][];
+        };
+        /** OpsChannelOut */
+        OpsChannelOut: {
+            /** Channel Id */
+            channel_id: string;
+            /** Feed Gap Detected At */
+            feed_gap_detected_at: string | null;
+            /** Feed Gap Reason */
+            feed_gap_reason: ("suspected" | "no_anchor" | "listing_window_exhausted") | null;
+            /** Last Poll Err */
+            last_poll_err: string | null;
+            /** Poll Failing Since */
+            poll_failing_since: string | null;
+            /** Poll Failures */
+            poll_failures: number;
+            /** Title */
+            title: string | null;
+        };
+        /**
+         * ProgressOut
+         * @description Progress of a transcribe job (#245).
+         *
+         *     A running job carries every figure. A pending one carries only the estimate
+         *     (``estimated_sec``, ``eta_sec``, ``duration_sec``, ``estimate_source``); the
+         *     rest are ``None``. ``estimate_source`` is ``"default"`` when there was no RTF
+         *     history, so the UI can call the figure rough.
+         */
+        ProgressOut: {
+            /** Done Sec */
+            done_sec: number | null;
+            /** Duration Sec */
+            duration_sec: number | null;
+            /** Elapsed Sec */
+            elapsed_sec: number | null;
+            /** Estimate Source */
+            estimate_source: ("history" | "default") | null;
+            /** Estimated Sec */
+            estimated_sec: number | null;
+            /** Eta Sec */
+            eta_sec: number | null;
+            /** Percent */
+            percent: number | null;
+            /** Updated At */
+            updated_at: string | null;
         };
         /** QuoteOut */
         QuoteOut: {
@@ -873,6 +952,7 @@ export interface components {
             /** Text */
             text: string;
         };
+        StrictQueryBool: boolean;
         /** SubmitRef */
         SubmitRef: {
             /** Url */
@@ -946,11 +1026,14 @@ export interface components {
             channel_title: string | null;
             /** Duration Sec */
             duration_sec: number | null;
+            /** Has Transcript */
+            has_transcript: boolean;
             last_failure: components["schemas"]["LastFailureOut"] | null;
             /** Latest Analysis At */
             latest_analysis_at: string | null;
             /** Origin */
             origin: string;
+            progress: components["schemas"]["ProgressOut"] | null;
             /** Published At */
             published_at: string | null;
             /**
@@ -975,6 +1058,8 @@ export interface components {
             channel_title: string | null;
             /** Duration Sec */
             duration_sec: number | null;
+            /** Has Transcript */
+            has_transcript: boolean;
             last_failure: components["schemas"]["LastFailureOut"] | null;
             /** Latest Analysis At */
             latest_analysis_at: string | null;
@@ -1272,6 +1357,38 @@ export interface operations {
             };
         };
     };
+    get_ops_channels_ops_channels_get: {
+        parameters: {
+            query?: {
+                failing?: components["schemas"]["StrictQueryBool"];
+                attention?: components["schemas"]["StrictQueryBool"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OpsChannelListOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_ops_jobs_ops_jobs_get: {
         parameters: {
             query?: {
@@ -1411,6 +1528,10 @@ export interface operations {
                 status?: ("done" | "processing" | "unavailable" | "failed" | "idle") | null;
                 published_after?: string | null;
                 published_before?: string | null;
+                /** @description Repeated in precedence order; unique keys. Omitted alone defaults to published. */
+                sort?: ("title" | "published" | "status" | "channel")[] | null;
+                /** @description Paired by position with sort. Omitted alone defaults to desc for one key only. */
+                order?: ("asc" | "desc")[] | null;
                 offset?: number;
                 limit?: number;
             };
@@ -1510,6 +1631,47 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    delete_stored_video_videos__video_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                video_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such video */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The video has a running job */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Malformed video ID */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

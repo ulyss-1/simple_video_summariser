@@ -5,15 +5,18 @@ import {
   jobsQuery,
   isHealth,
   isJobList,
+  isOpsChannelList,
   retryMessage,
   retryPath,
   type HealthOut,
   type JobListOut,
+  type OpsChannelListOut,
   type OpsFilters,
   type RetryOutcome,
 } from '../lib/ops'
+import { PROGRESS_POLL_MS } from '../lib/progress'
 
-export type { HealthOut, JobListOut, JobOut } from '../lib/ops'
+export type { HealthOut, JobListOut, JobOut, OpsChannelOut } from '../lib/ops'
 
 /** The queue depth is re-read this often while the Ops view is mounted. */
 export const QUEUE_DEPTH_POLL_MS = 15_000
@@ -43,7 +46,25 @@ export function useQueueDepth() {
   })
 }
 
-/** One page of GET /api/ops/jobs. The key carries every filter and the cursor. */
+export function useOpsChannels() {
+  return useQuery({
+    queryKey: ['ops', 'channels', 'attention'],
+    queryFn: async ({ signal }): Promise<OpsChannelListOut> => {
+      const body: unknown = await api
+        .get('/ops/channels', { params: { query: { attention: true } }, signal })
+        .catch((error: unknown) => rethrowHttp(error, (_e, status) => new OpsError(status)))
+      if (!isOpsChannelList(body)) throw new Error('Unexpected response shape')
+      return body
+    },
+  })
+}
+
+/**
+ * One page of GET /api/ops/jobs. The key carries every filter and the cursor.
+ * While the page shows a running transcribe job it is refetched every 30 s (its
+ * progress is stored that often); with none it is not polled. A hidden tab is not
+ * polled either: TanStack pauses `refetchInterval` unless told otherwise.
+ */
 export function useOpsJobs(filters: OpsFilters, before: number | null) {
   return useQuery({
     queryKey: ['ops', 'jobs', filters.state, filters.kind, filters.errorClass, before],
@@ -55,6 +76,10 @@ export function useOpsJobs(filters: OpsFilters, before: number | null) {
       return body
     },
     placeholderData: keepPreviousData,
+    refetchInterval: (q) =>
+      q.state.data?.items.some((j) => j.kind === 'transcribe' && j.state === 'running')
+        ? PROGRESS_POLL_MS
+        : false,
   })
 }
 

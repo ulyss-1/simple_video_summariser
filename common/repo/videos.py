@@ -22,6 +22,23 @@ from common.repo._hygiene import clean_text
 
 _UNAVAILABLE_REASONS = {"removed", "private", "geoblocked", "agegated", "short"}
 
+_SORT_ORDERS = {
+    ("title", "asc"): 'lower(title) COLLATE "C" ASC NULLS LAST',
+    ("title", "desc"): 'lower(title) COLLATE "C" DESC NULLS LAST',
+    ("channel", "asc"): 'lower(channel_title) COLLATE "C" ASC NULLS LAST',
+    ("channel", "desc"): 'lower(channel_title) COLLATE "C" DESC NULLS LAST',
+    ("published", "asc"): "published_at ASC NULLS LAST",
+    ("published", "desc"): "published_at DESC NULLS LAST",
+    ("status", "asc"): (
+        "CASE status WHEN 'idle' THEN 0 WHEN 'processing' THEN 1 WHEN 'done' THEN 2 "
+        "WHEN 'unavailable' THEN 3 WHEN 'failed' THEN 4 END ASC"
+    ),
+    ("status", "desc"): (
+        "CASE status WHEN 'idle' THEN 0 WHEN 'processing' THEN 1 WHEN 'done' THEN 2 "
+        "WHEN 'unavailable' THEN 3 WHEN 'failed' THEN 4 END DESC"
+    ),
+}
+
 
 def upsert_video(conn: psycopg.Connection[Any], meta: VideoMeta, origin: str) -> None:
     """Insert ``meta`` as a video, or update its mutable fields on a later call.
@@ -159,7 +176,8 @@ def insert_discovered_video(
     cur = conn.execute(
         """
         INSERT INTO videos (video_id, channel_id, title, published_at, origin, unavailable)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        SELECT %s, %s, %s, %s, %s, %s
+        WHERE NOT EXISTS (SELECT 1 FROM deleted_videos WHERE video_id = %s)
         ON CONFLICT (video_id) DO NOTHING
         """,
         (
@@ -169,6 +187,7 @@ def insert_discovered_video(
             entry.published_at,
             origin,
             unavailable,
+            entry.video_id,
         ),
     )
     return cur.rowcount == 1
@@ -183,6 +202,7 @@ def insert_submitted_video(conn: psycopg.Connection[Any], video_id: str) -> bool
     submission) is left exactly as it is, including ``origin`` and
     ``discovered_at``. No ``channels`` row is created.
     """
+    conn.execute("DELETE FROM deleted_videos WHERE video_id = %s", (video_id,))
     cur = conn.execute(
         """
         INSERT INTO videos (video_id, origin)
@@ -254,8 +274,12 @@ def known_videos(
     if not video_ids:
         return {}
     rows = conn.execute(
-        "SELECT video_id, channel_id, published_at FROM videos WHERE video_id = ANY(%s)",
-        (list(video_ids),),
+        """
+        SELECT video_id, channel_id, published_at FROM videos WHERE video_id = ANY(%s)
+        UNION ALL
+        SELECT video_id, NULL, NULL FROM deleted_videos WHERE video_id = ANY(%s)
+        """,
+        (list(video_ids), list(video_ids)),
     ).fetchall()
     return {row[0]: KnownVideo(channel_id=row[1], published_at=row[2]) for row in rows}
 
@@ -292,11 +316,19 @@ def insert_catalog_video(
     row = conn.execute(
         """
         INSERT INTO videos (video_id, channel_id, title, duration_sec, origin)
-        VALUES (%s, %s, %s, %s, %s)
+        SELECT %s, %s, %s, %s, %s
+        WHERE NOT EXISTS (SELECT 1 FROM deleted_videos WHERE video_id = %s)
         ON CONFLICT (video_id) DO NOTHING
         RETURNING video_id
         """,
-        (entry.video_id, channel_id, clean_text(entry.title), entry.duration_sec, origin),
+        (
+            entry.video_id,
+            channel_id,
+            clean_text(entry.title),
+            entry.duration_sec,
+            origin,
+            entry.video_id,
+        ),
     ).fetchone()
     return row is not None
 
@@ -353,7 +385,8 @@ _VIDEO_READ = """
            lf.id AS lf_id, lf.kind AS lf_kind, lf.error_class AS lf_error_class,
            lf.finished_at AS lf_finished_at,
            la.created_at AS latest_analysis_at,
-           v.discovered_at
+           v.discovered_at,
+           EXISTS (SELECT 1 FROM transcripts t WHERE t.video_id = v.video_id) AS has_transcript
     FROM videos v
     LEFT JOIN channels c ON c.channel_id = v.channel_id
     LEFT JOIN LATERAL (
@@ -389,6 +422,9 @@ def list_videos(
     status: str | None = None,
     published_after: datetime | None = None,
     published_before: datetime | None = None,
+    sort: str = "published",
+    order: str = "desc",
+    sorts: Sequence[tuple[str, str]] | None = None,
     offset: int = 0,
     limit: int = 50,
 ) -> VideoPage:
@@ -396,9 +432,15 @@ def list_videos(
 
     Filters combine with AND; any date filter excludes videos with no
     ``published_at``. ``published_after`` is inclusive, ``published_before``
-    exclusive. Ordered by ``published_at DESC NULLS LAST, discovered_at DESC,
-    video_id``. One statement, however large ``limit`` is.
+    exclusive. Sort keys and directions must be validated values selected by
+    the API. One statement, however large ``limit`` is.
     """
+    sequence = tuple(sorts) if sorts is not None else ((sort, order),)
+    fragments = [_SORT_ORDERS[pair] for pair in sequence]
+    if any(key == "published" for key, _direction in sequence):
+        fragments.append("discovered_at DESC")
+    fragments.append("video_id ASC")
+    order_by = ", ".join(fragments)
     rows = conn.execute(
         f"""
         WITH m AS (
@@ -412,7 +454,7 @@ def list_videos(
         FROM (SELECT count(*) AS total FROM m) t
         LEFT JOIN LATERAL (
             SELECT * FROM m
-            ORDER BY published_at DESC NULLS LAST, discovered_at DESC, video_id ASC
+            ORDER BY {order_by}
             OFFSET %(offset)s LIMIT %(limit)s
         ) p ON true
         """,
@@ -440,7 +482,7 @@ def _summary(row: Sequence[Any]) -> VideoSummary:
     (
         video_id, title, channel_id, channel_title, published_at, duration_sec, origin,
         unavailable, status, aj_id, aj_kind, aj_state, lf_id, lf_kind, lf_class,
-        lf_finished, latest_analysis_at, _discovered_at,
+        lf_finished, latest_analysis_at, _discovered_at, has_transcript,
     ) = row
     return VideoSummary(
         video_id=video_id,
@@ -457,5 +499,6 @@ def _summary(row: Sequence[Any]) -> VideoSummary:
             None if lf_id is None else JobFailure(int(lf_id), lf_kind, lf_class, lf_finished)
         ),
         latest_analysis_at=latest_analysis_at,
+        has_transcript=has_transcript,
     )
 

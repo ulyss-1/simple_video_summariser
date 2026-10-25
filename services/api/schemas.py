@@ -6,10 +6,11 @@ field is declared explicitly. Datetimes are always serialised in UTC.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, cast
 
-from pydantic import AfterValidator, BaseModel, Field, JsonValue
+from pydantic import AfterValidator, BaseModel, Field, JsonValue, ValidationError
 
 from common.models import (
     Analysis,
@@ -19,6 +20,7 @@ from common.models import (
     TranscriptPage,
     VideoSummary,
 )
+from common.progress import estimate_effort
 from common.repo.backfill_requests import BackfillRequestRow
 from common.repo.jobs import JobRow
 from common.repo.search import SearchPage as RepoSearchPage
@@ -47,6 +49,60 @@ class LastFailureOut(BaseModel):
     finished_at: UtcDatetime | None
 
 
+class ProgressOut(BaseModel):
+    """Progress of a transcribe job (#245).
+
+    A running job carries every figure. A pending one carries only the estimate
+    (``estimated_sec``, ``eta_sec``, ``duration_sec``, ``estimate_source``); the
+    rest are ``None``. ``estimate_source`` is ``"default"`` when there was no RTF
+    history, so the UI can call the figure rough.
+    """
+
+    percent: int | None
+    done_sec: float | None
+    duration_sec: float | None
+    elapsed_sec: float | None
+    eta_sec: float | None
+    estimated_sec: float | None
+    estimate_source: Literal["history", "default"] | None
+    updated_at: UtcDatetime | None
+
+
+def progress_out(row: JobRow, history: Sequence[float] | None = None) -> ProgressOut | None:
+    """The progress to show for ``row``, or ``None``.
+
+    Only ``transcribe`` jobs have any. A ``running`` one returns what the worker
+    stored (``None`` before its first write, or when the stored JSON is not
+    the expected shape). A ``pending`` one is estimated from its payload duration
+    and ``history`` (the recent RTFs); without ``history`` or a duration there is
+    nothing to show.
+    """
+    if row.kind != "transcribe":
+        return None
+    if row.state == "running":
+        if row.progress is None:
+            return None
+        try:
+            return ProgressOut.model_validate(row.progress)
+        except ValidationError:
+            return None
+    if row.state == "pending" and history is not None:
+        estimate = estimate_effort(row.payload_duration_sec, history)
+        if estimate is None:
+            return None
+        return ProgressOut(
+            percent=None,
+            done_sec=None,
+            duration_sec=row.payload_duration_sec,
+            elapsed_sec=None,
+            eta_sec=round(estimate.estimated_sec, 1),
+            estimated_sec=round(estimate.estimated_sec, 1),
+            estimate_source=estimate.source,
+            updated_at=None,
+        )
+    return None
+
+
 class VideoFields(BaseModel):
     """Fields shared by a library item and a search result (#42, #43)."""
 
@@ -65,6 +121,7 @@ class VideoItem(VideoFields):
     active_job: ActiveJobOut | None
     last_failure: LastFailureOut | None
     latest_analysis_at: UtcDatetime | None
+    has_transcript: bool
 
 
 class VideoList(BaseModel):
@@ -139,6 +196,9 @@ class AnalysisOut(BaseModel):
     speaker_roster: JsonValue | None
     input_tokens: int
     output_tokens: int
+    cache_read_tokens: int | None
+    cache_write_tokens: int | None
+    calls: int | None
     cost_usd: float | None
     duration_ms: int | None
     topics: list[TopicOut]
@@ -157,6 +217,8 @@ class TranscriptSummary(BaseModel):
 class VideoDetail(VideoItem):
     transcript: TranscriptSummary | None
     analysis: AnalysisOut | None
+    #: The active transcribe job's figures, else ``None`` (#245).
+    progress: ProgressOut | None
 
 
 class AnalysisList(BaseModel):
@@ -246,10 +308,14 @@ def video_item(video: VideoSummary) -> VideoItem:
 
 
 def video_detail(
-    video: VideoSummary, transcript: TranscriptInfo | None, run: AnalysisRun | None
+    video: VideoSummary,
+    transcript: TranscriptInfo | None,
+    run: AnalysisRun | None,
+    progress: ProgressOut | None = None,
 ) -> VideoDetail:
     return VideoDetail(
         **_video_fields(video),
+        progress=progress,
         transcript=None if transcript is None else transcript_summary(transcript),
         analysis=None if run is None else analysis_out(run),
     )
@@ -282,6 +348,7 @@ def _video_fields(video: VideoSummary) -> dict[str, Any]:
             )
         ),
         "latest_analysis_at": video.latest_analysis_at,
+        "has_transcript": video.has_transcript,
     }
 
 
@@ -310,6 +377,9 @@ def analysis_out(run: AnalysisRun) -> AnalysisOut:
         speaker_roster=cast(JsonValue, a.speaker_roster),
         input_tokens=a.input_tokens,
         output_tokens=a.output_tokens,
+        cache_read_tokens=a.cache_read_tokens,
+        cache_write_tokens=a.cache_write_tokens,
+        calls=a.calls,
         cost_usd=a.cost_usd,
         duration_ms=a.duration_ms,
         topics=[
@@ -338,6 +408,20 @@ def analysis_out(run: AnalysisRun) -> AnalysisOut:
     )
 
 
+class OpsChannelOut(BaseModel):
+    channel_id: str
+    title: str | None
+    poll_failing_since: UtcDatetime | None
+    poll_failures: int
+    last_poll_err: str | None
+    feed_gap_detected_at: UtcDatetime | None
+    feed_gap_reason: Literal["suspected", "no_anchor", "listing_window_exhausted"] | None
+
+
+class OpsChannelListOut(BaseModel):
+    items: list[OpsChannelOut]
+
+
 class JobOut(BaseModel):
     """One ``jobs`` row for the Ops view (#44). ``payload`` is never exposed."""
 
@@ -356,6 +440,7 @@ class JobOut(BaseModel):
     heartbeat_at: UtcDatetime | None
     finished_at: UtcDatetime | None
     created_at: UtcDatetime
+    progress: ProgressOut | None
 
 
 class JobListOut(BaseModel):
@@ -363,7 +448,7 @@ class JobListOut(BaseModel):
     next_before_id: int | None
 
 
-def job_out(row: JobRow) -> JobOut:
+def job_out(row: JobRow, history: Sequence[float] | None = None) -> JobOut:
     return JobOut(
         id=row.id,
         video_id=row.video_id,
@@ -380,6 +465,7 @@ def job_out(row: JobRow) -> JobOut:
         heartbeat_at=row.heartbeat_at,
         finished_at=row.finished_at,
         created_at=row.created_at,
+        progress=progress_out(row, history),
     )
 
 
