@@ -210,6 +210,36 @@ def _summary_table(entries: Sequence[VideoEntry]) -> list[str]:
     return _table(header, rows)
 
 
+def _usage_cell(values: Sequence[int | None]) -> str:
+    """Total of one field over one side's present runs; ``None`` is "not recorded"."""
+    if not values:
+        return "-"
+    known = [v for v in values if v is not None]
+    if not known:
+        return "not recorded"
+    if len(known) < len(values):
+        return f"{sum(known)} ({len(known)} of {len(values)} runs recorded)"
+    return str(sum(known))
+
+
+def _usage_totals_table(entries: Sequence[VideoEntry]) -> list[str]:
+    def side(runs: Sequence[AnalysisRun | None]) -> list[str]:
+        present = [r.analysis for r in runs if r is not None]
+        return [
+            _usage_cell([x.cache_read_tokens for x in present]),
+            _usage_cell([x.cache_write_tokens for x in present]),
+            _usage_cell([x.calls for x in present]),
+        ]
+
+    names = ["Total cache read tokens", "Total cache write tokens", "Total model calls"]
+    ca, cb = side([e.run_a for e in entries]), side([e.run_b for e in entries])
+    return [
+        "### Usage totals",
+        "",
+        *_table(["", "A", "B"], [[n, x, y] for n, x, y in zip(names, ca, cb, strict=True)]),
+    ]
+
+
 def _details_table(a: AnalysisRun | None, b: AnalysisRun | None) -> list[str]:
     def count(value: int | None) -> str:
         return str(value) if value is not None else "not recorded"
@@ -357,6 +387,8 @@ def render_report(a: RunLabel, b: RunLabel, entries: Sequence[VideoEntry]) -> st
         "## Summary",
         "",
         *_summary_table(entries),
+        "",
+        *_usage_totals_table(entries),
         "",
     ]
     for entry in entries:

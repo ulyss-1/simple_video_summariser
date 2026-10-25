@@ -460,3 +460,118 @@ def test_created_at_is_shown_in_utc_whatever_the_stored_zone() -> None:
     created = datetime(2026, 10, 1, 14, 30, 5, tzinfo=timezone(timedelta(hours=2)))
     out = render_report(LABEL_A, LABEL_B, [entry(run(LABEL_A, created=created), None)])
     assert "2026-10-01 12:30:05" in out
+
+
+# ----------------------------------------------------------- usage totals (#277)
+
+USAGE_LABELS = ["Total cache read tokens", "Total cache write tokens", "Total model calls"]
+
+
+def usage_block(out: str) -> list[str]:
+    """The lines of the table under ``### Usage totals``."""
+    lines = out.splitlines()
+    assert lines.count("### Usage totals") == 1
+    start = lines.index("### Usage totals")
+    assert lines[start + 1] == ""
+    block: list[str] = []
+    for ln in lines[start + 2 :]:
+        if not ln.startswith("|"):
+            break
+        block.append(ln)
+    return block
+
+
+def usage_row(out: str, label: str) -> list[str]:
+    """The A and B cells of the Usage totals row with this label."""
+    rows = [ln for ln in usage_block(out) if ln.startswith(f"| {label} |")]
+    assert len(rows) == 1, rows
+    return [c.strip() for c in rows[0].strip().strip("|").split("|")[1:]]
+
+
+def usage_cells(out: str) -> dict[str, list[str]]:
+    return {label: usage_row(out, label) for label in USAGE_LABELS}
+
+
+def test_usage_totals_sum_each_side_and_show_not_recorded() -> None:
+    a1 = run(LABEL_A, cache_read=7, cache_write=11, calls=3)
+    a2 = run(LABEL_A, cache_read=4, cache_write=0, calls=2)
+    out = render_report(LABEL_A, LABEL_B, [entry(a1, run(LABEL_B)), entry(a2, run(LABEL_B), OTHER)])
+    assert usage_cells(out) == {
+        "Total cache read tokens": ["11", "not recorded"],
+        "Total cache write tokens": ["11", "not recorded"],
+        "Total model calls": ["5", "not recorded"],
+    }
+
+
+def test_usage_totals_show_known_zeros_as_zero() -> None:
+    def zero(label: RunLabel) -> AnalysisRun:
+        return run(label, cache_read=0, cache_write=0, calls=0)
+
+    entries = [entry(zero(LABEL_A), zero(LABEL_B)), entry(zero(LABEL_A), zero(LABEL_B), OTHER)]
+    out = render_report(LABEL_A, LABEL_B, entries)
+    assert all(cells == ["0", "0"] for cells in usage_cells(out).values())
+
+
+def test_usage_totals_partial_count_ignores_missing_runs() -> None:
+    third = "9bZkp7q19f0"
+    out = render_report(
+        LABEL_A,
+        LABEL_B,
+        [
+            entry(run(LABEL_A, cache_read=5, cache_write=None, calls=2), None),
+            entry(run(LABEL_A, cache_read=None, cache_write=None, calls=1), None, OTHER),
+            entry(None, None, third),
+        ],
+    )
+    assert usage_row(out, "Total cache read tokens")[0] == "5 (1 of 2 runs recorded)"
+    assert usage_row(out, "Total cache write tokens")[0] == "not recorded"
+    assert usage_row(out, "Total model calls")[0] == "3"
+
+
+def test_usage_totals_known_zero_next_to_none_is_a_partial_zero() -> None:
+    out = render_report(
+        LABEL_A,
+        LABEL_B,
+        [entry(run(LABEL_A, cache_read=0), None), entry(run(LABEL_A, cache_read=None), None, OTHER)],
+    )
+    assert usage_row(out, "Total cache read tokens")[0] == "0 (1 of 2 runs recorded)"
+
+
+def test_usage_totals_side_without_a_present_run_is_a_dash() -> None:
+    a = run(LABEL_A, cache_read=2, cache_write=3, calls=4)
+    out = render_report(LABEL_A, LABEL_B, [entry(a, None)])
+    assert usage_cells(out) == {
+        "Total cache read tokens": ["2", "-"],
+        "Total cache write tokens": ["3", "-"],
+        "Total model calls": ["4", "-"],
+    }
+
+
+def test_usage_totals_block_is_present_when_every_run_is_missing() -> None:
+    out = render_report(LABEL_A, LABEL_B, [entry(None, None, OTHER, None)])
+    assert all(cells == ["-", "-"] for cells in usage_cells(out).values())
+
+
+def test_usage_totals_sit_between_the_summary_table_and_the_first_video() -> None:
+    a = run(LABEL_A, cache_read=1, cache_write=2, calls=3)
+    out = render_report(LABEL_A, LABEL_B, [entry(a, None), entry(a, None, OTHER)])
+    lines = out.splitlines()
+    total = next(i for i, ln in enumerate(lines) if ln.startswith("| **Total**"))
+    heading = lines.index("### Usage totals")
+    first_video = next(i for i, ln in enumerate(lines) if ln.startswith("## ") and ln != "## Summary")
+    assert lines[total + 1] == "" and heading == total + 2
+    assert lines[heading + 1] == ""
+    block = usage_block(out)
+    assert block[0] == "|  | A | B |"
+    assert [ln.split("|")[1].strip() for ln in block[2:]] == USAGE_LABELS
+    assert lines[heading + 2 + len(block)] == "" and first_video == heading + 3 + len(block)
+    assert "score" not in "\n".join(block).lower()
+
+
+def test_usage_totals_add_large_numbers_without_a_separator() -> None:
+    out = render_report(
+        LABEL_A,
+        LABEL_B,
+        [entry(run(LABEL_A, cache_read=1000), None), entry(run(LABEL_A, cache_read=1234567), None, OTHER)],
+    )
+    assert usage_row(out, "Total cache read tokens")[0] == "1235567"
