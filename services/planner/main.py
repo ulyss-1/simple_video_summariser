@@ -107,7 +107,10 @@ from services.planner.backfill import (
     BACKFILL_REQUEST_LIST_TIMEOUT_SEC,
     run_channel_backfill,
 )
-from services.planner.catalog_enrichment import run_catalog_enrichment
+from services.planner.catalog_enrichment import (
+    CATALOG_ENRICH_FETCH_TIMEOUT_SEC,
+    run_catalog_enrichment,
+)
 from services.planner.fallback import run_auto_caption_fallback_sweep
 from services.planner.poll import poll_channels
 from services.planner.reaper import reap_stale_jobs
@@ -348,7 +351,9 @@ def build_registry(settings: Settings, connect: Connect) -> list[Task]:
         # Built per run, like the backfill catalog: cheap, no I/O (#242).
         return run_catalog_enrichment(
             conn,
-            YouTubeMetadata(cookie_file=settings.YTDLP_COOKIE_FILE),
+            YouTubeMetadata(
+                timeout=CATALOG_ENRICH_FETCH_TIMEOUT_SEC, cookie_file=settings.YTDLP_COOKIE_FILE
+            ),
             batch_size=settings.CATALOG_ENRICH_BATCH_SIZE,
         )
 

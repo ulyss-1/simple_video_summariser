@@ -389,8 +389,10 @@ safety cap behind "Show all") and replaces the channel's stored snapshot with
 it; titles and canonical links are available at once, and `REMOVED` is treated
 as an empty listing (§8.3.1). The planner task `catalog_enrichment` (every
 `CATALOG_ENRICH_INTERVAL_SEC`, advisory lock `(LOCK_NAMESPACE, 10)`) claims at
-most `CATALOG_ENRICH_BATCH_SIZE` rows with `FOR UPDATE SKIP LOCKED`, fetches
-each through `MetadataSource` with no transaction open, and stores the
+most `CATALOG_ENRICH_BATCH_SIZE` rows, one at a time with `FOR UPDATE SKIP
+LOCKED` and none after a 90 s budget (the planner runs its tasks one after
+another, so a slow YouTube must not hold `reap` behind it), fetches each
+through `MetadataSource` (45 s timeout) with no transaction open, and stores the
 description and date. A failure is isolated to its row (`failed`, the exception
 class only) and is retried only by a person; a `running` row abandoned by a
 crashed planner is reclaimed after 15 minutes. `POST

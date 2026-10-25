@@ -44,6 +44,7 @@ interface Call {
   url: URL
   method: string
   body: Record<string, unknown> | null
+  contentType: string | null
 }
 
 function json(body: unknown, status = 200): Response {
@@ -99,7 +100,11 @@ function install(api: FakeApi) {
       const url = new URL(String(input), 'http://localhost')
       const method = (init.method ?? 'GET').toUpperCase()
       const body = typeof init.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : null
-      api.calls.push({ url, method, body })
+      const contentType = new Headers(init.headers).get('content-type')
+      api.calls.push({ url, method, body, contentType })
+      // The API answers 415 to a body that is not declared JSON (routes_write).
+      if (body !== null && contentType?.split(';')[0]?.trim().toLowerCase() !== 'application/json')
+        return Promise.resolve(json({ detail: 'Content-Type must be application/json' }, 415))
       return Promise.resolve(api.handle(url, method, body))
     }),
   )

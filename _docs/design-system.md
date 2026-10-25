@@ -336,7 +336,7 @@ changes; `--selected`, `--known` and `--failed` add an edge, never the only cue:
 - the selection lives in the route; a range change keeps an id only while it is
   still a new row of the loaded range.
 
-The zebra surface is `--color-surface-alt` in `web/index.css`.
+The stripes use the existing `--color-bg` and `--color-th-bg` tokens (light theme only, as the rest of the stylesheet is for v1).
 
 ---
 

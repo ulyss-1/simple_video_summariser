@@ -121,6 +121,28 @@ def test_a_tick_is_bounded_by_the_injected_batch_size(db: psycopg.Connection[Any
     assert _states(db)[C] == ("done", None)
 
 
+def test_a_tick_starts_no_new_row_once_the_time_budget_is_spent(
+    db: psycopg.Connection[Any],
+) -> None:
+    """Tasks share one thread, so a slow source must not hold the others behind it."""
+    _seed(db, A, B, C)
+    now = [0.0]
+    metadata = FakeMetadata({A: _meta(A), B: _meta(B), C: _meta(C)})
+    real_fetch = metadata.fetch
+
+    def slow_fetch(video_id: str) -> VideoMeta:
+        now[0] += 40.0  # each lookup takes 40 s of the injected clock
+        return real_fetch(video_id)
+
+    metadata.fetch = slow_fetch  # type: ignore[method-assign]
+
+    done = run_catalog_enrichment(db, metadata, batch_size=10, budget_sec=60, clock=lambda: now[0])
+
+    assert done == 2  # A at 0 s, B at 40 s; at 80 s the 60 s budget is spent
+    assert metadata.fetched == [A, B]
+    assert _states(db) == {A: ("done", None), B: ("done", None), C: ("pending", None)}
+
+
 def test_a_failure_is_isolated_to_its_row_and_stores_only_the_class(
     db: psycopg.Connection[Any],
 ) -> None:
@@ -239,6 +261,7 @@ def test_the_registered_task_uses_the_configured_cookie_file_and_batch_size(
     assert task.fn() == 2
 
     assert [i.kwargs["cookie_file"] for i in RecordingMetadata.instances] == [cookies]
+    assert [i.kwargs["timeout"] for i in RecordingMetadata.instances] == [45.0]
     assert _states(db) == {A: ("done", None), B: ("done", None), C: ("pending", None)}
 
 
