@@ -7,7 +7,8 @@ export function Shell() {
     <>
       <header>
         <nav aria-label="Main">
-          <Link to="/">Library</Link> <Link to="/search">Search</Link> <Link to="/ops">Ops</Link>{' '}
+          <Link to="/">Library</Link> <Link to="/search">Search</Link>{' '}
+          <Link to="/channels/add">Add channel</Link> <Link to="/ops">Ops</Link>{' '}
           {/* Plain anchor on purpose: API URLs belong to the server, not the router. */}
           <a href="/api/healthz">API health</a>
         </nav>

@@ -1,5 +1,7 @@
 import type { RouteObject } from 'react-router'
 import { PlayerProvider } from '../components/PlayerContext'
+import { AddChannel } from './AddChannel'
+import { ChannelCatalog } from './ChannelCatalog'
 import { Compare } from './Compare'
 import { Library } from './Library'
 import { NotFound } from './NotFound'
@@ -29,6 +31,8 @@ export const routes: RouteObject[] = [
           </PlayerProvider>
         ),
       },
+      { path: 'channels/add', element: <AddChannel /> },
+      { path: 'channels/:channelId/catalog', element: <ChannelCatalog /> },
       { path: 'search', element: <Search /> },
       { path: 'ops', element: <Ops /> },
       { path: '*', element: <NotFound /> },

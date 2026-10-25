@@ -29,6 +29,9 @@ describe('route table', () => {
     [`/videos/${ID}/compare`, ID],
     ['/search', 'Search'],
     ['/ops', 'Ops'],
+    ['/channels/add', 'Add channel'],
+    [`/channels/UC${'a'.repeat(22)}/catalog`, 'Channel catalog'],
+    ['/channels/not-a-channel/catalog', 'Channel not found'],
   ])('%s renders the view with heading %s', (path, name) => {
     expect(heading(render(path).html)).toContain(name)
   })
@@ -39,6 +42,8 @@ describe('route table', () => {
     [`/videos/${ID}/transcript/`, `/videos/${ID}/transcript`],
     [`/videos/${ID}/compare/`, `/videos/${ID}/compare`],
     ['/ops/', '/ops'],
+    ['/channels/add/', '/channels/add'],
+    [`/channels/UC${'a'.repeat(22)}/catalog/`, `/channels/UC${'a'.repeat(22)}/catalog`],
   ])('trailing slash %s renders the same view as %s', (withSlash, without) => {
     expect(heading(render(withSlash).html)).toBe(heading(render(without).html))
     expect(heading(render(withSlash).html)).not.toContain('Page not found')

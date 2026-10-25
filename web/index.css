@@ -27,6 +27,7 @@
   --color-warning-bg: #fffbeb;
   --color-danger-bg: #fef2f2;
   --color-th-bg: #f3f4f6;
+  --color-surface-alt: #eceef1;
 
   --space-xs: 0.25rem;
   --space-sm: 0.5rem;
@@ -338,4 +339,53 @@ a:focus {
 .pagination {
   display: flex;
   gap: var(--space-sm);
+}
+
+/* ---- Channel catalog (#242) ---- */
+
+/*
+ * Zebra rows alternate by the row's position in the catalog, not in the DOM,
+ * so the stripes stay put when the range changes. Selected, known and failed
+ * rows carry text and a native control as well; the stripe and the left edge
+ * are only reinforcement.
+ */
+.catalog-table .catalog-row--odd {
+  background: var(--color-bg);
+}
+
+.catalog-table .catalog-row--even {
+  background: var(--color-surface-alt);
+}
+
+.catalog-table .catalog-row--selected {
+  box-shadow: inset 4px 0 0 var(--color-focus);
+}
+
+.catalog-table .catalog-row--known {
+  color: var(--color-muted);
+}
+
+.catalog-table .catalog-row--failed {
+  box-shadow: inset 4px 0 0 var(--color-danger);
+}
+
+.catalog-table .catalog-title {
+  min-width: 10rem;
+  font-weight: 500;
+  text-align: left;
+}
+
+.catalog-table td input[type='checkbox'] {
+  width: 1.25rem;
+  height: 1.25rem;
+  margin: calc((var(--touch-target) - 1.25rem) / 2);
+}
+
+.catalog-description {
+  max-width: 28rem;
+  overflow-wrap: anywhere;
+}
+
+.catalog-table {
+  min-width: 48rem;
 }
