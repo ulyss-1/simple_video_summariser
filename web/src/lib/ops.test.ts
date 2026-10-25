@@ -41,7 +41,7 @@ describe('shared sets', () => {
     expect([kindsMatch, statesMatch, classesMatch]).toEqual([true, true, true])
     expect([...JOB_KINDS]).toEqual(['ingest', 'transcribe', 'analyze'])
     expect([...JOB_STATES]).toEqual(['pending', 'running', 'done', 'dead'])
-    expect(ERROR_CLASSES).toHaveLength(8)
+    expect(ERROR_CLASSES).toHaveLength(9)
     expect(NO_CLASS).toBe('none')
   })
 })

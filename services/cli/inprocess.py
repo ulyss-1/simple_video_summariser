@@ -14,7 +14,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
-from common.queue import Job
+from common.queue import HeartbeatResult, Job
 
 
 class InProcessQueue:
@@ -127,8 +127,8 @@ class InProcessQueue:
             # Done or failed, the job leaves the queue: nothing is retried.
             self._running.remove(job)
 
-    def heartbeat(self, job_id: int, worker: str) -> bool:
-        return True
+    def heartbeat(self, job_id: int, worker: str) -> HeartbeatResult:
+        return HeartbeatResult.HELD
 
     def reap_stale(self, older_than_sec: int | None = None) -> int:
         return 0

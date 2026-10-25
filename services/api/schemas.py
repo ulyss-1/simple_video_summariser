@@ -44,6 +44,7 @@ class ActiveJobOut(BaseModel):
     id: int
     kind: str
     state: str
+    cancel_requested_at: UtcDatetime | None = None
 
 
 class LastFailureOut(BaseModel):
@@ -375,7 +376,12 @@ def _video_fields(video: VideoSummary) -> dict[str, Any]:
         "status": video.status,
         "active_job": (
             None if active is None
-            else ActiveJobOut(id=active.id, kind=active.kind, state=active.state)
+            else ActiveJobOut(
+                id=active.id,
+                kind=active.kind,
+                state=active.state,
+                cancel_requested_at=active.cancel_requested_at,
+            )
         ),
         "last_failure": (
             None if failure is None
@@ -480,6 +486,7 @@ class JobOut(BaseModel):
     finished_at: UtcDatetime | None
     created_at: UtcDatetime
     progress: ProgressOut | None
+    cancel_requested_at: UtcDatetime | None = None
 
 
 class JobListOut(BaseModel):
@@ -505,6 +512,7 @@ def job_out(row: JobRow, history: Sequence[float] | None = None) -> JobOut:
         finished_at=row.finished_at,
         created_at=row.created_at,
         progress=progress_out(row, history),
+        cancel_requested_at=row.cancel_requested_at,
     )
 
 

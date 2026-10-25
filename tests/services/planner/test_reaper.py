@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from common.config import Settings
-from common.queue import Job, JobQueue
+from common.queue import HeartbeatResult, Job, JobQueue
 from services.planner.reaper import reap_stale_jobs
 
 
@@ -59,7 +59,7 @@ class FakeQueue:
     ) -> AbstractContextManager[Job | None]:
         raise AssertionError("the reaper must not claim")
 
-    def heartbeat(self, job_id: int, worker: str) -> bool:
+    def heartbeat(self, job_id: int, worker: str) -> HeartbeatResult:
         raise AssertionError("the reaper must not heartbeat")
 
     def reap_stale(self, older_than_sec: int | None = None) -> int:

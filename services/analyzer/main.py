@@ -80,7 +80,13 @@ from common.db import connect as default_connect
 from common.errors import BugError, Defer
 from common.logging import configure_logging
 from common.models import OrphanBatchCanceller
-from common.queue import Job, JobQueue, PostgresQueue, analyze_dedupe_key
+from common.queue import (
+    HeartbeatResult,
+    Job,
+    JobQueue,
+    PostgresQueue,
+    analyze_dedupe_key,
+)
 from common.shutdown import SignalLatch
 from common.worker import JobContext, Worker
 from services.analyzer import orphans
@@ -192,7 +198,7 @@ class _LazyQueue:
     def handoff(self, *args: Any, **kwargs: Any) -> int | None:
         raise NotImplementedError
 
-    def heartbeat(self, job_id: int, worker: str) -> bool:
+    def heartbeat(self, job_id: int, worker: str) -> HeartbeatResult:
         raise NotImplementedError
 
     def reap_stale(self, older_than_sec: int | None = None) -> int:

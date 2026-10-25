@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 import pytest
 
 from common.errors import Defer
-from common.queue import Job, JobQueue, PostgresQueue
+from common.queue import HeartbeatResult, Job, JobQueue, PostgresQueue
 from services.cli.inprocess import InProcessQueue
 
 VID = "iG9CE55wbtY"
@@ -126,7 +126,7 @@ def test_defer_propagates_and_the_job_is_not_put_back() -> None:
 
 def test_heartbeat_is_true_and_reap_stale_is_zero() -> None:
     queue = InProcessQueue()
-    assert queue.heartbeat(1, "cli") is True
+    assert queue.heartbeat(1, "cli") is HeartbeatResult.HELD
     assert queue.reap_stale() == 0
     assert queue.reap_stale(60) == 0
 

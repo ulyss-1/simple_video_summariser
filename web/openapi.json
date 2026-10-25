@@ -3,6 +3,18 @@
     "schemas": {
       "ActiveJobOut": {
         "properties": {
+          "cancel_requested_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancel Requested At"
+          },
           "id": {
             "title": "Id",
             "type": "integer"
@@ -734,6 +746,7 @@
                   "LLM_UNAVAILABLE",
                   "RESOURCE",
                   "BUG",
+                  "CANCELLED",
                   "none"
                 ],
                 "type": "string"
@@ -869,6 +882,13 @@
           "video_ids"
         ],
         "title": "CancelBackfillResponse",
+        "type": "object"
+      },
+      "CancelVideoRequest": {
+        "additionalProperties": false,
+        "description": "The body of ``POST /videos/{id}/cancel`` is ``{}``; anything else is a 422.",
+        "properties": {},
+        "title": "CancelVideoRequest",
         "type": "object"
       },
       "CatalogDiscoverRequest": {
@@ -1392,6 +1412,18 @@
           "attempts": {
             "title": "Attempts",
             "type": "integer"
+          },
+          "cancel_requested_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancel Requested At"
           },
           "created_at": {
             "format": "date-time",
@@ -2387,6 +2419,54 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "VideoCancelJob": {
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "cancelled",
+              "cancel_requested"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "kind",
+          "outcome"
+        ],
+        "title": "VideoCancelJob",
+        "type": "object"
+      },
+      "VideoCancelResponse": {
+        "properties": {
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/VideoCancelJob"
+            },
+            "title": "Jobs",
+            "type": "array"
+          },
+          "video_id": {
+            "title": "Video Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "video_id",
+          "jobs"
+        ],
+        "title": "VideoCancelResponse",
         "type": "object"
       },
       "VideoDetail": {
@@ -3445,6 +3525,7 @@
                     "LLM_UNAVAILABLE",
                     "RESOURCE",
                     "BUG",
+                    "CANCELLED",
                     "none"
                   ],
                   "type": "string"
@@ -3936,7 +4017,7 @@
             "description": "No such video"
           },
           "409": {
-            "description": "The video has a running job"
+            "description": "The video has a running job, or its running jobs are being cancelled"
           },
           "422": {
             "description": "Malformed video ID"
@@ -4045,6 +4126,65 @@
           }
         },
         "summary": "Get Video Analyses"
+      }
+    },
+    "/videos/{video_id}/cancel": {
+      "post": {
+        "description": "Stop all processing of one video (#237).\n\nPending jobs end at once as ``CANCELLED``. A running job is asked to stop and\nends at its next checkpoint (``cancel_requested``, status 202); until then\n``DELETE /videos/{id}`` answers 409. Repeating the request is safe. Nothing is\ndeleted. Resume a cancelled job with ``POST /ops/jobs/{id}/retry``.",
+        "operationId": "post_video_cancel_videos__video_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "video_id",
+            "required": true,
+            "schema": {
+              "title": "Video Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelVideoRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VideoCancelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VideoCancelResponse"
+                }
+              }
+            },
+            "description": "At least one running job was asked to stop"
+          },
+          "404": {
+            "description": "No such video"
+          },
+          "415": {
+            "description": "The body is not JSON"
+          },
+          "422": {
+            "description": "Malformed video ID"
+          }
+        },
+        "summary": "Post Video Cancel"
       }
     },
     "/videos/{video_id}/reanalyze": {

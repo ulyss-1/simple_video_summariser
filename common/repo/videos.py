@@ -376,7 +376,7 @@ _VIDEO_STATUS_SQL = """
         WHEN la.created_at IS NOT NULL THEN 'done'
         WHEN aj.id IS NOT NULL THEN 'processing'
         WHEN v.unavailable IS NOT NULL THEN 'unavailable'
-        WHEN nj.state = 'dead' THEN 'failed'
+        WHEN nj.state = 'dead' AND nj.error_class IS DISTINCT FROM 'CANCELLED' THEN 'failed'
         ELSE 'idle'
     END
 """
@@ -392,7 +392,7 @@ _VIDEO_STATUS_JOINS = """
         LIMIT 1
     ) la ON true
     LEFT JOIN LATERAL (
-        SELECT j.id, j.kind, j.state FROM jobs j
+        SELECT j.id, j.kind, j.state, j.cancel_requested_at FROM jobs j
         WHERE j.video_id = v.video_id AND j.state IN ('pending', 'running')
         ORDER BY CASE j.kind WHEN 'ingest' THEN 0 WHEN 'transcribe' THEN 1
                              WHEN 'analyze' THEN 2 ELSE 3 END,
@@ -400,13 +400,14 @@ _VIDEO_STATUS_JOINS = """
         LIMIT 1
     ) aj ON true
     LEFT JOIN LATERAL (
-        SELECT j.state FROM jobs j
+        SELECT j.state, j.error_class FROM jobs j
         WHERE j.video_id = v.video_id
         ORDER BY j.created_at DESC, j.id DESC LIMIT 1
     ) nj ON true
     LEFT JOIN LATERAL (
         SELECT j.id, j.kind, j.error_class, j.finished_at FROM jobs j
         WHERE j.video_id = v.video_id AND j.state = 'dead'
+          AND j.error_class IS DISTINCT FROM 'CANCELLED'
         ORDER BY j.created_at DESC, j.id DESC LIMIT 1
     ) lf ON true
 """
@@ -416,6 +417,7 @@ _VIDEO_READ = f"""
            v.published_at, v.duration_sec, v.origin, v.unavailable,
            {_VIDEO_STATUS_SQL} AS status,
            aj.id AS aj_id, aj.kind AS aj_kind, aj.state AS aj_state,
+           aj.cancel_requested_at AS aj_cancel_requested_at,
            lf.id AS lf_id, lf.kind AS lf_kind, lf.error_class AS lf_error_class,
            lf.finished_at AS lf_finished_at,
            la.created_at AS latest_analysis_at,
@@ -510,8 +512,8 @@ def get_video(
 def _summary(row: Sequence[Any]) -> VideoSummary:
     (
         video_id, title, channel_id, channel_title, published_at, duration_sec, origin,
-        unavailable, status, aj_id, aj_kind, aj_state, lf_id, lf_kind, lf_class,
-        lf_finished, latest_analysis_at, _discovered_at, has_transcript,
+        unavailable, status, aj_id, aj_kind, aj_state, aj_cancel_requested_at, lf_id, lf_kind,
+        lf_class, lf_finished, latest_analysis_at, _discovered_at, has_transcript,
     ) = row
     return VideoSummary(
         video_id=video_id,
@@ -523,7 +525,11 @@ def _summary(row: Sequence[Any]) -> VideoSummary:
         origin=origin,
         unavailable=unavailable,
         status=status,
-        active_job=None if aj_id is None else ActiveJob(int(aj_id), aj_kind, aj_state),
+        active_job=(
+            None
+            if aj_id is None
+            else ActiveJob(int(aj_id), aj_kind, aj_state, aj_cancel_requested_at)
+        ),
         last_failure=(
             None if lf_id is None else JobFailure(int(lf_id), lf_kind, lf_class, lf_finished)
         ),

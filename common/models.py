@@ -487,6 +487,8 @@ class ActiveJob:
     id: int
     kind: str
     state: str
+    #: When a user asked to cancel it (#237), else ``None``.
+    cancel_requested_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

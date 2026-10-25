@@ -15,6 +15,10 @@ class VideoRunning(Exception):
     pass
 
 
+class VideoCancelling(VideoRunning):
+    """Every running job has a cancel request (#237): delete once they have stopped."""
+
+
 @dataclass(frozen=True, slots=True)
 class DeletedVideo:
     media_paths: tuple[str, ...]
@@ -28,14 +32,19 @@ def delete_video(
 ) -> DeletedVideo:
     with conn.transaction():
         states = conn.execute(
-            "SELECT state FROM jobs WHERE video_id = %s ORDER BY id FOR UPDATE", (video_id,)
+            "SELECT state, cancel_requested_at FROM jobs WHERE video_id = %s ORDER BY id"
+            " FOR UPDATE",
+            (video_id,),
         ).fetchall()
         video = conn.execute(
             "SELECT 1 FROM videos WHERE video_id = %s FOR UPDATE", (video_id,)
         ).fetchone()
         if video is None:
             raise VideoNotFound(video_id)
-        if any(row[0] == "running" for row in states):
+        running = [row for row in states if row[0] == "running"]
+        if running:
+            if all(row[1] is not None for row in running):
+                raise VideoCancelling(video_id)
             raise VideoRunning(video_id)
         paths = tuple(
             str(row[0])

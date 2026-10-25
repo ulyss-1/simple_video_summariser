@@ -35,7 +35,7 @@ from common.errors import (
 # --- taxonomy -------------------------------------------------------------
 
 
-def test_error_class_has_exactly_the_eight_stored_values() -> None:
+def test_error_class_has_exactly_the_stored_values() -> None:
     assert [c.value for c in ErrorClass] == [
         "PERMANENT_SOURCE",
         "TRANSIENT_NETWORK",
@@ -45,6 +45,7 @@ def test_error_class_has_exactly_the_eight_stored_values() -> None:
         "LLM_UNAVAILABLE",
         "RESOURCE",
         "BUG",
+        "CANCELLED",
     ]
     # StrEnum: the member is the string jobs.error_class stores.
     assert ErrorClass.TOOL_FAILURE == "TOOL_FAILURE"
@@ -68,14 +69,18 @@ def _job_error_for(cls: ErrorClass) -> JobError:
             return ResourceError()
         case ErrorClass.BUG:
             return BugError()
+        case ErrorClass.CANCELLED:
+            raise AssertionError("CANCELLED is written by the queue; no exception carries it")
 
 
 def test_there_is_exactly_one_job_error_subclass_per_class() -> None:
     subclasses = JobError.__subclasses__()
-    assert sorted(s.error_class for s in subclasses) == sorted(ErrorClass)
+    assert sorted(s.error_class for s in subclasses) == sorted(
+        c for c in ErrorClass if c is not ErrorClass.CANCELLED
+    )
 
 
-@pytest.mark.parametrize("cls", list(ErrorClass))
+@pytest.mark.parametrize("cls", [c for c in ErrorClass if c is not ErrorClass.CANCELLED])
 def test_classify_returns_the_class_of_every_job_error(cls: ErrorClass) -> None:
     assert classify(_job_error_for(cls)) is cls
 
@@ -145,6 +150,10 @@ def test_rate_limited_error_rejects_a_negative_retry_after() -> None:
         ),
         (
             ErrorClass.BUG,
+            RetryPolicy(retry=False, max_attempts=None, min_backoff=None, alert=False),
+        ),
+        (
+            ErrorClass.CANCELLED,
             RetryPolicy(retry=False, max_attempts=None, min_backoff=None, alert=False),
         ),
     ],
@@ -426,3 +435,16 @@ def test_common_errors_imports_no_adapter_yt_dlp_or_pydantic() -> None:
     imported = _imported_modules(pathlib.Path(common.errors.__file__))
     top_level = {name.split(".")[0] for name in imported}
     assert not top_level & {"adapters", "services", "yt_dlp", "pydantic"}
+
+
+def test_classify_never_returns_cancelled() -> None:
+    samples: list[BaseException] = [
+        ValueError("x"),
+        TimeoutError(),
+        MemoryError(),
+        OSError(),
+        PermanentSourceError("removed"),
+        BugError(),
+        ToolFailureError(),
+    ]
+    assert all(classify(exc) is not ErrorClass.CANCELLED for exc in samples)

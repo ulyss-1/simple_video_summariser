@@ -51,7 +51,7 @@ import structlog
 from common.config import Settings, get_settings
 from common.errors import Cancelled, ToolFailureError
 from common.logging import bound_context
-from common.queue import Job, JobQueue
+from common.queue import HeartbeatResult, Job, JobQueue
 
 _log = structlog.get_logger(__name__)
 
@@ -477,8 +477,10 @@ class Worker:
         tick_lock = threading.Lock()
         handle_box: dict[str, TimerHandle] = {}
         captured_context = contextvars.copy_context()
+        cancel_logged = False
 
         def _tick() -> None:
+            nonlocal cancel_logged
             with tick_lock:
                 if stop_flag.is_set():
                     return
@@ -503,7 +505,7 @@ class Worker:
                     )
                 else:
                     try:
-                        ok = hb_queue.heartbeat(job.id, self._name)
+                        beat = hb_queue.heartbeat(job.id, self._name)
                     except Exception as exc:  # noqa: BLE001 - retried on the next tick
                         _log.error(
                             "worker.heartbeat_failed",
@@ -513,7 +515,7 @@ class Worker:
                         )
                         self._discard_heartbeat_queue()
                     else:
-                        if not ok:
+                        if beat is HeartbeatResult.LOST:
                             ctx._cancel()
                             _log.warning(
                                 "worker.heartbeat_reaped",
@@ -522,6 +524,18 @@ class Worker:
                             )
                             stop_flag.set()
                             return
+                        if beat is HeartbeatResult.CANCEL_REQUESTED:
+                            # A user cancelled the job (#237). Keep heartbeating until
+                            # the handler returns, so the reaper does not race a handler
+                            # that is winding down.
+                            ctx._cancel()
+                            if not cancel_logged:
+                                cancel_logged = True
+                                _log.info(
+                                    "worker.cancel_requested",
+                                    worker=self._name,
+                                    job_id=job.id,
+                                )
                 if not stop_flag.is_set():
                     handle_box["handle"] = self._timer_factory(self._heartbeat_sec, _tick_in_context)
 
