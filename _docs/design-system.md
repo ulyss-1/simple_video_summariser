@@ -311,6 +311,33 @@ Search uses `TimestampLink` instead (opens the detail view). The embed host is
   headings and buttons ("Clear all filters", "Swap A and B"); short status
   lines have no full stop, sentences do.
 
+### 7.11 Channel catalog (#242)
+
+`/channels/add` (`AddChannel`) is a one-field form like 7.4 with fixed error
+text per status; success opens `/channels/:channelId/catalog` (`ChannelCatalog`).
+That page discovers the newest 50 uploads on arrival and offers four range
+buttons (`aria-pressed`): Show last 50, Show last 200, Show last 500, Show all
+(5,000 at most). Rows are `<tr class="catalog-row catalog-row--even|odd">` by the
+row's position in the loaded list, so the stripes stay put when the range
+changes; `--selected`, `--known` and `--failed` add an edge, never the only cue:
+
+- every new row has a native checkbox (`aria-label="Select {title}"`); a known row
+  has the same checkbox disabled and the text "Already known · {status}";
+- description and date show "Loading metadata…" until the planner fills them
+  (the page polls every 5 s meanwhile), or "Metadata unavailable" and a per-row
+  Retry button;
+- a description over 240 characters is cut with a "Show more" `aria-expanded`
+  button;
+- the bulk action follows 7.7: "Process N selected videos" opens an inline
+  sentence ("... Processing may use existing subtitles or download audio and
+  transcribe when needed.") with Confirm processing and Cancel; afterwards one
+  `<li>` per submitted id ("Queued: {id}", "Already known: {id}", "Rejected: {id}
+  — not in this channel catalog") and an `aria-live` summary;
+- the selection lives in the route; a range change keeps an id only while it is
+  still a new row of the loaded range.
+
+The zebra surface is `--color-surface-alt` in `web/index.css`.
+
 ---
 
 ## 8. Accessibility patterns in use
