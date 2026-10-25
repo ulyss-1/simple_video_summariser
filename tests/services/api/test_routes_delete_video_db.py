@@ -84,7 +84,14 @@ def test_running_job_blocks_delete_without_changes(
     api: TestClient, db: psycopg.Connection[Any]
 ) -> None:
     seed_video(db, state="running")
+    db.execute(
+        "INSERT INTO llm_batches (job_id, step_key, batch_id, request_sha256)"
+        " SELECT id, 'x', 'b', 'h' FROM jobs WHERE video_id = %s",
+        (VID,),
+    )
     before = db.execute("SELECT * FROM videos WHERE video_id = %s", (VID,)).fetchone()
+    batches_before = db.execute("SELECT * FROM llm_batches").fetchall()
+    assert len(batches_before) == 1
 
     response = api.delete(f"/videos/{VID}")
 
@@ -93,9 +100,10 @@ def test_running_job_blocks_delete_without_changes(
     assert db.execute("SELECT * FROM videos WHERE video_id = %s", (VID,)).fetchone() == before
     assert db.execute("SELECT state FROM jobs WHERE video_id = %s", (VID,)).fetchall() == [("running",)]
     assert db.execute("SELECT count(*) FROM deleted_videos").fetchone() == (0,)
+    assert db.execute("SELECT * FROM llm_batches").fetchall() == batches_before
 
 
-def test_delete_removes_the_tree_jobs_and_batches_but_preserves_other_rows(
+def test_delete_removes_the_tree_and_jobs_but_keeps_the_batch_row_for_the_orphan_pass_and_other_rows(
     api: TestClient, db: psycopg.Connection[Any], tmp_path: Path
 ) -> None:
     seed_video(db)
@@ -134,6 +142,8 @@ def test_delete_removes_the_tree_jobs_and_batches_but_preserves_other_rows(
         (job_id,),
     )
     channel_before = db.execute("SELECT * FROM channels WHERE channel_id = 'UCkeep'").fetchone()
+    batch_before = db.execute("SELECT step_key, batch_id, request_sha256, submitted_at FROM llm_batches").fetchall()
+    assert len(batch_before) == 1
 
     response = api.delete(f"/videos/{VID}")
 
@@ -141,10 +151,14 @@ def test_delete_removes_the_tree_jobs_and_batches_but_preserves_other_rows(
     assert response.content == b""
     assert not media.exists()
     assert db.execute("SELECT video_id FROM deleted_videos").fetchall() == [(VID,)]
-    for table in ("videos", "transcripts", "transcript_chunks", "analyses", "topics", "claims", "quotes", "media", "jobs", "llm_batches"):
+    for table in ("videos", "transcripts", "transcript_chunks", "analyses", "topics", "claims", "quotes", "media", "jobs"):
         assert db.execute(f"SELECT count(*) FROM {table} WHERE " + ({
             "videos": "video_id = %s", "transcripts": "video_id = %s", "analyses": "video_id = %s", "media": "video_id = %s", "jobs": "video_id = %s"
         }.get(table, "1 = 1")), (VID,) if table in {"videos", "transcripts", "analyses", "media", "jobs"} else ()).fetchone() == (0,)
+    # The batch may still be running at Anthropic: its row stays, job_id NULL, for the analyzer's pass (#251).
+    assert db.execute("SELECT job_id, step_key, batch_id, request_sha256, submitted_at FROM llm_batches").fetchall() == [
+        (None, *batch_before[0])
+    ]
     assert db.execute("SELECT video_id FROM videos WHERE video_id = %s", (OTHER,)).fetchone() == (OTHER,)
     assert db.execute("SELECT * FROM channels WHERE channel_id = 'UCkeep'").fetchone() == channel_before
     assert api.get(f"/videos/{VID}").status_code == 404

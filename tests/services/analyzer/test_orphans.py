@@ -298,3 +298,55 @@ def test_the_key_appears_in_no_log_record_on_the_retry_later_path(
     assert KEY not in json.dumps(logs, default=str)
     for record in caplog.records:
         assert KEY not in json.dumps(record.__dict__, default=str)
+
+
+# --- rows whose job was deleted: job_id is None (issue #251) --------------------------
+
+
+def null_row(n: int = 1, *, expired: bool = False) -> OrphanBatch:
+    return OrphanBatch(job_id=None, step_key="roster", batch_id=f"msgbatch_{n}", expired=expired)
+
+
+@pytest.mark.parametrize("outcome", ["cancelled", "not_cancellable"])
+def test_a_null_job_row_is_cancelled_once_and_deleted(outcome: OrphanOutcome) -> None:
+    store, canceller = FakeStore(null_row(1)), FakeCanceller(outcome)
+
+    with capture_logs() as logs:
+        counts = handle(store, canceller)
+
+    assert canceller.cancelled == ["msgbatch_1"]
+    assert store.rows == []
+    assert (counts.cancelled, counts.not_cancellable) == ((1, 0) if outcome == "cancelled" else (0, 1))
+    assert logs[0]["job_id"] is None
+
+
+def test_a_null_job_row_is_kept_on_retry_later() -> None:
+    store, canceller = FakeStore(null_row(1)), FakeCanceller("retry_later")
+
+    counts = handle(store, canceller)
+
+    assert canceller.cancelled == ["msgbatch_1"]
+    assert len(store.rows) == 1
+    assert counts.retry_later == 1
+
+
+def test_an_expired_null_job_row_is_deleted_without_a_cancel() -> None:
+    store, canceller = FakeStore(null_row(1, expired=True)), FakeCanceller()
+
+    counts = handle(store, canceller)
+
+    assert canceller.cancelled == []
+    assert store.rows == []
+    assert counts.expired == 1
+
+
+def test_with_limit_two_the_third_null_or_dead_row_is_not_touched() -> None:
+    third = null_row(3)
+    store = FakeStore(null_row(1), row(2), third)
+    canceller = FakeCanceller()
+
+    counts = handle(store, canceller, limit=2)
+
+    assert canceller.cancelled == ["msgbatch_1", "msgbatch_2"]
+    assert store.rows == [third]
+    assert counts.total == 2

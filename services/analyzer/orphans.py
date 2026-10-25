@@ -6,7 +6,8 @@ side. ``ANTHROPIC_API_KEY`` is on the analyzer only (architecture.md D6), so
 the analyzer is the one process that can cancel it: a daemon thread runs one
 pass at startup and then one every ``interval_sec``.
 
-A pass lists up to ``limit`` rows of ``dead`` / ``done`` jobs and, for each:
+A pass lists up to ``limit`` rows of ``dead`` / ``done`` jobs and rows whose
+job was deleted (``job_id`` NULL: ``DELETE /videos/{id}``, #251) and, for each:
 
 * older than ``expired_after``: delete the row, no API call (Anthropic has
   expired the batch by then);
