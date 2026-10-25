@@ -287,7 +287,7 @@ describe('the catalog', () => {
   it('derives the link from the id, never from the server url', async () => {
     const api = new FakeApi()
     api.all = [item(1, { url: 'https://evil.example/x' })]
-    const { } = await mountCatalog(api)
+    await mountCatalog(api)
     expect(screen.getByRole('link', { name: 'Title 1' }).getAttribute('href')).toBe(
       `https://www.youtube.com/watch?v=${vid(1)}`,
     )
