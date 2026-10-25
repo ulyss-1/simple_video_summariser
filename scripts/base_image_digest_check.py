@@ -1,13 +1,27 @@
-"""Compare digest-pinned base images with what Docker Hub serves today (#241, #249).
+"""Compare digest-pinned base images with what Docker Hub serves today (#241, #249, #250).
 
 Run by the scheduled workflow ``.github/workflows/base-image-digest-check.yml``.
-Usage: ``base_image_digest_check.py <file> [<file> ...]``. A path ending in
+Usage: ``base_image_digest_check.py <file> [<file> ...] [--stable-line <repository>]...``. A path ending in
 ``.yml`` or ``.yaml`` is read as a Compose file (line-based, no YAML parser: the
 ``!reset`` / ``!override`` tags of the overlay defeat a plain loader), any other
 path as a Dockerfile. Every ``FROM`` or ``image:`` that carries both a tag and
 an ``@sha256:`` digest is checked; one without a digest is skipped. Every file
 is parsed before the registry is contacted, and each distinct (repository, tag)
 is looked up once. Nothing about the images is hard-coded here.
+
+``--stable-line <repository>`` (the name exactly as written in the ``FROM``;
+repeatable) opts that repository in to a second, independent check: is the
+pinned release line still the newest stable one, and does upstream still
+publish it? Once a line reaches end of life its tag stops moving (so the digest
+check goes quiet) and is eventually deleted, which a digest lookup treats as an
+outage. The stable-line rule: a pinned tag of the form
+``<major>.<minor>-<variant>`` is a stable line when ``<minor>`` is even.
+Another tag is a newer stable line when it has the same ``<variant>``, an even
+minor, and a larger ``(major, minor)`` compared numerically. So ``1.32`` and
+``2.0`` are newer than ``1.30``, ``1.4`` is not, and ``1.31`` and ``1.33`` are
+never counted. The tag list is read from ``/v2/<repository>/tags/list``,
+following ``Link: rel="next"`` pages up to a bound. Without the flag nothing
+below changes.
 
 It only reports; it never edits a file (a human bumps the pin, as with
 yt-dlp, #68). Standard library only.
@@ -18,18 +32,25 @@ Exit codes:
 - ``1`` and one GitHub Actions ``::error`` line per stale reference, naming
   the file, the line, the pinned and upstream digest and the replacement
   reference (a ``FROM`` reference, or the full Compose ``image:`` value).
+  An opted-in repository whose line is superseded gives exit ``1`` and one
+  ``::error title=Base image stable line superseded`` line; one whose pinned
+  tag upstream no longer lists gives ``::error title=Base image line withdrawn
+  upstream``. The two checks are independent of each other.
 - ``0`` and one stderr line per reference whose lookup failed: the registry
-  could not be reached or answered with something unusable; the check runs
-  again next time. A real staleness elsewhere still gives exit ``1``.
+  could not be reached or answered with something unusable (the tag list
+  included); the check runs again next time. A real staleness elsewhere still gives exit ``1``.
 - ``2``: a repository fault (no file given, file unreadable, no pin,
   malformed pin, an ``ARG`` or ``${}`` in the reference, a registry other than
-  Docker Hub). The registry is never contacted.
+  Docker Hub; for ``--stable-line``: a repository without a pin, a pinned tag
+  that is not ``<major>.<minor>-<variant>``, an odd minor, a digit in the
+  variant). The registry is never contacted.
 
 The network is one injectable seam (``Fetch``), so tests make no network call.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import sys
@@ -39,12 +60,14 @@ import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import NoReturn
 
 TOKEN_URL = "https://auth.docker.io/token"
 TOKEN_SERVICE = "registry.docker.io"
 REGISTRY_URL = "https://registry-1.docker.io"
 TIMEOUT_SEC = 20.0
 MAX_BODY_BYTES = 1024 * 1024
+MAX_TAG_PAGES = 10
 #: The tag is a multi-platform index; without these Docker Hub may answer with
 #: a single-platform manifest whose digest can never equal the pin.
 MANIFEST_ACCEPT = (
@@ -172,10 +195,9 @@ def _header(headers: Mapping[str, str], name: str) -> str | None:
     return None
 
 
-def upstream_digest(ref: Reference, fetch: Fetch) -> str:
-    """The digest the registry serves for the tag; raises on any outage."""
+def _pull_token(name: str, fetch: Fetch) -> str:
     query = urllib.parse.urlencode(
-        {"service": TOKEN_SERVICE, "scope": f"repository:{ref.name}:pull"}, safe=":/"
+        {"service": TOKEN_SERVICE, "scope": f"repository:{name}:pull"}, safe=":/"
     )
     status, _, body = fetch("GET", f"{TOKEN_URL}?{query}", {}, TIMEOUT_SEC)
     if status != 200:
@@ -186,6 +208,12 @@ def upstream_digest(ref: Reference, fetch: Fetch) -> str:
         raise RuntimeError("token reply is not the expected JSON") from None
     if not isinstance(token, str) or not token:
         raise TypeError("token reply has no token string")
+    return token
+
+
+def upstream_digest(ref: Reference, fetch: Fetch) -> str:
+    """The digest the registry serves for the tag; raises on any outage."""
+    token = _pull_token(ref.name, fetch)
     status, headers, _ = fetch(
         "HEAD",
         f"{REGISTRY_URL}/v2/{ref.name}/manifests/{ref.tag}",
@@ -200,22 +228,142 @@ def upstream_digest(ref: Reference, fetch: Fetch) -> str:
     return digest
 
 
-def main(argv: Sequence[str] | None = None, *, fetch: Fetch = urllib_fetch) -> int:
-    args = list(sys.argv[1:] if argv is None else argv)
-    if not args:
-        print(
-            "base-image-digest-check: usage: base_image_digest_check.py <file> [<file> ...]",
-            file=sys.stderr,
+_LINE_TAG = re.compile(r"(\d+)\.(\d+)-(.+)")
+_LINK_NEXT = re.compile(r"""<([^>]*)>\s*;\s*rel=(?:"next"|next(?![\w-]))""")
+
+
+@dataclass(frozen=True)
+class StableLine:
+    """A pinned reference of an opted-in repository, split into its line parts."""
+
+    ref: Reference
+    major: int
+    minor: int
+    variant: str
+
+
+def _split_line_tag(tag: str) -> tuple[int, int, str] | None:
+    match = _LINE_TAG.fullmatch(tag)
+    if match is None:
+        return None
+    return int(match.group(1)), int(match.group(2)), match.group(3)
+
+
+def stable_line_pins(refs: Sequence[Reference], repositories: Sequence[str]) -> list[StableLine]:
+    """The opted-in references, validated; raises ``RepositoryFault``."""
+    pins: list[StableLine] = []
+    for repository in repositories:
+        matching = [r for r in refs if r.written == repository]
+        if not matching:
+            raise RepositoryFault(f"--stable-line {repository}: no digest-pinned FROM names it")
+        for ref in matching:
+            parts = _split_line_tag(ref.tag)
+            if parts is None:
+                raise RepositoryFault(
+                    f"{ref.written}:{ref.tag} is not a <major>.<minor>-<variant> tag; "
+                    "pin a stable line such as 1.30-alpine"
+                )
+            major, minor, variant = parts
+            if minor % 2:
+                raise RepositoryFault(
+                    f"{ref.written}:{ref.tag} is a mainline (odd minor) tag, not a stable line"
+                )
+            if any(c.isdigit() for c in variant):
+                raise RepositoryFault(
+                    f"{ref.written}:{ref.tag} has a digit in the variant {variant!r}; "
+                    "the newer line's variant would never match it"
+                )
+            if not any(p.ref.name == ref.name and p.ref.tag == ref.tag for p in pins):
+                pins.append(StableLine(ref, major, minor, variant))
+    return pins
+
+
+def newest_stable_line(pin: StableLine, tags: Sequence[str]) -> str | None:
+    """The newest tag that is a stable line newer than the pinned one, if any."""
+    best = (pin.major, pin.minor)
+    found: str | None = None
+    for tag in tags:
+        parts = _split_line_tag(tag)
+        if parts is None or parts[2] != pin.variant or parts[1] % 2:
+            continue
+        if parts[:2] > best:
+            best, found = parts[:2], tag
+    return found
+
+
+def upstream_tags(name: str, fetch: Fetch, max_pages: int = MAX_TAG_PAGES) -> list[str]:
+    """The repository's complete tag list; raises on any outage or unusable reply."""
+    token = _pull_token(name, fetch)
+    prefix = f"/v2/{name}/tags/list"
+    path = prefix
+    tags: list[str] = []
+    for _ in range(max_pages):
+        status, headers, body = fetch(
+            "GET", f"{REGISTRY_URL}{path}", {"Authorization": f"Bearer {token}"}, TIMEOUT_SEC
         )
-        return 2
+        if status != 200:
+            raise RuntimeError(f"tag list request answered HTTP {status}")
+        if len(body) > MAX_BODY_BYTES:
+            raise RuntimeError("tag list reply is too large")
+        try:
+            page = json.loads(body)["tags"]
+        except (ValueError, KeyError, TypeError, RecursionError):
+            raise RuntimeError("tag list reply is not the expected JSON") from None
+        if not isinstance(page, list) or not page or not all(isinstance(t, str) for t in page):
+            raise RuntimeError("tag list reply has no usable tags")
+        tags.extend(page)
+        link = _header(headers, "Link")
+        match = _LINK_NEXT.search(link) if link else None
+        if match is None:
+            return tags
+        path = match.group(1)
+        if not path.startswith(prefix) or path[len(prefix) :][:1] not in ("", "?"):
+            raise RuntimeError(f"tag list Link {path!r} does not stay on {prefix}")
+    raise RuntimeError(f"tag list has more than {max_pages} pages")
+
+
+def _usage_error(message: str) -> int:
+    print(
+        "base-image-digest-check: usage: base_image_digest_check.py <file> [<file> ...] "
+        f"[--stable-line <repository>]... ({message})",
+        file=sys.stderr,
+    )
+    return 2
+
+
+class _Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        raise RepositoryFault(message)
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    fetch: Fetch = urllib_fetch,
+    max_pages: int = MAX_TAG_PAGES,
+) -> int:
+    parser = _Parser(prog="base_image_digest_check.py", add_help=False)
+    parser.add_argument("files", nargs="*")
+    parser.add_argument("--stable-line", action="append", default=[], dest="stable_lines")
+    try:
+        parsed = parser.parse_intermixed_args(sys.argv[1:] if argv is None else list(argv))
+    except RepositoryFault as err:
+        return _usage_error(str(err))
+    if not parsed.files:
+        return _usage_error("no file given")
     found: list[tuple[Path, Reference]] = []
-    for arg in args:  # every file is parsed before the registry is contacted
+    for arg in parsed.files:  # every file is parsed before the registry is contacted
         path = Path(arg)
         try:
             found.extend((path, ref) for ref in _read_pins(path))
         except (RepositoryFault, OSError, UnicodeDecodeError) as err:
             print(f"base-image-digest-check: cannot read the pins from {path}: {err}", file=sys.stderr)
             return 2
+    try:
+        line_pins = stable_line_pins([ref for _, ref in found], parsed.stable_lines)
+    except RepositoryFault as err:
+        print(f"base-image-digest-check: {err}", file=sys.stderr)
+        return 2
     lookups: dict[tuple[str, str], str | Exception] = {}
     stale = False
     for path, ref in found:
@@ -240,7 +388,43 @@ def main(argv: Sequence[str] | None = None, *, fetch: Fetch = urllib_fetch) -> i
             f"{ref.written}:{ref.tag} is pinned to {ref.digest} but upstream is {latest}. "
             f"Replace the reference with {replacement} and redeploy (architecture.md 11.3)."
         )
+    for pin in line_pins:
+        stale = _check_line(pin, fetch, max_pages) or stale
     return 1 if stale else 0
+
+
+def _check_line(pin: StableLine, fetch: Fetch, max_pages: int) -> bool:
+    """Report one opted-in reference; True when it is red."""
+    ref = pin.ref
+    try:
+        tags = upstream_tags(ref.name, fetch, max_pages)
+    except Exception as err:  # noqa: BLE001 - any outage must end quietly with exit 0
+        print(
+            f"base-image-digest-check: Docker Hub tag list unavailable for {ref.name} "
+            f"({type(err).__name__}: {err}); will retry on the next run",
+            file=sys.stderr,
+        )
+        return False
+    newest = newest_stable_line(pin, tags)
+    move = (
+        f"Move the FROM to {ref.written}:{newest} with a fresh digest "
+        f"(docker buildx imagetools inspect {ref.written}:{newest}), following architecture.md 11.3."
+        if newest
+        else ""
+    )
+    if ref.tag not in tags:
+        print(
+            "::error title=Base image line withdrawn upstream::upstream no longer publishes "
+            f"{ref.written}:{ref.tag}." + (f" The newest stable line is {ref.written}:{newest}. {move}" if newest else "")
+        )
+        return True
+    if newest:
+        print(
+            f"::error title=Base image stable line superseded::{ref.written}:{ref.tag} is pinned "
+            f"but upstream publishes the newer stable line {ref.written}:{newest}. {move}"
+        )
+        return True
+    return False
 
 
 if __name__ == "__main__":
