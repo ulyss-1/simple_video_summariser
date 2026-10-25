@@ -70,6 +70,34 @@ message, or treat it as dead and check the tree for damage before resuming it.
 Beware `pgrep -f`: it matches the polling shell's own command line, so
 `until ! pgrep -f X; do sleep 5; done` waits on itself forever. Kill by PID.
 
+Reporting issues
+
+Whenever the owner asks about issues (status, backlog, what is left, what to work
+on next), answer in this shape, in this order, from live data
+(`gh issue list --state all --limit 500 --json number,title,state,labels,milestone`;
+run `git fetch` first and say so if master moved):
+
+1. Totals table: total, closed, open, and of the open ones how many need an
+   owner decision (`needs-decision`) and how many are groomed and ready
+2. Area table: one row per label (deployment, services, frontend, api,
+   adapters, enhancement, phase-0, foundation) with open, closed and total
+   columns. Labels overlap, so say the rows do not sum to the total
+3. Batches of the open issues, each a bold heading with its issue count and
+   a one-line reason it is grouped, then the issue numbers with a few words
+   each. Group by what unblocks the work, not by label:
+   - ready to work, no decision needed (the groomed ones)
+   - small or nearly done (flag an issue whose work is already on master and
+     only needs verifying and closing)
+   - feature sets that need ordering (name which comes first)
+   - owner decisions
+   - needs a real deploy host or production data
+   - platform or image decisions
+   - Phase 0
+   Drop a group that is empty and add one when a new theme appears
+4. A suggested order, and the one question the owner must answer to start
+
+Keep it to tables and short lists. Do not pad it with per-issue detail.
+
 Lifecycle
 
 1. Pick the next open issue from the backlog
