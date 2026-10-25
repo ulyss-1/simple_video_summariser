@@ -503,3 +503,32 @@ def test_date_filters_do_not_depend_on_the_session_time_zone(
 
     assert list_videos(conn, published_after=datetime(2026, 9, 1, tzinfo=UTC)).total == 1
     assert list_videos(conn, published_before=tokyo_midnight).total == 0
+
+
+def test_a_cancelled_job_is_idle_not_failed_and_never_the_last_failure(
+    conn: psycopg.Connection[Any],
+) -> None:
+    """A user's cancel (#237) is not a failure: ``idle`` without an analysis, ``done`` with one."""
+    seed.video(conn, "cn_idle00001")
+    seed.job(conn, "cn_idle00001", "ingest", "dead", created=1, error_class="CANCELLED")
+    seed.video(conn, "cn_done00001")
+    transcript_id = seed.transcript(conn, "cn_done00001")
+    seed.analysis(conn, "cn_done00001", transcript_id, created=1)
+    seed.job(conn, "cn_done00001", "analyze", "dead", created=2, error_class="CANCELLED")
+    seed.video(conn, "cn_fail00001")
+    seed.job(conn, "cn_fail00001", "ingest", "dead", created=1, error_class="BUG")
+    seed.job(conn, "cn_fail00001", "transcribe", "dead", created=2, error_class="CANCELLED")
+
+    statuses = {v.video_id: v.status for v in list_videos(conn, limit=200).items}
+    failed = {v.video_id for v in list_videos(conn, status="failed", limit=200).items}
+
+    assert statuses["cn_idle00001"] == "idle"
+    assert statuses["cn_done00001"] == "done"
+    assert "cn_idle00001" not in failed and "cn_done00001" not in failed
+    for video_id in ("cn_idle00001", "cn_done00001"):
+        detail = get_video(conn, video_id)
+        assert detail is not None
+        assert detail.last_failure is None
+    older = get_video(conn, "cn_fail00001")
+    assert older is not None
+    assert older.last_failure is not None and older.last_failure.error_class == "BUG"

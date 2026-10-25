@@ -75,3 +75,46 @@ def test_a_dead_lettered_jobs_batch_is_cancelled_and_a_pending_jobs_is_not(
         ("POST", f"{API}/v1/messages/batches/{BATCH_ID}/cancel")
     ]
     assert batch_rows(conn) == [(pending_id, OTHER_BATCH)]
+
+
+def test_the_pass_cancels_the_batch_of_a_cancelled_job_but_not_of_a_running_one_with_a_request(
+    conn: psycopg.Connection[Any], head_dsn: str
+) -> None:
+    """#237: a ``CANCELLED`` job's batch is cancelled by the orphan pass; a running one waits."""
+    for video in (DEAD_VIDEO, PENDING_VIDEO):
+        conn.execute("INSERT INTO videos (video_id) VALUES (%s)", (video,))
+    ids = []
+    for video, state, error_class in (
+        (DEAD_VIDEO, "dead", "CANCELLED"),
+        (PENDING_VIDEO, "running", None),
+    ):
+        row = conn.execute(
+            "INSERT INTO jobs (video_id, kind, dedupe_key, state, error_class, locked_by, "
+            "locked_at, finished_at, cancel_requested_at) VALUES (%s, 'analyze', 'v1:anthropic', "
+            "%s, %s, CASE WHEN %s = 'running' THEN 'w1' END, "
+            "CASE WHEN %s = 'running' THEN now() END, "
+            "CASE WHEN %s = 'dead' THEN now() END, now()) RETURNING id",
+            (video, state, error_class, state, state, state),
+        ).fetchone()
+        assert row is not None
+        ids.append(int(row[0]))
+    insert_checkpoint(conn, ids[0], "roster", BATCH_ID, "sha")
+    insert_checkpoint(conn, ids[1], "roster", OTHER_BATCH, "sha")
+    conn.commit()
+
+    transport = FakeTransport(fixture_response("batch_in_progress.json"))
+    canceller = AnthropicSummarizer(settings(), batch=True, transport=transport)
+
+    counts = run_pass(
+        lambda: psycopg.connect(head_dsn),
+        canceller,
+        limit=5,
+        expired_after=ORPHAN_EXPIRED_AFTER,
+        stop=lambda: False,
+    )
+
+    assert counts is not None and counts.cancelled == 1
+    assert [(r.method, r.url) for r in transport.requests] == [
+        ("POST", f"{API}/v1/messages/batches/{BATCH_ID}/cancel")
+    ]
+    assert batch_rows(conn) == [(ids[1], OTHER_BATCH)]

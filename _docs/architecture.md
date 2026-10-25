@@ -255,7 +255,7 @@ class JobQueue(Protocol):
                 run_after: datetime | None = None) -> int | None: ...
     def claim(self, kinds: Sequence[str], *, worker: str,
               dedupe_key: str | None = None) -> AbstractContextManager[Job | None]: ...
-    def heartbeat(self, job_id: int, worker: str) -> bool: ...
+    def heartbeat(self, job_id: int, worker: str) -> HeartbeatResult: ...
     def reap_stale(self, older_than_sec: int | None = None) -> int: ...
     def fail_job(self, job: Job, worker: str, exc: BaseException) -> None: ...
     def force_pending(self, job_id: int, priority: int) -> bool: ...
@@ -271,6 +271,14 @@ sweeps and lifecycle) stay off it.
 
 - On the port: `enqueue`, `claim`, `heartbeat`, `reap_stale`, `force_pending`,
   `raise_priority`, `fail_job`.
+- `heartbeat` answers `HELD` (the worker still holds the job), `CANCEL_REQUESTED`
+  (it holds it and a user asked it to stop, #237) or `LOST` (the reaper or a
+  newer claim took it). On `CANCEL_REQUESTED` the worker sets `ctx.cancelled`
+  and keeps heartbeating until the handler returns, so the reaper does not race
+  a handler that is winding down. `handoff`, which enqueues a successor, refuses
+  atomically when the parent job has a cancel request: it inserts nothing and
+  raises `Cancelled`, so a cancelled `ingest` never leaves a `transcribe` or
+  `analyze` job. `InProcessQueue` (CLI) has no cancel and keeps its behaviour.
 - `fail_job` is on the port: the worker's runtime-limit watchdog (#66) calls it
   through a `JobQueue` reference, so the former `getattr` fallback is gone.
   `InProcessQueue.fail_job` is a no-op, matching its no-retry contract.
@@ -297,7 +305,8 @@ Anthropic adapter: `cancel_orphan_batch(batch_id)` sends one cancel and returns
 `"cancelled"`, `"not_cancellable"` or `"retry_later"` (401, 403, 429, 5xx or a
 transport failure); it never raises and touches no per-job state, so another
 thread may call it while a job runs. A job that ends `dead` (non-retryable
-error, max attempts, the reaper, the watchdog, a superseded job) or `done`
+error, max attempts, the reaper, the watchdog, a superseded job, a user's
+cancel, #237) or `done`
 without `clear()` can leave a row in `llm_batches` whose batch keeps running
 and billing. The analyzer, the only service holding `ANTHROPIC_API_KEY` (D6),
 runs the orphan pass (`services/analyzer/orphans.py`) in a daemon thread
@@ -444,6 +453,21 @@ cleared by the catalog.
        └────────┘   │(backoff)│  └────────┘
                     └─────────┘   retryable only by operator
 ```
+
+**Cancel (#237).** `POST /videos/{id}/cancel` stores the request in one
+transaction. Each `pending` job of the video ends at once as `dead` with
+`error_class = 'CANCELLED'` and `last_error = 'cancelled on request'`
+(`attempts` unchanged). Each `running` job gets `cancel_requested_at = now()`
+(the first value is kept). There is no new job state: `CANCELLED` rides on
+`dead`, so every rule that keeps dead work dead (the sweeps, `stale_analyze`,
+`jobs_active_uniq`) applies, and `POST /ops/jobs/{id}/retry` is the resume path
+and clears `cancel_requested_at`. The database row is the source of truth. The
+worker learns of it on its next heartbeat tick (60 s) and the handler stops at
+its next checkpoint. Every outcome write of a job with a request becomes the
+cancelled outcome: a raised `Cancelled`, any other exception, `Defer`, the
+watchdog's `fail_job` and the reaper all end `CANCELLED`, never `pending`. A
+handler that returns normally ends `done`, with `cancel_requested_at` still set.
+A cancel is logged once at INFO as `job.cancelled`, not as a dead letter.
 
 ### Claim query
 
@@ -732,7 +756,8 @@ CREATE TABLE jobs (
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     started_at   TIMESTAMPTZ,        -- latest claim (#60)
     alerted_at   TIMESTAMPTZ,        -- dead-letter announced to the operator (#67)
-    progress     JSONB               -- live figures of a running transcribe job (#245)
+    progress     JSONB,              -- live figures of a running transcribe job (#245)
+    cancel_requested_at TIMESTAMPTZ  -- a user asked this running job to stop (#237); migration 0023
 );
 
 CREATE UNIQUE INDEX jobs_active_uniq ON jobs (video_id, kind, dedupe_key)
@@ -768,7 +793,8 @@ CREATE TABLE planner_task_runs (
 -- first poll. A retried job resumes the batch when request_sha256 still matches,
 -- instead of submitting and paying for it again. Rows go when the analysis is
 -- saved, or, for a dead / done job whose row survived, when the analyzer's
--- orphan pass (#160) has cancelled its batch. A row does not go with its job:
+-- orphan pass (#160) has cancelled its batch (a job a user cancelled, #237, is
+-- dead / CANCELLED and its handler keeps its rows). A row does not go with its job:
 -- deleting the job sets job_id to NULL (ON DELETE SET NULL, #251) and the same
 -- pass cancels the batch and deletes the row. Migration 0013; nullable job_id
 -- and SET NULL from migration 0019.
@@ -967,7 +993,8 @@ separated per D13.
 | Method | Path | Notes |
 |---|---|---|
 | `POST` | `/videos` | body `{url}`; priority `+10`; returns job id; clears a matching deletion tombstone atomically |
-| `DELETE` | `/videos/{id}` | permanently deletes the video and derived data; `409` while any job is running; records a tombstone so only explicit `POST /videos` can restore it |
+| `DELETE` | `/videos/{id}` | permanently deletes the video and derived data; `409` while any job is running (`video is currently processing`, or `cancellation in progress` once every running job has a cancel request, #237); records a tombstone so only explicit `POST /videos` can restore it |
+| `POST` | `/videos/{id}/cancel` | body `{}`, JSON only (`415` otherwise); stores a cancel request for every `pending` or `running` job of the video (#237). Pending jobs end `CANCELLED` at once; running ones get `cancel_requested_at` and stop at their next checkpoint. Answers `{video_id, jobs: [{job_id, kind, outcome}]}` with `outcome` `cancelled` or `cancel_requested`: `202` if any is `cancel_requested`, else `200` (`jobs: []` when nothing was active); `404` for an unknown or deleted video, `422` for a malformed ID. Deletes nothing |
 | `POST` | `/channels` | forward-only; sets `monitor_from`. Accepts a channel ID, `youtube.com/channel/` URL, or `@handle`, `/c/` or `/user/` reference; a name is resolved synchronously with one bounded yt-dlp call (at most 20 s, #81, an exception to the no-processing rule in §1): `404` if it does not exist, `503` on timeout or rate limit, `502` on bad output |
 | `GET` | `/channels` | paginated channel list (id, title, active, video count), powers the Library channel filter |
 | `POST` | `/channels/{id}/backfill` | `{limit, dry_run}`; priority `-10` (D9b) |
@@ -1083,6 +1110,7 @@ between a fast dead-letter and four wasted Whisper runs.
 | `LLM_UNAVAILABLE` | provider 5xx, connection refused | retry with backoff |
 | `RESOURCE` | disk full, OOM | dead-letter; alert — retrying makes it worse |
 | `BUG` | unhandled exception | dead-letter with traceback in `last_error` |
+| `CANCELLED` | a user's cancel request (#237) | not a failure: `dead`, no retry, no alert, logged at INFO. `classify()` never returns it. Unlike a reaped job, whose class is NULL, a cancelled job always carries it |
 
 `error_class` is stored on the job so the Ops view can distinguish "YouTube
 changed something" from "my LLM is down" at a glance.
@@ -1788,6 +1816,17 @@ no duration has no limit. Past the limit the worker stops heartbeating, records
 the attempt as failed (`TOOL_FAILURE`, `last_error` says it exceeded its runtime
 limit, so a job that always hangs dead-letters), logs at ERROR and exits with
 status 70 so Docker restarts it.
+
+**User cancel versus shutdown (#237).** A shutdown signal raises `Cancelled` so
+the job goes back to `pending` with its attempt refunded, and the worker stops
+claiming. A user's cancel is terminal and does not stop the worker: the job ends
+`dead` / `CANCELLED` and the same process claims the next job. If a request is
+stored when the shutdown signal arrives, the job still ends `CANCELLED` and the
+worker then exits as for any shutdown. The watchdog's exit with status 70 on a
+job with a request records `CANCELLED`, not `TOOL_FAILURE`, and schedules no
+retry. A long stretch with no checkpoint (the audio download, a synchronous LLM
+call, a metadata fetch) keeps the job `running` with `cancel_requested_at`
+visible until it returns; killing those is #302.
 
 **Network segmentation.** `internal: true` means the database and `migrate`
 have no route off the compose bridge. The workers also sit on `egress`.
