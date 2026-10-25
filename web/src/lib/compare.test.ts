@@ -3,6 +3,7 @@ import {
   alignByWindow,
   countClaims,
   formatCost,
+  formatCount,
   formatDuration,
   formatUtcMinutes,
   formatUtcSeconds,
@@ -178,6 +179,18 @@ describe('formatCost', () => {
     [Number.POSITIVE_INFINITY, 'not recorded'],
   ])('%s -> %s', (value, text) => {
     expect(formatCost(value)).toBe(text)
+  })
+})
+
+describe('formatCount', () => {
+  it.each([
+    [null, 'not recorded'],
+    [Number.NaN, 'not recorded'],
+    [0, '0'],
+    [7, '7'],
+    [1000, '1000'],
+  ])('%s -> %s', (value, text) => {
+    expect(formatCount(value)).toBe(text)
   })
 })
 

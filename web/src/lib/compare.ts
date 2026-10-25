@@ -75,6 +75,12 @@ export function selectionMatchesUrl(params: URLSearchParams, a: number | null, b
   return matches('a', a) && matches('b', b)
 }
 
+/** Plain digits, or "not recorded" for null and non-finite values. */
+export function formatCount(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return NOT_RECORDED
+  return String(value)
+}
+
 /** `$` with four decimals, or "not recorded" for null and non-finite values. */
 export function formatCost(value: number | null): string {
   if (value === null || !Number.isFinite(value)) return NOT_RECORDED

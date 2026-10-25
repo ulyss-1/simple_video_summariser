@@ -302,6 +302,27 @@ def test_a_transcribing_video_detail_carries_the_progress_of_its_transcribe_job(
     assert body["progress"]["updated_at"] is not None
 
 
+def test_analyses_carry_cache_tokens_and_calls_with_null_kept_apart_from_zero(
+    api: TestClient, db: psycopg.Connection[Any]
+) -> None:
+    seed.video(db, VID, title="T")
+    tid = seed.transcript(db, VID, "whisper", segments=[{"start": 0, "end": 1, "text": "a"}])
+    recorded = seed.analysis(db, VID, tid, created=1, cache_read_tokens=7,
+                             cache_write_tokens=11, calls=3)
+    before = seed.analysis(db, VID, tid, created=2)
+    zero = seed.analysis(db, VID, tid, created=3, cache_read_tokens=0,
+                         cache_write_tokens=0, calls=0)
+    keys = ("cache_read_tokens", "cache_write_tokens", "calls")
+
+    items = api.get(f"/videos/{VID}/analyses").json()["items"]
+
+    assert {a["id"]: tuple(a[k] for k in keys) for a in items} == {
+        recorded: (7, 11, 3), before: (None, None, None), zero: (0, 0, 0),
+    }
+    detail = api.get(f"/videos/{VID}").json()["analysis"]
+    assert (detail["id"], *(detail[k] for k in keys)) == (zero, 0, 0, 0)
+
+
 def test_a_done_video_detail_has_the_transcript_and_latest_analysis(
     api: TestClient, db: psycopg.Connection[Any]
 ) -> None:
@@ -329,7 +350,8 @@ def test_a_done_video_detail_has_the_transcript_and_latest_analysis(
     assert set(analysis) == {
         "id", "model", "prompt_version", "chunk_strategy", "transcript_id",
         "transcript_source", "created_at", "tldr", "speaker_roster", "input_tokens",
-        "output_tokens", "cost_usd", "duration_ms", "topics", "claims", "quotes",
+        "output_tokens", "cache_read_tokens", "cache_write_tokens", "calls", "cost_usd",
+        "duration_ms", "topics", "claims", "quotes",
     }
     assert (analysis["id"], analysis["tldr"], analysis["transcript_source"]) == (
         newest, "</p><b>x", "whisper",
