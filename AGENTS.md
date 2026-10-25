@@ -1,6 +1,8 @@
 Documents
 
-- `_docs/process.md` - how work is organized
+- `_docs/process.md` - how work is organized. Read by the orchestrator only;
+  role agents (PM, engineer, QA) read their `_docs/team/*.md` role file and
+  not this file or `process.md`
 - Before writing tests, read `_docs/testing-guidelines.md`
 - For anything touching the UI, read `_docs/design-system.md`
 - `_docs/architecture.md` is the spec; `_docs/tasks.md` is the backlog.
@@ -49,7 +51,9 @@ Commands
 Activate `.venv` first; all Python commands assume it.
 
 - `pytest -m "not integration"` - fast tests, no Docker needed
-- `pytest` - the whole suite; requires Docker Desktop running
+- `pytest` - the whole suite; requires Docker Desktop running. CI runs it on
+  every code PR; engineers and QA run only the tests for the change they are
+  working on (`_docs/process.md`)
 - `pytest tests/test_queue.py` - one test file
 - `ruff check .` and `mypy .` - lint and types
 - `pytest tests/test_pipeline_smoke_docker.py -m image` - the hermetic

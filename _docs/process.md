@@ -12,6 +12,39 @@ Orchestrator
 
 The main session is the orchestrator. Use Sonnet model with Low or Medium effort for it, as it is just a controller that process goes smoothly. It launches the PM, the engineer and QA as subagents. It does not groom, implement or test itself.
 
+The orchestrator, and only the orchestrator, reads `AGENTS.md` and this file
+and follows them. Role agents (PM, engineer, QA) must not read either: they may
+run on a different system than the Windows WSL setup `AGENTS.md` describes. So
+the orchestrator turns what those files say into the launch prompt. Every
+launch prompt:
+
+- tells the agent to read its role file first and act as it says
+  (`_docs/team/pm.md`, `_docs/team/software-engineer.md` or
+  `_docs/team/qa-engineer.md`), and names the issue number
+- does not paraphrase or override the role file. It adds only what the agent
+  cannot know: the issue, the branch or PR, and the environment facts it needs
+  from `AGENTS.md` (how to run the tests here, what must never be touched, for
+  example the production compose project and its volumes)
+- tells the engineer to branch from the current `origin/master` (fetch first),
+  never from an old or unmerged branch. An earlier partial branch is reference
+  material at most, and the prompt must say so explicitly when one exists
+- does not tell any role agent to read `AGENTS.md` or `process.md`
+
+Testing scope: the engineer and QA run only the tests that cover the change
+(the tests the issue added or touched and those of the modules it edits), not
+the whole suite. Running all of it is CI's job, on the PR. CI itself runs only
+the jobs a change needs: `scripts/ci_changes.sh` maps the changed paths to the
+`python`, `frontend` and `images` jobs (e2e follows `frontend`), docs no test
+reads start nothing, and pushes to master and manual runs always run all of
+it. When a change adds a new kind of file, check that script's rules. The
+launch prompt for the engineer and for QA states this scope.
+
+What a role agent reads from `_docs/architecture.md` (the spec):
+
+- PM: the whole file, to understand what the project is about before grooming
+- engineer: the paragraphs relevant to the issue, and follows them
+- QA: only the paragraphs relevant to the criteria being checked
+
 While a subagent is running, check on it about every 5 minutes rather than
 waiting for its completion notification. Decide which of three states it is
 in: working, finished but silent, or stuck. Notifications can arrive late, out
@@ -42,7 +75,8 @@ Lifecycle
 1. Pick the next open issue from the backlog
 2. PM grooms it. Use Opus 5 model with high effort for it
 3. Engineer implements it. Use Sonnet 5 model with medium effort for it
-4. QA verifies it. Use Sonnet 5 model with low effort for it
+4. QA verifies it. Use Sonnet 5 model with low effort for it. It checks the
+   changed functionality only; the PR's CI result covers the rest
 5. On FAIL, back to step 3 with the QA comment as input
 6. On PASS, close the issue
 7. Repeat until the backlog is empty
