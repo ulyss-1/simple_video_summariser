@@ -424,6 +424,12 @@ export interface components {
         };
         /** AnalysisOut */
         AnalysisOut: {
+            /** Cache Read Tokens */
+            cache_read_tokens: number | null;
+            /** Cache Write Tokens */
+            cache_write_tokens: number | null;
+            /** Calls */
+            calls: number | null;
             /** Chunk Strategy */
             chunk_strategy: string;
             /** Claims */

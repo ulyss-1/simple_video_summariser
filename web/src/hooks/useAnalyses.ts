@@ -39,6 +39,9 @@ function isRun(v: unknown): v is AnalysisRun {
     typeof v.tldr === 'string' &&
     typeof v.input_tokens === 'number' &&
     typeof v.output_tokens === 'number' &&
+    isNumberOrNull(v.cache_read_tokens) &&
+    isNumberOrNull(v.cache_write_tokens) &&
+    isNumberOrNull(v.calls) &&
     isNumberOrNull(v.cost_usd) &&
     isNumberOrNull(v.duration_ms) &&
     Array.isArray(v.topics) &&

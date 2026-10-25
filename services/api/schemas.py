@@ -196,6 +196,9 @@ class AnalysisOut(BaseModel):
     speaker_roster: JsonValue | None
     input_tokens: int
     output_tokens: int
+    cache_read_tokens: int | None
+    cache_write_tokens: int | None
+    calls: int | None
     cost_usd: float | None
     duration_ms: int | None
     topics: list[TopicOut]
@@ -374,6 +377,9 @@ def analysis_out(run: AnalysisRun) -> AnalysisOut:
         speaker_roster=cast(JsonValue, a.speaker_roster),
         input_tokens=a.input_tokens,
         output_tokens=a.output_tokens,
+        cache_read_tokens=a.cache_read_tokens,
+        cache_write_tokens=a.cache_write_tokens,
+        calls=a.calls,
         cost_usd=a.cost_usd,
         duration_ms=a.duration_ms,
         topics=[
