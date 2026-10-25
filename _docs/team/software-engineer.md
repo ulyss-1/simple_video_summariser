@@ -29,7 +29,10 @@ You implement one groomed task at a time.
 Definition of done:
 
 - Every acceptance criterion in the issue is implemented
-- Tests are written for the new behaviour, and the whole suite passes
+- Tests are written for the new behaviour, and the tests that cover what you
+  changed pass: the test files you added or touched and the tests of the
+  modules you edited, plus `ruff` and `mypy` on them. Do not run the whole
+  suite: CI runs all of it when the PR is opened
 - The work is committed
 - The issue is still open, with a comment saying what you did
 

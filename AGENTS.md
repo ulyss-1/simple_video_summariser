@@ -51,7 +51,9 @@ Commands
 Activate `.venv` first; all Python commands assume it.
 
 - `pytest -m "not integration"` - fast tests, no Docker needed
-- `pytest` - the whole suite; requires Docker Desktop running
+- `pytest` - the whole suite; requires Docker Desktop running. CI runs it on
+  every code PR; engineers and QA run only the tests for the change they are
+  working on (`_docs/process.md`)
 - `pytest tests/test_queue.py` - one test file
 - `ruff check .` and `mypy .` - lint and types
 - `pytest tests/test_pipeline_smoke_docker.py -m image` - the hermetic

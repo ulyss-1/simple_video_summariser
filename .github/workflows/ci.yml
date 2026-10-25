@@ -38,7 +38,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Runs only the jobs the change needs (scripts/ci_changes.sh). Pushes to
+  # master and manual runs always run everything: that is the full safety net.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      python: ${{ steps.c.outputs.python }}
+      frontend: ${{ steps.c.outputs.frontend }}
+      images: ${{ steps.c.outputs.images }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: c
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            git diff --name-only "$BASE...$HEAD" | scripts/ci_changes.sh >> "$GITHUB_OUTPUT"
+          else
+            printf 'python=true\nfrontend=true\nimages=true\n' >> "$GITHUB_OUTPUT"
+          fi
+          cat "$GITHUB_OUTPUT"
+
   python:
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -65,6 +93,8 @@ jobs:
         run: pytest -m "integration and not image"
 
   frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -89,6 +119,8 @@ jobs:
         run: npm audit --audit-level=high
 
   images:
+    needs: changes
+    if: needs.changes.outputs.images == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -107,6 +139,8 @@ jobs:
   # has a `test:e2e` script, so it needs no workflow change when #177 lands.
   # `npm ci` never downloads a browser (web/.npmrc, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD).
   e2e:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:

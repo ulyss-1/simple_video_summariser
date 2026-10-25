@@ -30,6 +30,15 @@ launch prompt:
   material at most, and the prompt must say so explicitly when one exists
 - does not tell any role agent to read `AGENTS.md` or `process.md`
 
+Testing scope: the engineer and QA run only the tests that cover the change
+(the tests the issue added or touched and those of the modules it edits), not
+the whole suite. Running all of it is CI's job, on the PR. CI itself runs only
+the jobs a change needs: `scripts/ci_changes.sh` maps the changed paths to the
+`python`, `frontend` and `images` jobs (e2e follows `frontend`), docs no test
+reads start nothing, and pushes to master and manual runs always run all of
+it. When a change adds a new kind of file, check that script's rules. The
+launch prompt for the engineer and for QA states this scope.
+
 What a role agent reads from `_docs/architecture.md` (the spec):
 
 - PM: the whole file, to understand what the project is about before grooming
@@ -66,7 +75,8 @@ Lifecycle
 1. Pick the next open issue from the backlog
 2. PM grooms it. Use Opus 5 model with high effort for it
 3. Engineer implements it. Use Sonnet 5 model with medium effort for it
-4. QA verifies it. Use Sonnet 5 model with low effort for it
+4. QA verifies it. Use Sonnet 5 model with low effort for it. It checks the
+   changed functionality only; the PR's CI result covers the rest
 5. On FAIL, back to step 3 with the QA comment as input
 6. On PASS, close the issue
 7. Repeat until the backlog is empty
