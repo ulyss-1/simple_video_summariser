@@ -28,7 +28,7 @@ def _request_cancel(rig: Rig) -> None:
 
 
 def test_a_request_seen_during_transcription_stops_at_the_next_progress_call_and_saves_nothing(
-    make_rig: Callable[..., Rig],
+    make_rig: Callable[..., Rig],  # noqa: F811
 ) -> None:
     holder: list[Rig] = []
 
@@ -48,7 +48,7 @@ def test_a_request_seen_during_transcription_stops_at_the_next_progress_call_and
 
 
 def test_a_cancelled_transcribe_with_audio_keep_off_removes_the_file_and_the_media_row(
-    make_rig: Callable[..., Rig],
+    make_rig: Callable[..., Rig],  # noqa: F811
 ) -> None:
     holder: list[Rig] = []
     rig = make_rig(
@@ -67,7 +67,7 @@ def test_a_cancelled_transcribe_with_audio_keep_off_removes_the_file_and_the_med
 
 
 def test_a_request_stored_before_the_handoff_enqueues_no_analyze_job(
-    make_rig: Callable[..., Rig],
+    make_rig: Callable[..., Rig],  # noqa: F811
 ) -> None:
     holder: list[Rig] = []
 
@@ -86,7 +86,7 @@ def test_a_request_stored_before_the_handoff_enqueues_no_analyze_job(
 
 
 def test_a_job_cancelled_before_the_download_makes_no_audio_source_call(
-    make_rig: Callable[..., Rig],
+    make_rig: Callable[..., Rig],  # noqa: F811
 ) -> None:
     rig = make_rig(audio=FakeAudio())
     rig.ctx._cancel()

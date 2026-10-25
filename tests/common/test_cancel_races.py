@@ -169,7 +169,7 @@ class PausingConn:
         if not self._done and self._when(str(query)):
             self._done = True
             if isinstance(result, psycopg.Cursor) and result.description is not None:
-                result = _Buffered(result.fetchall())
+                result = _Buffered(result.fetchall())  # type: ignore[assignment]
             self.paused.set()
             assert self.resume.wait(DEADLINE_SEC), "the paused call was never resumed"
         return result

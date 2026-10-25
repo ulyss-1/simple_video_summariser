@@ -89,7 +89,7 @@ def job_row(db: psycopg.Connection[Any], job_id: int) -> tuple[Any, ...]:
         (job_id,),
     ).fetchone()
     assert row is not None
-    return row
+    return tuple(row)
 
 
 # ---------------------------------------------------------------------------

@@ -224,7 +224,7 @@ def test_a_cancel_is_logged_once_at_info_and_never_as_a_dead_letter(
     cancelled = [r for r in caplog.records if r.getMessage() == "job.cancelled"]
     assert len(cancelled) == 1
     assert cancelled[0].levelno == logging.INFO
-    assert (cancelled[0].job_id, cancelled[0].video_id, cancelled[0].kind) == (  # type: ignore[attr-defined]
+    assert (cancelled[0].job_id, cancelled[0].video_id, cancelled[0].kind) == (
         job_id,
         VID,
         "ingest",
