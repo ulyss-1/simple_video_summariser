@@ -130,6 +130,11 @@ class Settings(BaseSettings):
     RECONCILE_INTERVAL_SEC: PositiveInt = 21600
     # How often the planner takes one slice of a pending backfill request (#115).
     BACKFILL_INTERVAL_SEC: PositiveInt = 60
+    # The planner's `catalog_enrichment` task looks up the description and date of
+    # up to CATALOG_ENRICH_BATCH_SIZE channel catalog rows (one yt-dlp call each)
+    # every CATALOG_ENRICH_INTERVAL_SEC seconds (#242).
+    CATALOG_ENRICH_INTERVAL_SEC: PositiveInt = 30
+    CATALOG_ENRICH_BATCH_SIZE: PositiveInt = 10
     # How long ingest keeps rescheduling a premiere or live stream that never
     # becomes available, counted from discovery (#65); then it dead-letters.
     UPCOMING_MAX_WAIT_DAYS: PositiveInt = 14

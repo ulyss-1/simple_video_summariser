@@ -32,7 +32,7 @@ A, B, C = "aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"
 
 class Catalog:
     def __init__(self) -> None:
-        self.entries = (
+        self.entries: tuple[CatalogEntry, ...] = (
             CatalogEntry(A, "Newest", 60),
             CatalogEntry(B, "Middle", 60),
             CatalogEntry(C, "Oldest", 60),

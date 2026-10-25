@@ -31,6 +31,7 @@ TASK_NAMES = [
     "poll_channels",
     "reconcile_channels",
     "channel_backfill",
+    "catalog_enrichment",
     "dead_letter_alerts",
 ]
 
@@ -64,6 +65,7 @@ def test_reap_uses_its_own_interval_and_the_others_use_the_poll_interval() -> No
         "poll_channels": 99,
         "reconcile_channels": 21600,
         "channel_backfill": 60,
+        "catalog_enrichment": 30,
         "dead_letter_alerts": 7,
     }
 
@@ -80,6 +82,7 @@ def test_default_intervals_are_one_minute_and_one_hour() -> None:
         "poll_channels": 3600,
         "reconcile_channels": 21600,
         "channel_backfill": 60,
+        "catalog_enrichment": 30,
         "dead_letter_alerts": 60,
     }
 
