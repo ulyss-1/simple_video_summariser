@@ -498,3 +498,242 @@ def test_main_check_installed_reports_drift_and_succeeds_on_a_match(
 def test_main_rejects_upgrade_combined_with_upgrade_package(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit):
         lock.main(["backend", "--upgrade", "--upgrade-package", "x"])
+
+
+# ---- the dev lock (issue #264) ----
+
+PYPROJECT = """\
+[build-system]
+requires = ["setuptools==80.0.0"]  # build
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "x"
+version = "0.1.0"
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.0",
+    # a comment
+    "Testcontainers[postgres]==4.0",
+    "My_Tool==1.0",
+]
+
+[tool.ruff]
+line-length = 100
+"""
+
+
+def test_the_dev_and_build_entries_are_read_with_tomllib_extras_and_case_kept() -> None:
+    dev, build = lock.pyproject_requirements(PYPROJECT)
+    assert dev == ["pytest==9.0", "Testcontainers[postgres]==4.0", "My_Tool==1.0"]
+    assert build == ["setuptools==80.0.0"]
+    assert lock.dev_direct_pins(PYPROJECT) == {
+        "pytest": "9.0", "testcontainers": "4.0", "my-tool": "1.0", "setuptools": "80.0.0",
+    }
+
+
+def test_a_pyproject_without_a_dev_extra_has_no_dev_entries() -> None:
+    assert lock.pyproject_requirements('[project]\nname = "x"\n') == ([], [])
+
+
+def test_the_dev_digest_ignores_order_comments_and_unrelated_settings() -> None:
+    base = lock.dev_input_digest(PYPROJECT)
+    assert len(base) == 64
+    reordered = PYPROJECT.replace('"pytest==9.0",', '"My_Tool==1.0",', 1).replace(
+        '    "My_Tool==1.0",\n]', '    "pytest==9.0",\n]'
+    )
+    assert reordered != PYPROJECT
+    assert lock.dev_input_digest(reordered) == base
+    other = PYPROJECT.replace("line-length = 100", "line-length = 88\n# note").replace(
+        'version = "0.1.0"', 'version = "9.9.9"'
+    )
+    assert lock.dev_input_digest(other) == base
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ('"pytest==9.0"', '"pytest==9.1"'),
+        ('    "pytest==9.0",\n', ""),
+        ('"pytest==9.0",', '"pytest==9.0",\n    "extra==1",'),
+        ("setuptools==80.0.0", "setuptools==81.0.0"),
+    ],
+)
+def test_the_dev_digest_changes_when_a_dev_or_build_pin_is_added_removed_or_bumped(old: str, new: str) -> None:
+    changed = PYPROJECT.replace(old, new)
+    assert changed != PYPROJECT
+    assert lock.dev_input_digest(changed) != lock.dev_input_digest(PYPROJECT)
+
+
+def test_moving_a_pin_from_dev_to_build_changes_the_dev_digest() -> None:
+    moved = PYPROJECT.replace('requires = ["setuptools==80.0.0"]', 'requires = ["setuptools==80.0.0", "pytest==9.0"]')
+    moved = moved.replace('    "pytest==9.0",\n', "")
+    assert lock.dev_direct_pins(moved) == lock.dev_direct_pins(PYPROJECT)
+    assert lock.dev_input_digest(moved) != lock.dev_input_digest(PYPROJECT)
+
+
+def test_a_backend_lock_entry_is_removed_from_the_dev_report() -> None:
+    report = _report(_item("foo", "1.0", A), _item("pytest", "9.0", B), _item("pluggy", "1", C))
+    digests = {("pytest", "9.0"): {B}, ("pluggy", "1"): {C}}
+    text = lock.lock_text(
+        report, digests, input_name="i", command="c", digest="0" * 64, exclude={"foo"}
+    )
+    assert set(lock.parse_lock(text)) == {"pytest", "pluggy"}
+
+
+def test_the_conflict_message_names_each_constraint_lock_and_pips_error() -> None:
+    message = lock.conflict_message(
+        "pyproject.toml dev", "ERROR: typing-extensions conflict", ["requirements.backend.lock", "requirements.whisper.lock"]
+    )
+    assert "ERROR: typing-extensions conflict" in message
+    assert "requirements.backend.lock" in message and "requirements.whisper.lock" in message
+    assert "unchanged" in message
+
+
+def test_the_backend_conflict_message_is_the_upgrade_hint() -> None:
+    message = lock.conflict_message("requirements.backend.txt", "boom", [])
+    assert "--upgrade-package" in message and "lock" not in message.split("boom")[0]
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [("backend", ["whisper", "dev"]), ("whisper", ["dev"]), ("dev", [])],
+)
+def test_follow_up_names_the_dependent_locks_in_order(target: str, expected: list[str]) -> None:
+    note = lock.follow_up(target)
+    if not expected:
+        assert note is None
+        return
+    assert note is not None
+    positions = [note.index(f"lock_requirements.py {name}") for name in expected]
+    assert positions == sorted(positions)
+    assert "lock_requirements.py backend" not in note
+
+
+def test_unlocked_installed_flags_a_package_in_no_lock_bar_pip_and_ytdigest() -> None:
+    locked = {"a": ("1", (A,))}
+    problems = lock.unlocked_installed({"a": "1", "pip": "26", "ytdigest": "0.1.0", "stray": "2"}, locked)
+    assert len(problems) == 1 and "stray" in problems[0] and "2" in problems[0]
+
+
+def _dev_repo(tmp_path: Path) -> Path:
+    root = _repo(tmp_path)
+    (root / "pyproject.toml").write_text(PYPROJECT)
+    _backend_locked(root)
+    lock.generate("whisper", root=root, run_pip=FakePip(WHISPER_ITEMS), fetch=_fetch_for(WHISPER_DIGESTS))
+    return root
+
+
+DEV_ITEMS = [
+    *WHISPER_ITEMS,
+    _item("pytest", "9.0", A),
+    _item("pluggy", "1.6", B),
+    _item("setuptools", "80.0.0", C),
+]
+DEV_DIGESTS = {**WHISPER_DIGESTS, ("pytest", "9.0"): [A], ("pluggy", "1.6"): [B, D], ("setuptools", "80.0.0"): [C]}
+
+
+def test_generate_dev_resolves_on_both_locks_and_writes_only_what_it_adds(tmp_path: Path) -> None:
+    root = _dev_repo(tmp_path)
+    pip, fetch = FakePip(DEV_ITEMS), _fetch_for(DEV_DIGESTS)
+    lock.generate("dev", root=root, run_pip=pip, fetch=fetch)
+    text = (root / "requirements.dev.lock").read_text()
+    parsed = lock.parse_lock(text)
+    # Backend entries are left out; a package shared with whisper is kept, with all its hashes.
+    assert set(parsed) == {"pytest", "pluggy", "setuptools", "w", "wdep"}
+    assert parsed["pluggy"] == ("1.6", (B, D))
+    assert lock.header_digest(text) == lock.dev_input_digest(PYPROJECT)
+    assert "[project.optional-dependencies].dev and [build-system].requires" in text
+    assert "ytdigest" not in text
+    args, joined = pip.calls[-1], " ".join(pip.calls[-1])
+    assert "requirements.backend.txt" in joined
+    assert "-e" not in args and "." not in args  # the project itself is not resolved
+    assert not any("/foo/" in u or "/dep/" in u for u in fetch.requested)
+    constraints = set(pip.constraints[-1].splitlines())
+    assert {"foo==1.0", "w==3.0", "wdep==7"} <= constraints  # both locks are constraints
+    resolved = [Path(a).read_text() for a in args if a.endswith("dev-requirements.txt")]
+    assert "Testcontainers[postgres]==4.0" in resolved[0] and "setuptools==80.0.0" in resolved[0]
+
+
+def test_dev_keeps_its_own_entries_as_constraints_and_upgrade_package_drops_one(tmp_path: Path) -> None:
+    root = _dev_repo(tmp_path)
+    lock.generate("dev", root=root, run_pip=FakePip(DEV_ITEMS), fetch=_fetch_for(DEV_DIGESTS))
+    pip = FakePip(DEV_ITEMS)
+    lock.generate("dev", root=root, upgrade_packages=["Pluggy"], run_pip=pip, fetch=_fetch_for(DEV_DIGESTS))
+    constraints = pip.constraints[0].splitlines()
+    assert "pytest==9.0" not in constraints  # a direct pin comes from the input, not the old lock
+    assert not any(c.startswith("pluggy==") for c in constraints)
+    pip = FakePip(DEV_ITEMS)
+    lock.generate("dev", root=root, upgrade=True, run_pip=pip, fetch=_fetch_for(DEV_DIGESTS))
+    assert not any(c.startswith("pluggy==") for c in pip.constraints[0].splitlines())
+    assert "foo==1.0" in pip.constraints[0].splitlines()  # the base locks are never dropped
+
+
+def test_dev_needs_the_backend_and_whisper_locks(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    (root / "pyproject.toml").write_text(PYPROJECT)
+    with pytest.raises(lock.LockError, match=r"requirements\.backend\.lock.*backend"):
+        lock.generate("dev", root=root, run_pip=FakePip(DEV_ITEMS), fetch=_fetch_for(DEV_DIGESTS))
+    _backend_locked(root)
+    with pytest.raises(lock.LockError, match=r"requirements\.whisper\.lock.*whisper"):
+        lock.generate("dev", root=root, run_pip=FakePip(DEV_ITEMS), fetch=_fetch_for(DEV_DIGESTS))
+
+
+def test_a_dev_conflict_exits_nonzero_names_the_constraint_locks_and_changes_no_lock(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _dev_repo(tmp_path)
+    lock.generate("dev", root=root, run_pip=FakePip(DEV_ITEMS), fetch=_fetch_for(DEV_DIGESTS))
+    names = ("requirements.backend.lock", "requirements.whisper.lock", "requirements.dev.lock")
+    before = {n: (root / n).read_bytes() for n in names}
+    rc = lock.main(
+        ["dev"], root=root, run_pip=FakePip([], rc=1), fetch=_fetch_for({}),
+        platform=("linux", "x86_64", "cpython", (3, 14)),
+    )
+    err = capsys.readouterr().err
+    assert rc != 0
+    assert "ResolutionImpossible" in err
+    assert "requirements.backend.lock" in err and "requirements.whisper.lock" in err
+    assert {n: (root / n).read_bytes() for n in names} == before
+    assert not [p for p in root.iterdir() if p.name.endswith(".tmp")]
+
+
+def test_a_dev_hash_mismatch_keeps_the_dev_lock(tmp_path: Path) -> None:
+    root = _dev_repo(tmp_path)
+    lock.generate("dev", root=root, run_pip=FakePip(DEV_ITEMS), fetch=_fetch_for(DEV_DIGESTS))
+    before = (root / "requirements.dev.lock").read_bytes()
+    bad = {**DEV_DIGESTS, ("pytest", "9.0"): [E]}
+    with pytest.raises(lock.LockError, match="pytest"):
+        lock.generate("dev", root=root, run_pip=FakePip(DEV_ITEMS), fetch=_fetch_for(bad))
+    assert (root / "requirements.dev.lock").read_bytes() == before
+
+
+def test_main_prints_which_dependent_locks_to_regenerate_after_backend_and_whisper(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _repo(tmp_path)
+    target = ("linux", "x86_64", "cpython", (3, 14))
+    lock.main(["backend"], root=root, run_pip=FakePip(_backend_items()), fetch=_fetch_for(BACKEND_DIGESTS), platform=target)
+    out = capsys.readouterr().out
+    assert out.index("lock_requirements.py whisper") < out.index("lock_requirements.py dev")
+    lock.main(["whisper"], root=root, run_pip=FakePip(WHISPER_ITEMS), fetch=_fetch_for(WHISPER_DIGESTS), platform=target)
+    out = capsys.readouterr().out
+    assert "lock_requirements.py dev" in out and "lock_requirements.py whisper" not in out
+    (root / "pyproject.toml").write_text(PYPROJECT)
+    lock.main(["dev"], root=root, run_pip=FakePip(DEV_ITEMS), fetch=_fetch_for(DEV_DIGESTS), platform=target)
+    assert "regenerate" not in capsys.readouterr().out.lower()
+
+
+def test_main_check_installed_takes_several_locks_and_flags_a_package_in_none(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    one, two = tmp_path / "one.lock", tmp_path / "two.lock"
+    one.write_text(f"a==1 --hash=sha256:{A}\n")
+    two.write_text(f"b==2 --hash=sha256:{B}\n")
+    have = {"a": "1", "b": "2", "pip": "26", "ytdigest": "0.1.0"}
+    assert lock.main(["--check-installed", str(one), str(two)], installed=have) == 0
+    assert lock.main(["--check-installed", str(one), str(two)], installed={**have, "stray": "3"}) != 0
+    assert "stray" in capsys.readouterr().err
+    assert lock.main(["--check-installed", str(one), str(two)], installed={"a": "1", "pip": "26"}) != 0
+    assert "b" in capsys.readouterr().err
