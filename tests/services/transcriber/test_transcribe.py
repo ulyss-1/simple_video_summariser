@@ -9,8 +9,8 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
-from datetime import UTC, datetime
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
