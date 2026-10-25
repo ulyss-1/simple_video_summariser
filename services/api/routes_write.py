@@ -10,6 +10,9 @@
   up to 5000 uploads; the planner runs it (#115).
 - ``POST /channels/{channel_id}/backfill/cancel`` deletes one real backfill's
   still-pending ``ingest`` jobs (#116).
+- ``POST /channels/{channel_id}/catalog/discover``, ``.../catalog/process`` and
+  ``.../catalog/{video_id}/metadata/retry`` store a channel's flat upload listing,
+  queue selected videos from it, and requeue a failed metadata lookup (#242).
 
 Input is untrusted. It is parsed by ``common.youtube_refs`` before anything
 reaches the database, and a rejection returns a fixed message that never
@@ -35,6 +38,11 @@ from psycopg.pq import TransactionStatus
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.convertors import Convertor, register_url_convertor
 
+from common.channel_catalog import (
+    MAX_SELECTED,
+    discover_catalog,
+    process_catalog_selection,
+)
 from common.config import get_settings
 from common.errors import (
     PermanentSourceError,
@@ -49,6 +57,7 @@ from common.queue import (
     analyze_dedupe_key,
 )
 from common.repo.backfill_requests import create_request
+from common.repo.channel_catalog import get_enrichment_state, retry_enrichment
 from common.repo.channels import channel_exists, fill_channel_title, register_channel
 from common.repo.deleted_videos import VideoNotFound, VideoRunning, delete_video
 from common.repo.jobs import active_job, latest_job
@@ -80,6 +89,7 @@ from services.api.deps import (
     get_conn,
     rate_limit,
 )
+from services.api.schemas import CatalogLimit, CatalogPageOut, catalog_page_out
 
 _log = structlog.get_logger(__name__)
 
@@ -827,3 +837,161 @@ def _cancel_response(result: CancelResult) -> CancelBackfillResponse:
         videos_kept=result.videos_kept,
         video_ids=list(result.video_ids),
     )
+
+
+# --- channel catalog (#242) ---------------------------------------------------
+
+CATALOG_ROW_NOT_FOUND = "video is not in this channel's catalog"
+CATALOG_RETRY_NOT_FAILED = "only a failed metadata lookup can be retried"
+BAD_CATALOG_SELECTION = (
+    "video_ids must be 1-5000 unique canonical YouTube video IDs (11 characters)"
+)
+_OUTCOMES = ("queued", "already_known", "rejected")
+
+
+class CatalogDiscoverRequest(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    limit: CatalogLimit = 50
+
+
+class MetadataRetryOut(BaseModel):
+    channel_id: str
+    video_id: str
+    enrichment_state: Literal["pending"]
+
+
+class CatalogProcessRequest(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    video_ids: list[str] = Field(min_length=1, max_length=MAX_SELECTED)
+
+    @field_validator("video_ids")
+    @classmethod
+    def _unique_valid_ids(cls, values: list[str]) -> list[str]:
+        if len(set(values)) != len(values) or not all(is_video_id(v) for v in values):
+            raise ValueError(BAD_CATALOG_SELECTION)
+        return values
+
+
+class CatalogProcessItemOut(BaseModel):
+    video_id: str
+    outcome: Literal["queued", "already_known", "rejected"]
+    job_id: int | None
+    reason: Literal["not_in_catalog"] | None
+
+
+class CatalogProcessResponse(BaseModel):
+    channel_id: str
+    results: list[CatalogProcessItemOut]
+
+
+@router.post(
+    "/channels/{channel_id:untrusted}/catalog/discover",
+    dependencies=[Depends(_require_json_content_type)],
+    response_model=CatalogPageOut,
+    responses={
+        404: {"description": "Channel not registered"},
+        502: {"description": "The YouTube listing failed"},
+        503: {"description": "YouTube is unavailable or rate limiting"},
+    },
+)
+def post_channel_catalog_discover(
+    channel_id: Annotated[str, Depends(_backfill_channel_id)],
+    body: CatalogDiscoverRequest,
+    conn: Annotated[psycopg.Connection[Any], Depends(get_conn)],
+    catalog: Annotated[CatalogSource, Depends(get_catalog)],
+) -> CatalogPageOut:
+    """List a registered channel's newest ``limit`` uploads and store the snapshot (#242).
+
+    Runs one yt-dlp flat listing (bounded by ``deps.BACKFILL_LIST_TIMEOUT_SEC``,
+    below the proxy timeout) and returns titles at once. Publication dates and
+    descriptions arrive later: the planner's ``catalog_enrichment`` task fills
+    them and ``GET /channels/{id}/catalog`` shows them. Nothing is added to the
+    library; only ``POST /channels/{id}/catalog/process`` does that.
+    """
+    _require_idle(conn)
+    try:
+        page = discover_catalog(conn, catalog, channel_id, limit=body.limit)
+    except ChannelNotRegistered:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, CHANNEL_NOT_REGISTERED) from None
+    except (TransientNetworkError, RateLimitedError, ToolFailureError) as exc:
+        _log.warning(
+            "catalog.discover.failed", channel_id=channel_id, error_class=type(exc).__name__
+        )
+        if isinstance(exc, ToolFailureError):
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, LISTING_FAILED) from None
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, LISTING_UNAVAILABLE
+        ) from None
+    _log.info("catalog.discover", channel_id=channel_id, limit=body.limit, listed=len(page.items))
+    return catalog_page_out(page)
+
+
+@router.post(
+    "/channels/{channel_id:untrusted}/catalog/process",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(_require_json_content_type)],
+    response_model=CatalogProcessResponse,
+    responses={404: {"description": "Channel not registered"}},
+)
+def post_channel_catalog_process(
+    channel_id: Annotated[str, Depends(_backfill_channel_id)],
+    body: CatalogProcessRequest,
+    conn: Annotated[psycopg.Connection[Any], Depends(get_conn)],
+) -> CatalogProcessResponse:
+    """Queue the selected catalog videos like a backfill would (#242).
+
+    The server re-checks every ID against this channel's stored catalog and the
+    library, never the browser's view. The 202 is a receipt: every requested ID
+    has one result (``queued`` with its ``job_id``, ``already_known``, or
+    ``rejected`` as ``not_in_catalog``), in request order. Repeating a request
+    is harmless: already-queued videos come back ``already_known``.
+    """
+    _require_idle(conn)
+    try:
+        results = process_catalog_selection(conn, PostgresQueue(conn), channel_id, body.video_ids)
+    except ChannelNotRegistered:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, CHANNEL_NOT_REGISTERED) from None
+    counts = {outcome: sum(r.outcome == outcome for r in results) for outcome in _OUTCOMES}
+    _log.info("catalog.process", channel_id=channel_id, requested=len(results), **counts)
+    return CatalogProcessResponse(
+        channel_id=channel_id,
+        results=[
+            CatalogProcessItemOut(
+                video_id=r.video_id, outcome=r.outcome, job_id=r.job_id, reason=r.reason
+            )
+            for r in results
+        ],
+    )
+
+
+@router.post(
+    "/channels/{channel_id:untrusted}/catalog/{video_id:untrusted}/metadata/retry",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=MetadataRetryOut,
+    responses={
+        404: {"description": "Not in this channel's catalog"},
+        409: {"description": "The metadata lookup has not failed"},
+    },
+)
+def post_catalog_metadata_retry(
+    channel_id: Annotated[str, Depends(_backfill_channel_id)],
+    video_id: Annotated[str, Depends(_reanalyze_video_id)],
+    conn: Annotated[psycopg.Connection[Any], Depends(get_conn)],
+) -> MetadataRetryOut:
+    """Put one failed metadata lookup back in the planner's queue (#242).
+
+    Does no lookup itself. A pending, running or done row answers 409 and is
+    left as it is.
+    """
+    _require_idle(conn)
+    with conn.transaction():
+        if retry_enrichment(conn, channel_id, video_id):
+            return MetadataRetryOut(
+                channel_id=channel_id, video_id=video_id, enrichment_state="pending"
+            )
+        state = get_enrichment_state(conn, channel_id, video_id)
+    if state is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, CATALOG_ROW_NOT_FOUND)
+    raise HTTPException(status.HTTP_409_CONFLICT, CATALOG_RETRY_NOT_FAILED)

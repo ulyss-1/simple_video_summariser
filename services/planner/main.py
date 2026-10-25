@@ -1,6 +1,6 @@
 """Planner service entrypoint (issue #38; architecture.md §1, §11.1).
 
-``python -m services.planner.main`` runs the nine periodic maintenance tasks
+``python -m services.planner.main`` runs the ten periodic maintenance tasks
 in one long-lived process, each on its own interval:
 
 ============================  ============================  =============================
@@ -18,6 +18,8 @@ task                          interval                      what it does
                                                             ~15-entry RSS feed between polls (#93)
 ``channel_backfill``          ``BACKFILL_INTERVAL_SEC``     one bounded slice of the oldest pending
                                                             backfill request (#115)
+``catalog_enrichment``        ``CATALOG_ENRICH_INTERVAL_SEC`` one bounded batch of channel catalog rows
+                                                            gets its description and date (#242)
 ``dead_letter_alerts``        ``REAP_INTERVAL_SEC``         alert on TOOL_FAILURE / RESOURCE
                                                             dead-letters (#67); a no-op
                                                             without ``ALERT_WEBHOOK_URL``
@@ -93,6 +95,7 @@ from pydantic import ValidationError
 from adapters.alerts.webhook import WebhookAlerter
 from adapters.youtube.catalog import YouTubeCatalog
 from adapters.youtube.feed import YouTubeFeed
+from adapters.youtube.metadata import YouTubeMetadata
 from common.config import Settings, get_settings
 from common.db import connect
 from common.logging import configure_logging
@@ -103,6 +106,10 @@ from services.planner.alerts import send_dead_letter_alerts
 from services.planner.backfill import (
     BACKFILL_REQUEST_LIST_TIMEOUT_SEC,
     run_channel_backfill,
+)
+from services.planner.catalog_enrichment import (
+    CATALOG_ENRICH_FETCH_TIMEOUT_SEC,
+    run_catalog_enrichment,
 )
 from services.planner.fallback import run_auto_caption_fallback_sweep
 from services.planner.poll import poll_channels
@@ -133,6 +140,7 @@ LOCK_KEYS: dict[str, tuple[int, int]] = {
     "reconcile_channels": (LOCK_NAMESPACE, 7),
     "stale_analyze": (LOCK_NAMESPACE, 8),
     "channel_backfill": (LOCK_NAMESPACE, 9),
+    "catalog_enrichment": (LOCK_NAMESPACE, 10),
 }
 
 Connect = Callable[[], psycopg.Connection[Any]]
@@ -339,6 +347,16 @@ def build_registry(settings: Settings, connect: Connect) -> list[Task]:
             clock=time.monotonic,
         )
 
+    def catalog_enrichment(conn: psycopg.Connection[Any]) -> int:
+        # Built per run, like the backfill catalog: cheap, no I/O (#242).
+        return run_catalog_enrichment(
+            conn,
+            YouTubeMetadata(
+                timeout=CATALOG_ENRICH_FETCH_TIMEOUT_SEC, cookie_file=settings.YTDLP_COOKIE_FILE
+            ),
+            batch_size=settings.CATALOG_ENRICH_BATCH_SIZE,
+        )
+
     webhook = settings.ALERT_WEBHOOK_URL
     sink = (
         WebhookAlerter(webhook.get_secret_value(), fmt=settings.ALERT_WEBHOOK_FORMAT)
@@ -364,6 +382,11 @@ def build_registry(settings: Settings, connect: Connect) -> list[Task]:
         Task("poll_channels", settings.POLL_INTERVAL_SEC, with_conn(poll)),
         Task("reconcile_channels", settings.RECONCILE_INTERVAL_SEC, with_conn(reconcile)),
         Task("channel_backfill", settings.BACKFILL_INTERVAL_SEC, with_conn(channel_backfill)),
+        Task(
+            "catalog_enrichment",
+            settings.CATALOG_ENRICH_INTERVAL_SEC,
+            with_conn(catalog_enrichment),
+        ),
         Task(
             "dead_letter_alerts",
             settings.REAP_INTERVAL_SEC,

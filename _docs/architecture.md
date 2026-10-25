@@ -357,6 +357,52 @@ multi-minute listing would hold a transcriber slot. The API records a row in
 `BACKFILL_INTERVAL_SEC`) takes one bounded slice of the oldest active request per
 run: at most 500 new videos, fewer while 1000 backfill `ingest` jobs are pending.
 
+**Channel catalog (#242).** A user can browse a registered channel's uploads and
+queue a hand-picked subset. Browsing must not make a video "known", so the flat
+listing is stored apart from `videos`, in `channel_catalog_entries` (migration
+`0020`):
+
+```sql
+CREATE TABLE channel_catalog_entries (
+    channel_id        TEXT NOT NULL REFERENCES channels(channel_id) ON DELETE CASCADE,
+    video_id          TEXT NOT NULL CHECK (video_id ~ '^[A-Za-z0-9_-]{11}$'),
+    position          INTEGER NOT NULL CHECK (position >= 0),          -- 0 = newest
+    snapshot_limit    INTEGER NOT NULL CHECK (snapshot_limit IN (50, 200, 500, 5000)),
+    total_count       INTEGER CHECK (total_count IS NULL OR total_count >= 0),
+    title             TEXT,
+    description       TEXT,
+    published_at      TIMESTAMPTZ,
+    enrichment_state  TEXT NOT NULL DEFAULT 'pending'
+                      CHECK (enrichment_state IN ('pending', 'running', 'done', 'failed')),
+    enrichment_error  TEXT,                                            -- exception class only
+    attempts          INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    discovered_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (channel_id, video_id),
+    CHECK ((enrichment_state = 'failed') = (enrichment_error IS NOT NULL))
+);
+```
+
+`POST /channels/{id}/catalog/discover` runs one bounded yt-dlp flat listing
+(`limit` is one of `50`, `200`, `500`, `5000`, the last being the existing
+safety cap behind "Show all") and replaces the channel's stored snapshot with
+it; titles and canonical links are available at once, and `REMOVED` is treated
+as an empty listing (§8.3.1). The planner task `catalog_enrichment` (every
+`CATALOG_ENRICH_INTERVAL_SEC`, advisory lock `(LOCK_NAMESPACE, 10)`) claims at
+most `CATALOG_ENRICH_BATCH_SIZE` rows, one at a time with `FOR UPDATE SKIP
+LOCKED` and none after a 90 s budget (the planner runs its tasks one after
+another, so a slow YouTube must not hold `reap` behind it), fetches each
+through `MetadataSource` (45 s timeout) with no transaction open, and stores the
+description and date. A failure is isolated to its row (`failed`, the exception
+class only) and is retried only by a person; a `running` row abandoned by a
+crashed planner is reclaimed after 15 minutes. `POST
+/channels/{id}/catalog/process` is the only write to `videos`: each selected ID
+is checked against the stored catalog, then inserted as `origin='backfill'` with
+a `PRIORITY_BACKFILL` `ingest` job exactly as a backfill does, so subtitle versus
+transcription policy is unchanged. A video with a `videos` row or a deletion
+tombstone is shown as known and answers `already_known`; a tombstone is never
+cleared by the catalog.
+
 ---
 
 ## 5. Job lifecycle
@@ -888,6 +934,10 @@ separated per D13.
 | `POST` | `/channels/{id}/backfill` | `{limit, dry_run}`; priority `-10` (D9b) |
 | `POST` | `/channels/{id}/backfill-requests` | `{limit <= 5000, dry_run}`; only records a request, the planner `channel_backfill` task runs it (#115); `409` while the channel has a pending or running one |
 | `GET` | `/channels/{id}/backfill-requests/{request_id}` | state, attempts, enqueued, timestamps and `result` (the shape of the synchronous response) (#115) |
+| `POST` | `/channels/{id}/catalog/discover` | `{limit}` in `50`, `200`, `500`, `5000` (default `50`); one bounded flat listing (90 s, inside the proxy timeout), stores it and returns the page, newest first; `404` unregistered channel, `502` bad listing, `503` timeout or rate limit; adds nothing to `videos` (#242) |
+| `GET` | `/channels/{id}/catalog?limit=` | the stored snapshot, newest first, no subprocess and no write; each row has `title`, a canonical `url` derived from the validated ID, `description` and `published_at` (null until `enrichment_state` is `done`), `known` and the library `processing_status`; `404` until a discovery stored rows (#242) |
+| `POST` | `/channels/{id}/catalog/{video_id}/metadata/retry` | `202` and `pending` for a `failed` row; `404` if the video is not in the channel's catalog, `409` while the row is not `failed` (#242) |
+| `POST` | `/channels/{id}/catalog/process` | `{video_ids}` (1 to 5000, unique, canonical); `202` with one result per ID in request order: `queued` with its `job_id`, `already_known`, or `rejected` (`not_in_catalog`); idempotent (#242) |
 | `POST` | `/channels/{id}/backfill/cancel` | `{backfill_id}`; ends the matching active request and deletes only its pending backfill-priority `ingest` jobs; a matching running `ingest` finishes normally and is excluded from `cancelled`, while already-created `transcribe` and `analyze` jobs are not cancelled (#116, #166) |
 | `POST` | `/videos/{id}/reanalyze` | force new `analyze` at current version |
 | `GET` | `/videos` | paginated library view; filters: channel, state, date; repeated paired `sort=title|published|status|channel`, `order=asc|desc` (up to four unique keys) |
@@ -1010,7 +1060,7 @@ class and has no retry policy.
 web/src/
 ├── api/           # generated TS client from OpenAPI (D12) — never hand-written
 ├── hooks/         # TanStack Query hooks, one per resource
-├── routes/        # Library, VideoDetail, Transcript, Search, Compare, Ops
+├── routes/        # Library, VideoDetail, Transcript, Search, Compare, Ops, ChannelCatalog
 ├── components/
 │   ├── Player.tsx        # youtube-nocookie IFrame; exposes seekTo()  (D12b)
 │   ├── Timestamp.tsx     # single click-to-seek primitive, used everywhere
@@ -1024,6 +1074,13 @@ web/src/
   segments all render through it, so seek behavior exists in exactly one place.
 - **Types generated from OpenAPI** at build time; a backend contract change
   fails the frontend build rather than surfacing at runtime (D12).
+- **Channel catalog (#242).** `/channels/add` registers a channel
+  (`POST /channels`) and opens `/channels/:channelId/catalog`, which discovers
+  the newest 50 uploads and offers Show last 50 / 200 / 500 / all (5000). TanStack
+  Query owns the catalog and the discovery, retry and process mutations, and
+  polls `GET /channels/{id}/catalog` every 5 s while any row is `pending` or
+  `running`; the selected IDs are route-local state and are reconciled against
+  every response.
 - **Transcript virtualization deferred** (D12b) by paginating segments
   server-side — `GET /videos/{id}/transcript?offset=&limit=`.
 - **Stack:** React 19.3 + Vite 8 (Rolldown) + TypeScript; React Compiler
@@ -1116,6 +1173,7 @@ than reading `os.environ` directly.
 | `POLL_INTERVAL_SEC` | `3600` | planner |
 | `RECONCILE_INTERVAL_SEC` | `21600` | planner: how often each active channel's newest uploads are checked against the RSS feed for videos it dropped (#93) |
 | `BACKFILL_INTERVAL_SEC` | `60` | planner: how often the `channel_backfill` task takes one bounded slice of the oldest pending backfill request (#115) |
+| `CATALOG_ENRICH_INTERVAL_SEC` / `CATALOG_ENRICH_BATCH_SIZE` | `30` / `10` | planner: how often the `catalog_enrichment` task runs and how many channel catalog rows (one yt-dlp call each) it enriches per run (#242) |
 | `UPCOMING_MAX_WAIT_DAYS` | `14` | transcriber: ingest reschedules a premiere or live stream until it is available, and dead-letters it this many days after discovery (#65) |
 | `HEARTBEAT_SEC` / `REAP_AFTER_SEC` | `60` / `300` | workers, planner |
 | `MAX_ATTEMPTS_TRANSCRIBE` | `2` | transcriber |
