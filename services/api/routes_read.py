@@ -39,6 +39,7 @@ from pydantic import (
 )
 from starlette.convertors import Convertor, register_url_convertor
 
+from common.models import VideoSummary
 from common.repo.analyses import (
     get_analysis,
     latest_analysis,
@@ -47,12 +48,17 @@ from common.repo.analyses import (
 )
 from common.repo.backfill_requests import get_request
 from common.repo.channels import get_channel_title, list_channels
+from common.repo.jobs import get_job
 from common.repo.search import search_transcripts
 from common.repo.transcripts import best_transcript_info, best_transcript_page
 from common.repo.videos import get_video, get_video_meta, list_videos, video_exists
 from common.youtube_refs import is_channel_id, is_video_id
 from services.api import schemas
-from services.api.deps import ReadDatabaseUnavailable, get_read_conn
+from services.api.deps import (
+    ReadDatabaseUnavailable,
+    get_read_conn,
+    transcribe_rtf_history,
+)
 from services.api.render import render_analysis_html
 
 
@@ -175,6 +181,10 @@ class RenderQuery(BaseModel):
     analysis_id: QueryId | None = None
 
 
+VideoSort = Literal["title", "published", "status", "channel"]
+SortOrder = Literal["asc", "desc"]
+
+
 class VideoListQuery(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -182,15 +192,49 @@ class VideoListQuery(BaseModel):
     status: Literal["done", "processing", "unavailable", "failed", "idle"] | None = None
     published_after: QueryDatetime | None = None
     published_before: QueryDatetime | None = None
+    sort: list[VideoSort] | None = Field(
+        None,
+        max_length=4,
+        description="Repeated in precedence order; unique keys. Omitted alone defaults to published.",
+    )
+    order: list[SortOrder] | None = Field(
+        None,
+        max_length=4,
+        description="Paired by position with sort. Omitted alone defaults to desc for one key only.",
+    )
     offset: QueryInt = Field(0, ge=0, le=MAX_OFFSET)
     limit: QueryInt = Field(50, ge=1, le=200)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _lists(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        result = dict(value)
+        for key in ("sort", "order"):
+            item = result.get(key)
+            if item is not None and not isinstance(item, list):
+                result[key] = [item]
+        return result
+
     @model_validator(mode="after")
-    def _ordered_dates(self) -> VideoListQuery:
+    def _validate_query(self) -> VideoListQuery:
         after, before = self.published_after, self.published_before
         if after is not None and before is not None and after > before:
             raise ValueError("published_after must not be later than published_before")
+        sorts = self.sort or []
+        orders = self.order or []
+        if (len(sorts) > 1 or len(orders) > 1) and len(sorts) != len(orders):
+            raise ValueError("multi-key sort and order counts must match")
+        if len(set(sorts)) != len(sorts):
+            raise ValueError("sort keys must be unique")
         return self
+
+    @property
+    def sort_sequence(self) -> tuple[tuple[str, str], ...]:
+        sorts = self.sort or ["published"]
+        orders = self.order or ["desc"]
+        return tuple(zip(sorts, orders, strict=True))
 
 
 def _search_q(value: object) -> object:
@@ -245,7 +289,13 @@ def _gate(model: type[BaseModel]) -> Callable[[Request], None]:
 
     def gate(request: Request) -> None:
         try:
-            model.model_validate(dict(request.query_params))
+            raw: dict[str, Any] = dict(request.query_params)
+            if model is VideoListQuery:
+                for key in ("sort", "order"):
+                    values = request.query_params.getlist(key)
+                    if values:
+                        raw[key] = values
+            model.model_validate(raw)
         except ValidationError as exc:
             errors = exc.errors(include_input=False, include_context=False, include_url=False)
             raise RequestValidationError(
@@ -300,13 +350,14 @@ def get_videos(
     params: Annotated[VideoListQuery, Query()],
     conn: ReadConn,
 ) -> schemas.VideoList:
-    """The library, newest published first; ``total`` counts every match."""
+    """The filtered library in the requested multi-column order."""
     page = list_videos(
         conn,
         channel_id=params.channel,
         status=params.status,
         published_after=params.published_after,
         published_before=params.published_before,
+        sorts=params.sort_sequence,
         offset=params.offset,
         limit=params.limit,
     )
@@ -343,6 +394,20 @@ def get_backfill_request(
     return schemas.backfill_request_out(row)
 
 
+def _transcribe_progress(
+    conn: psycopg.Connection[Any], video: VideoSummary
+) -> schemas.ProgressOut | None:
+    """Progress of the video's active transcribe job (#245), else ``None``."""
+    active = video.active_job
+    if active is None or active.kind != "transcribe":
+        return None
+    row = get_job(conn, active.id)
+    if row is None:
+        return None
+    history = transcribe_rtf_history(conn) if row.state == "pending" else None
+    return schemas.progress_out(row, history)
+
+
 @router.get("/videos/{video_id}", response_model=schemas.VideoDetail)
 def get_video_detail(video_id: VideoId, conn: ReadConn) -> schemas.VideoDetail:
     """One video, its status, best transcript (D2) and latest analysis."""
@@ -350,7 +415,10 @@ def get_video_detail(video_id: VideoId, conn: ReadConn) -> schemas.VideoDetail:
     if video is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, VIDEO_NOT_FOUND)
     return schemas.video_detail(
-        video, best_transcript_info(conn, video_id), latest_analysis_run(conn, video_id)
+        video,
+        best_transcript_info(conn, video_id),
+        latest_analysis_run(conn, video_id),
+        _transcribe_progress(conn, video),
     )
 
 

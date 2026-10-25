@@ -26,6 +26,9 @@ function analysis(over: Partial<AnalysisOut> = {}): AnalysisOut {
     created_at: '2026-10-01T08:09:10Z',
     input_tokens: 111111,
     output_tokens: 222222,
+    cache_read_tokens: null,
+    cache_write_tokens: null,
+    calls: null,
     cost_usd: 3.5,
     duration_ms: 987654,
     tldr: 'A short summary.',
@@ -46,6 +49,7 @@ function video(over: Partial<VideoDetailOut> = {}): VideoDetailOut {
     published_at: '2026-09-30T23:30:00-07:00',
     duration_sec: 3723,
     latest_analysis_at: null,
+    has_transcript: false,
     origin: 'manual',
     unavailable: null,
     status: 'done',
@@ -53,6 +57,7 @@ function video(over: Partial<VideoDetailOut> = {}): VideoDetailOut {
     last_failure: null,
     transcript: null,
     analysis: analysis(),
+    progress: null,
     ...over,
   }
 }
@@ -228,6 +233,7 @@ describe('page states', () => {
     ['analyze', 'processing', 'running', 'Analysing'],
     ['embed', 'processing', 'running', 'Processing'],
     ['ingest', 'processing', 'pending', 'Queued: Fetching video details'],
+    ['transcribe', 'processing', 'pending', 'Queued: Transcribing'],
     ['analyze', 'processing', 'pending', 'Queued: Analysing'],
     ['weird', 'processing', 'pending', 'Queued: Processing'],
   ])('processing %s/%s shows "%s"', async (kind, status, state, text) => {
@@ -696,5 +702,59 @@ describe('link to the transcript (#51)', () => {
   it('has no link for a done video whose transcript is null', async () => {
     await mountWith(video({ transcript: null }))
     expect(screen.queryByRole('link', { name: 'Transcript' })).toBeNull()
+  })
+})
+
+describe('transcription progress (#245)', () => {
+  const transcribing = (over: Partial<VideoDetailOut> = {}) =>
+    video({
+      status: 'processing',
+      analysis: null,
+      active_job: { id: 5, kind: 'transcribe', state: 'running' },
+      progress: {
+        percent: 40,
+        done_sec: 400,
+        duration_sec: 1000,
+        elapsed_sec: 300,
+        eta_sec: 720,
+        estimated_sec: 600,
+        estimate_source: 'history',
+        updated_at: new Date(Date.now() - 5_000).toISOString(),
+      },
+      ...over,
+    })
+
+  it('shows the same figures as the Ops list for a video that is being transcribed', async () => {
+    await mountWith(transcribing())
+
+    expect(screen.getByText('Transcribing')).toBeTruthy()
+    expect(screen.getByText('40%')).toBeTruthy()
+    expect(document.querySelector('progress')).not.toBeNull()
+    expect(screen.getByText('Elapsed 5 min')).toBeTruthy()
+    expect(screen.getByText('about 12 min left')).toBeTruthy()
+  })
+
+  it('shows the estimate for a queued transcription and nothing for another job', async () => {
+    await mountWith(
+      transcribing({
+        active_job: { id: 5, kind: 'transcribe', state: 'pending' },
+        progress: {
+          percent: null,
+          done_sec: null,
+          duration_sec: 1000,
+          elapsed_sec: null,
+          eta_sec: 600,
+          estimated_sec: 600,
+          estimate_source: 'default',
+          updated_at: null,
+        },
+      }),
+    )
+    expect(screen.getByText('estimated about 10 min (rough)')).toBeTruthy()
+  })
+
+  it('shows no figures without progress', async () => {
+    await mountWith(transcribing({ progress: null }))
+    expect(document.querySelector('progress')).toBeNull()
   })
 })

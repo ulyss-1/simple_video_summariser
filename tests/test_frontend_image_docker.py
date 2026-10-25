@@ -21,6 +21,7 @@ import re
 import shutil
 import subprocess
 import time
+import urllib.request
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -32,7 +33,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.image]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STUB = REPO_ROOT / "tests" / "fixtures" / "stub_api.py"
-BASE = "nginx:1.27-alpine"
+BASE = "nginx/nginx-unprivileged:1.30-alpine"
 STUB_IMAGE = "python:3.14-slim"
 CSP = (
     "default-src 'self'; frame-src https://www.youtube-nocookie.com; "
@@ -177,13 +178,58 @@ def test_config_is_valid_without_a_resolvable_api_host(image: str) -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_nginx_is_the_1_27_line(image: str) -> None:
+def test_nginx_is_the_1_30_line(image: str) -> None:
     assert re.search(
-        r"nginx/1\.27\.", _docker("run", "--rm", image, "nginx", "-v").stderr
+        r"nginx/1\.30\.", _docker("run", "--rm", image, "nginx", "-v").stderr
     )
 
 
+def test_image_declares_and_runs_as_a_non_zero_numeric_user(image: str) -> None:
+    user = _docker("image", "inspect", "-f", "{{.Config.User}}", image).stdout.strip()
+    assert user.isdigit() and int(user) != 0
+    uid = _docker("run", "--rm", "--entrypoint", "id", image, "-u").stdout.strip()
+    assert uid.isdigit() and int(uid) != 0
+
+
+def test_config_is_valid_on_a_read_only_root_with_only_tmp_writable(
+    image: str,
+) -> None:
+    result = _docker(
+        "run", "--rm", "--read-only", "--tmpfs", "/tmp",
+        "--network", "none", image, "nginx", "-t",
+    )  # fmt: skip
+    assert result.returncode == 0, result.stderr
+
+
+def test_serves_root_on_a_read_only_root_with_only_tmp_writable(image: str) -> None:
+    name = f"ytdigest-web-ro-{uuid.uuid4().hex[:8]}"
+    try:
+        run = _docker(
+            "run", "-d", "--name", name, "--read-only", "--tmpfs", "/tmp",
+            "-p", "127.0.0.1::8080", image,
+        )  # fmt: skip
+        assert run.returncode == 0, run.stderr
+        published = _docker("port", name, "8080/tcp").stdout.split()[0]
+        port = int(published.rsplit(":", 1)[1])
+
+        def serves() -> bool:
+            try:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/", timeout=2
+                ) as resp:
+                    return bool(resp.status == 200)
+            except OSError:
+                return False
+
+        assert _wait(serves, deadline=20), _docker("logs", name).stderr
+    finally:
+        _docker("rm", "-f", name)
+
+
 def test_image_is_at_most_10_mb_larger_than_the_base(image: str) -> None:
+    pulled = _docker("pull", BASE, timeout=300)
+    assert pulled.returncode == 0, pulled.stderr
+
     def size(tag: str) -> int:
         return int(_docker("image", "inspect", "-f", "{{.Size}}", tag).stdout)
 
@@ -343,6 +389,15 @@ class Stack:
         assert started.returncode == 0, started.stderr
         return name
 
+    def start_address_holder(self) -> str:
+        name = f"ytdigest-address-holder-{uuid.uuid4().hex[:8]}"
+        started = _docker(
+            "run", "-d", "--name", name, "--network", self.network,
+            STUB_IMAGE, "sleep", "300",
+        )  # fmt: skip
+        assert started.returncode == 0, started.stderr
+        return name
+
     def ip_of(self, container: str) -> str:
         out = _docker(
             "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
@@ -382,10 +437,10 @@ def make_stack(image: str) -> Iterator[Callable[[], Stack]]:
         containers.append(web)
         run = _docker(
             "run", "-d", "--name", web, "--network", network,
-            "-p", "127.0.0.1::80", image,
+            "-p", "127.0.0.1::8080", image,
         )  # fmt: skip
         assert run.returncode == 0, run.stderr
-        port_out = _docker("port", web, "80/tcp").stdout.split()[0]
+        port_out = _docker("port", web, "8080/tcp").stdout.split()[0]
         stack = Stack(network, image, web, int(port_out.rsplit(":", 1)[1]))
         started = _wait(lambda: _serves(stack), deadline=20)
         assert started, stack.logs()
@@ -707,26 +762,25 @@ def test_nginx_follows_the_api_to_a_new_address(
 ) -> None:
     stack = make_stack()
     first = stack.start_api()
-    assert stack.wait_for_api(), stack.logs()
-    old_ip = stack.ip_of(first)
-    assert _docker("rm", "-f", first).returncode == 0
-    # Docker hands the freed address straight back to the next container, which
-    # would make this test assert nothing. Hold it with a throwaway container
-    # (no alias, so it never answers for `api`) until the replacement is up.
-    squatter = f"ytdigest-squat-{uuid.uuid4().hex[:8]}"
     try:
-        held = _docker(
-            "run", "-d", "--name", squatter, "--network", stack.network,
-            "--ip", old_ip, STUB_IMAGE, "sleep", "300",
-        )  # fmt: skip
-        if held.returncode != 0:
-            pytest.fail(f"could not occupy {old_ip}: {held.stderr}")
+        assert stack.wait_for_api(), stack.logs()
+        old_ip = stack.ip_of(first)
+
+        stopped = _docker("stop", first)
+        assert stopped.returncode == 0, stopped.stderr
+
+        def unavailable() -> bool:
+            try:
+                return stack.get("/api/healthz").status in (502, 504)
+            except OSError:
+                return False
+
+        assert _wait(unavailable, deadline=30), stack.logs()
+        holder = stack.start_address_holder()
+        assert stack.ip_of(holder) == old_ip
         second = stack.start_api()
         new_ip = stack.ip_of(second)
-        assert new_ip and new_ip != old_ip, (
-            f"replacement api got {new_ip}, the old address {old_ip}: this test "
-            "proves nothing about re-resolution"
-        )
+        assert new_ip and new_ip != old_ip
         assert stack.wait_for_api(deadline=30), stack.logs()
     finally:
-        _docker("rm", "-f", squatter)
+        _docker("rm", "-f", first)

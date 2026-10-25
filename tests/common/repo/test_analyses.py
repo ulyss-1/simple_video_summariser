@@ -298,3 +298,59 @@ def test_get_analysis_does_not_commit(head_dsn: str) -> None:
         assert get_analysis(conn, "vidrollbk01", aid) is not None
         conn.rollback()
         assert get_analysis(conn, "vidrollbk01", aid) is None
+
+
+# -- cache tokens and call count (issue #139) ---------------------------------------------------
+
+
+def test_usage_fields_round_trip_through_all_five_read_paths(conn: psycopg.Connection) -> None:
+    from common.repo.analyses import (
+        analysis_run_for,
+        get_analysis,
+        latest_analysis_run,
+        list_analysis_runs,
+    )
+
+    conn.execute("INSERT INTO videos (video_id) VALUES ('usageAAAAAA')")
+    tid = save_transcript(conn, "usageAAAAAA", "youtube_auto", "en", "none", (), None)
+    known = save_analysis(
+        conn,
+        make_analysis(
+            "usageAAAAAA", tid, prompt_version="p1", cache_read_tokens=7, cache_write_tokens=11,
+            calls=3,
+        ),
+    )
+    unknown = save_analysis(conn, make_analysis("usageAAAAAA", tid, prompt_version="p2"))
+    conn.execute("UPDATE analyses SET created_at = now() + interval '1 hour' WHERE id = %s", (unknown,))
+
+    def usage(a: Analysis | None) -> tuple[int | None, int | None, int | None]:
+        assert a is not None
+        return (a.cache_read_tokens, a.cache_write_tokens, a.calls)
+
+    assert usage(latest_analysis(conn, "usageAAAAAA")) == (None, None, None)
+    assert usage(get_analysis(conn, "usageAAAAAA", known)) == (7, 11, 3)
+    assert usage(get_analysis(conn, "usageAAAAAA", unknown)) == (None, None, None)
+    latest_run = latest_analysis_run(conn, "usageAAAAAA")
+    assert latest_run is not None and latest_run.transcript_source == "youtube_auto"
+    assert usage(latest_run.analysis) == (None, None, None)
+    run_for = analysis_run_for(conn, "usageAAAAAA", "test-model", "p1")
+    assert run_for is not None and run_for.transcript_source == "youtube_auto"
+    assert usage(run_for.analysis) == (7, 11, 3)
+    runs, total = list_analysis_runs(conn, "usageAAAAAA", offset=0, limit=10)
+    assert total == 2
+    assert [(r.analysis.id, usage(r.analysis), r.transcript_source) for r in runs] == [
+        (unknown, (None, None, None), "youtube_auto"),
+        (known, (7, 11, 3), "youtube_auto"),
+    ]
+
+
+def test_save_analysis_writes_null_for_unrecorded_usage(conn: psycopg.Connection) -> None:
+    conn.execute("INSERT INTO videos (video_id) VALUES ('usageBBBBBB')")
+    tid = save_transcript(conn, "usageBBBBBB", "whisper", "en", "none", (), None)
+
+    analysis_id = save_analysis(conn, make_analysis("usageBBBBBB", tid))
+
+    assert conn.execute(
+        "SELECT cache_read_tokens, cache_write_tokens, calls FROM analyses WHERE id = %s",
+        (analysis_id,),
+    ).fetchone() == (None, None, None)

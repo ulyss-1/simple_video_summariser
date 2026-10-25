@@ -1,0 +1,24 @@
+# Daily base-image digest check (issue #241, architecture.md 11.3).
+#
+# Reports through a red run with an ::error annotation naming the pinned and
+# the upstream digest. It never edits the Dockerfile and nothing depends on
+# it, so it cannot block a deploy; a Docker Hub outage ends green and retries
+# tomorrow. CI proper lives in ci.yml (#61).
+name: base image digest check
+
+on:
+  schedule:
+    - cron: "41 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  base-image-digest-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Compare the pinned base image digests with Docker Hub
+        run: python3 scripts/base_image_digest_check.py ops/Dockerfile.frontend

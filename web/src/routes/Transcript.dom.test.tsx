@@ -63,10 +63,12 @@ function videoBody(
     unavailable: null,
     status: "done",
     latest_analysis_at: null,
+    has_transcript: false,
     active_job: null,
     last_failure: null,
     transcript: null,
     analysis: null,
+    progress: null,
   };
 }
 

@@ -9,6 +9,8 @@ type Query = NonNullable<operations['get_ops_jobs_ops_jobs_get']['parameters']['
 export type JobOut = components['schemas']['JobOut']
 export type JobListOut = components['schemas']['JobListOut']
 export type HealthOut = components['schemas']['HealthOut']
+export type OpsChannelOut = components['schemas']['OpsChannelOut']
+export type OpsChannelListOut = components['schemas']['OpsChannelListOut']
 
 /** The one place the sets and their order live: the depth table and the filters both use it. */
 export const JOB_KINDS = ['ingest', 'transcribe', 'analyze'] as const satisfies readonly NonNullable<Query['kind']>[]
@@ -247,6 +249,27 @@ function isCount(v: unknown): boolean {
   return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
 }
 
+export function isOpsChannelList(v: unknown): v is OpsChannelListOut {
+  return (
+    isObject(v) &&
+    Array.isArray(v.items) &&
+    v.items.every(
+      (item) =>
+        isObject(item) &&
+        typeof item.channel_id === 'string' &&
+        isStringOrNull(item.title) &&
+        isStringOrNull(item.poll_failing_since) &&
+        isCount(item.poll_failures) &&
+        isStringOrNull(item.last_poll_err) &&
+        isStringOrNull(item.feed_gap_detected_at) &&
+        (item.feed_gap_reason === null ||
+          item.feed_gap_reason === 'suspected' ||
+          item.feed_gap_reason === 'no_anchor' ||
+          item.feed_gap_reason === 'listing_window_exhausted'),
+    )
+  )
+}
+
 export function isHealth(v: unknown): v is HealthOut {
   if (!isObject(v) || typeof v.status !== 'string' || !isObject(v.queue)) return false
   return Object.values(v.queue).every((row) => isObject(row) && Object.values(row).every(isCount))
@@ -268,7 +291,8 @@ function isJob(v: unknown): v is JobOut {
     isStringOrNull(v.error_class) &&
     isStringOrNull(v.last_error) &&
     isStringOrNull(v.finished_at) &&
-    typeof v.created_at === 'string'
+    typeof v.created_at === 'string' &&
+    (v.progress === undefined || v.progress === null || isObject(v.progress))
   )
 }
 

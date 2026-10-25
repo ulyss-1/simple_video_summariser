@@ -23,6 +23,7 @@ function vid(n: number, over: Partial<VideoItem> = {}): VideoItem {
     published_at: '2026-09-01T12:00:00Z',
     duration_sec: 60,
     latest_analysis_at: null,
+    has_transcript: false,
     origin: 'manual',
     unavailable: null,
     status: 'done',
@@ -100,6 +101,155 @@ beforeEach(() => {
 const search = (r: { state: { location: { search: string } } }) => r.state.location.search
 const last = () => requests[requests.length - 1] as URL
 
+describe('single-video submission', () => {
+  type SubmissionResponder = () => Response | Promise<Response>
+  let posts: Array<{ url: URL; init: RequestInit }>
+
+  function stubSubmission(respond: SubmissionResponder) {
+    requests = []
+    posts = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init: RequestInit = {}) => {
+        const url = new URL(String(input), 'http://localhost')
+        if (init.method === 'POST') {
+          posts.push({ url, init })
+          return Promise.resolve(respond())
+        }
+        requests.push(url)
+        return Promise.resolve(json(list(1, [vid(1)])))
+      }),
+    )
+  }
+
+  async function submit(value: string) {
+    const input = screen.getByRole('textbox', { name: 'YouTube video URL or ID' }) as HTMLInputElement
+    fireEvent.change(input, { target: { value } })
+    fireEvent.submit(input.closest('form') as HTMLFormElement)
+    await settle()
+    return input
+  }
+
+  it('renders the submission form above the video results', async () => {
+    stubFetch(serverWith(1))
+    await mount()
+    const input = screen.getByRole('textbox', { name: 'YouTube video URL or ID' })
+    const button = screen.getByRole('button', { name: 'Add video' })
+    const table = screen.getByRole('table')
+    expect(input.closest('form')).toContain(button)
+    expect(button.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('submits with the form keyboard path and trims only outer whitespace', async () => {
+    stubSubmission(() => json({ created: true, video_id: 'Ab_-123xyZ0', job_id: 7, state: 'pending' }, 202))
+    await mount()
+    await submit('  https://youtu.be/Ab_-123xyZ0?T=Mixed  ')
+    expect(posts).toHaveLength(1)
+    expect(posts[0]?.url.pathname).toBe('/api/videos')
+    expect(posts[0]?.init.method).toBe('POST')
+    expect(JSON.parse(String(posts[0]?.init.body))).toEqual({ url: 'https://youtu.be/Ab_-123xyZ0?T=Mixed' })
+    expect(screen.getByText('Queued')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Ab_-123xyZ0' }).getAttribute('href')).toBe('/videos/Ab_-123xyZ0')
+  })
+
+  it('shows an existing submission and state without treating it as an error', async () => {
+    stubSubmission(() => json({ created: false, video_id: 'dQw4w9WgXcQ', job_id: 8, state: 'running' }))
+    await mount()
+    const input = await submit('dQw4w9WgXcQ')
+    expect(screen.getByText('Already added')).toBeTruthy()
+    expect(screen.getByText('running')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(input.value).toBe('')
+  })
+
+  it.each([
+    [422, 'url must be a YouTube video ID or video URL'],
+    [429, 'Too many requests. Wait a moment and try again.'],
+    [503, 'The service is unavailable. Try again shortly.'],
+    [500, 'Could not add the video. Try again.'],
+  ])('maps HTTP %i to fixed feedback and retains the input', async (status, message) => {
+    stubSubmission(() => json({ detail: 'SECRET server text' }, status))
+    await mount()
+    const input = await submit(' keep-me ')
+    const alert = screen.getByRole('alert')
+    expect(alert.textContent).toBe(message)
+    expect(input.value).toBe(' keep-me ')
+    expect(document.body.textContent).not.toContain('SECRET')
+    if (status === 422) {
+      expect(input.getAttribute('aria-invalid')).toBe('true')
+      expect(input.getAttribute('aria-describedby')).toBe(alert.id)
+    }
+  })
+
+  it.each([
+    ['a malformed success', () => json({ created: true, video_id: 3, state: 'pending' })],
+    ['a network failure', () => Promise.reject(new TypeError('SECRET network exception'))],
+  ])('shows safe feedback for %s and retains focus and input', async (_name, respond) => {
+    stubSubmission(respond)
+    await mount()
+    const input = screen.getByRole('textbox', { name: 'YouTube video URL or ID' }) as HTMLInputElement
+    input.focus()
+    await submit('keep-me')
+    expect(screen.getByRole('alert').textContent).toBe(
+      _name === 'a network failure'
+        ? 'Could not add the video. Check your connection and try again.'
+        : 'Could not add the video. Try again.',
+    )
+    expect(input.value).toBe('keep-me')
+    expect(document.activeElement).toBe(input)
+    expect(document.body.textContent).not.toContain('SECRET')
+  })
+
+  it('shows safe outcome text without a link for an invalid returned video id', async () => {
+    stubSubmission(() => json({ created: true, video_id: '<bad-id>', job_id: 9, state: 'pending' }, 202))
+    await mount()
+    await submit('valid server input')
+    expect(screen.getByText('Queued')).toBeTruthy()
+    expect(screen.queryByRole('link', { name: '<bad-id>' })).toBeNull()
+    expect(document.querySelector('bad-id')).toBeNull()
+  })
+
+  it('clears feedback on edit and invalidates videos and ops after success', async () => {
+    stubSubmission(() => json({ created: true, video_id: 'dQw4w9WgXcQ', job_id: 7, state: 'pending' }, 202))
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    const router = createMemoryRouter([{ path: '/', element: <Library /> }], { initialEntries: ['/'] })
+    render(
+      <QueryClientProvider client={client}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    )
+    await settle()
+    const input = await submit('dQw4w9WgXcQ')
+    expect(input.value).toBe('')
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['videos'] })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['ops'] })
+    fireEvent.change(input, { target: { value: 'next' } })
+    expect(screen.queryByText('Queued')).toBeNull()
+  })
+
+  it('allows only one unresolved submission despite repeated submit and click events', async () => {
+    let release: (response: Response) => void = () => {}
+    stubSubmission(() => new Promise<Response>((resolve) => { release = resolve }))
+    await mount()
+    const input = screen.getByRole('textbox', { name: 'YouTube video URL or ID' }) as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'dQw4w9WgXcQ' } })
+    const form = input.closest('form') as HTMLFormElement
+    const button = screen.getByRole('button', { name: 'Add video' }) as HTMLButtonElement
+    fireEvent.submit(form)
+    fireEvent.submit(form)
+    fireEvent.click(button)
+    await settle()
+    expect(posts).toHaveLength(1)
+    expect(button.disabled).toBe(true)
+    expect(button.textContent).not.toBe('Add video')
+    await act(async () => {
+      release(json({ created: true, video_id: 'dQw4w9WgXcQ', job_id: 7, state: 'pending' }, 202))
+      await vi.advanceTimersByTimeAsync(0)
+    })
+  })
+})
+
 describe('request construction', () => {
   it('fetches same-origin /api/videos with limit and offset only when nothing is set', async () => {
     stubFetch(serverWith(3))
@@ -157,6 +307,147 @@ describe('request construction', () => {
   })
 })
 
+describe('sorting', () => {
+  it('marks only Published descending and gives every header an action name', async () => {
+    stubFetch(serverWith(2))
+    await mount()
+    const headers = screen.getAllByRole('columnheader')
+    expect(headers.map((header) => [header.textContent, header.getAttribute('aria-sort')])).toEqual([
+      ['Title', null],
+      ['Channel', null],
+      ['Published 1 descending', 'descending'],
+      ['Status', null],
+      ['Transcript', null],
+    ])
+    for (const name of [
+      'Append Title ascending',
+      'Append Channel ascending',
+      'Toggle Published to ascending',
+      'Append Status ascending',
+    ]) {
+      expect(screen.getByRole('button', { name }).classList.contains('btn')).toBe(true)
+    }
+  })
+
+  it.each([
+    ['Title', 'title', 'asc'],
+    ['Channel', 'channel', 'asc'],
+    ['Status', 'status', 'asc'],
+  ])('selects %s with its default direction, preserving filters and resetting page', async (label, sort, order) => {
+    stubFetch(serverWith(120))
+    const router = await mount('/?status=idle&page=2')
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: `Append ${label} ascending` }))
+    })
+    await settle()
+    expect(search(router)).toBe(`?status=idle&sort=published&order=desc&sort=${sort}&order=${order}`)
+    expect(last().searchParams.getAll('sort')).toEqual(['published', sort])
+    expect(last().searchParams.getAll('order')).toEqual(['desc', order])
+    expect(last().searchParams.get('offset')).toBe('0')
+  })
+
+  it('restores a deep link, toggles, resets a new column to its default, and follows Back and Forward', async () => {
+    stubFetch(serverWith(2))
+    const router = await mount('/?sort=title&order=asc')
+    expect(last().search).toBe('?sort=title&order=asc&limit=50&offset=0')
+    expect(screen.getByRole('columnheader', { name: 'Title 1 ascending' }).getAttribute('aria-sort')).toBe(
+      'ascending',
+    )
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Toggle Title to descending' }))
+    })
+    await settle()
+    expect(search(router)).toBe('?sort=title&order=desc')
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Reset sort to Published descending' }))
+    })
+    await settle()
+    expect(search(router)).toBe('')
+    expect(last().search).toBe('?limit=50&offset=0')
+    expect(screen.getByRole('columnheader', { name: 'Published 1 descending' }).getAttribute('aria-sort')).toBe(
+      'descending',
+    )
+
+    await act(async () => {
+      await router.navigate(-1)
+    })
+    await settle()
+    expect(search(router)).toBe('?sort=title&order=desc')
+    expect(screen.getByRole('columnheader', { name: 'Title 1 descending' }).getAttribute('aria-sort')).toBe(
+      'descending',
+    )
+
+    await act(async () => {
+      await router.navigate(1)
+    })
+    await settle()
+    expect(search(router)).toBe('')
+    expect(screen.getByRole('columnheader', { name: 'Published 1 descending' }).getAttribute('aria-sort')).toBe(
+      'descending',
+    )
+  })
+
+  it('appends, toggles, moves, removes, and resets visible sort precedence', async () => {
+    stubFetch(serverWith(120))
+    const router = await mount('/?sort=channel&order=asc&sort=published&order=desc&page=2')
+
+    const sortOrder = screen.getByRole('group', { name: 'Sort order' })
+    expect(sortOrder.textContent).toContain('1 Channel ascending')
+    expect(sortOrder.textContent).toContain('2 Published descending')
+    expect(screen.getByRole('columnheader', { name: 'Channel 1 ascending' }).getAttribute('aria-sort')).toBe('ascending')
+    expect(screen.getByRole('columnheader', { name: 'Published 2 descending' }).getAttribute('aria-sort')).toBeNull()
+    expect((screen.getByRole('button', { name: 'Move Channel earlier' }) as HTMLButtonElement).disabled).toBe(true)
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Append Status ascending' }))
+    })
+    await settle()
+    expect(search(router)).toBe('?sort=channel&order=asc&sort=published&order=desc&sort=status&order=asc')
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Append Title ascending' }))
+    })
+    await settle()
+    expect(search(router)).toBe(
+      '?sort=channel&order=asc&sort=published&order=desc&sort=status&order=asc&sort=title&order=asc',
+    )
+    expect(screen.queryByRole('button', { name: /^Append / })).toBeNull()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Move Status earlier' }))
+    })
+    await settle()
+    expect(search(router)).toBe(
+      '?sort=channel&order=asc&sort=status&order=asc&sort=published&order=desc&sort=title&order=asc',
+    )
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Remove Channel from sort order' }))
+    })
+    await settle()
+    expect(search(router)).toBe('?sort=status&order=asc&sort=published&order=desc&sort=title&order=asc')
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Reset sort to Published descending' }))
+    })
+    await settle()
+    expect(search(router)).toBe('')
+  })
+
+  it('clear all filters preserves sorting and sorting alone does not show it', async () => {
+    stubFetch(serverWith(2))
+    const router = await mount('/?status=done&sort=channel&order=desc')
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Clear all filters' }))
+    })
+    await settle()
+    expect(search(router)).toBe('?sort=channel&order=desc')
+    expect(screen.queryByRole('button', { name: 'Clear all filters' })).toBeNull()
+  })
+})
+
 describe('rows', () => {
   it('shows title link, channel, UTC date and status', async () => {
     stubFetch(() => list(1, [vid(1, { published_at: '2026-09-01T02:00:00Z' })]))
@@ -171,8 +462,9 @@ describe('rows', () => {
     expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toEqual([
       'Title',
       'Channel',
-      'Published',
+      'Published 1 descending',
       'Status',
+      'Transcript',
     ])
   })
 
@@ -256,9 +548,11 @@ describe('rows', () => {
     expect(screen.getAllByRole('row')).toHaveLength(4)
   })
 
-  it('keeps the order the server returned', async () => {
+  it('keeps adversarial server order under a non-default sort', async () => {
     stubFetch(() => list(3, [vid(3), vid(1), vid(2)]))
-    await mount()
+    await mount('/?sort=title&order=asc')
+    expect(last().searchParams.get('sort')).toBe('title')
+    expect(last().searchParams.get('order')).toBe('asc')
     const titles = screen.getAllByRole('link', { name: /^Title/ }).map((a) => a.textContent)
     expect(titles).toEqual(['Title 3', 'Title 1', 'Title 2'])
   })
@@ -411,7 +705,7 @@ describe('untrusted URL parameters', () => {
     stubFetch(serverWith(2))
     const m = 'MARKER'
     const router = await mount(
-      `/?channel=${m}&from=${m}&to=${m}&status=${m}&page=${m}&q=${m}&before=${m}&offset=${m}&limit=${m}`,
+      `/?channel=${m}&from=${m}&to=${m}&status=${m}&sort=${m}&order=${m}&page=${m}&q=${m}&before=${m}&offset=${m}&limit=${m}`,
     )
     expect(requests).toHaveLength(1)
     expect(last().search).toBe('?limit=50&offset=0')
@@ -420,7 +714,7 @@ describe('untrusted URL parameters', () => {
     expect(document.body.textContent).not.toContain(m)
     expect((screen.getByLabelText('From') as HTMLInputElement).value).toBe('')
     // Invalid known params are gone from the URL, replaced rather than pushed.
-    expect(search(router)).not.toMatch(/channel|from|to=|status|page/)
+    expect(search(router)).not.toMatch(/channel|from|to=|status|sort|order|page/)
     expect(router.state.historyAction).toBe('REPLACE')
   })
 
@@ -552,6 +846,23 @@ describe('pagination', () => {
   })
 })
 
+describe('transcript column', () => {
+  it('links a video that has a transcript and says "Not yet" for one that has not', async () => {
+    stubFetch(() =>
+      list(2, [
+        vid(1, { status: 'processing', has_transcript: true }),
+        vid(2, { status: 'processing', has_transcript: false }),
+      ]),
+    )
+    await mount()
+    const rows = screen.getAllByRole('row').slice(1)
+    const link = within(rows[0]).getByRole('link', { name: 'Transcript' })
+    expect(link.getAttribute('href')).toBe('/videos/v0000000001/transcript')
+    expect(within(rows[1]).queryByRole('link', { name: 'Transcript' })).toBeNull()
+    expect(within(rows[1]).getByText('Not yet')).toBeTruthy()
+  })
+})
+
 describe('states', () => {
   it('first visit shows a loading indicator, not the empty message', async () => {
     stubFetch(() => new Promise<Response>(() => {}))
@@ -631,8 +942,10 @@ describe('polling', () => {
       // First two responses carry an active job, the third does not.
       return list(1, [vid(1, calls < 3 ? { status: 'processing', active_job: active } : {})])
     })
-    await mount()
+    await mount('/?sort=status&order=asc')
     expect(calls).toBe(1)
+    expect(requests.map((request) => request.searchParams.get('sort'))).toEqual(['status'])
+    expect(requests.map((request) => request.searchParams.get('order'))).toEqual(['asc'])
     await act(async () => {
       await vi.advanceTimersByTimeAsync(14_999)
     })
@@ -645,6 +958,12 @@ describe('polling', () => {
       await vi.advanceTimersByTimeAsync(15_000)
     })
     expect(calls).toBe(3)
+    expect(requests.map((request) => request.searchParams.get('sort'))).toEqual([
+      'status',
+      'status',
+      'status',
+    ])
+    expect(requests.map((request) => request.searchParams.get('order'))).toEqual(['asc', 'asc', 'asc'])
     expect(screen.getByText('Analysed')).toBeTruthy()
     await act(async () => {
       await vi.advanceTimersByTimeAsync(120_000)
@@ -691,12 +1010,18 @@ describe('accessibility', () => {
     expect(screen.getByLabelText('To').tagName).toBe('INPUT')
     expect(screen.getByLabelText('Status').tagName).toBe('SELECT')
     expect(screen.getByRole('table')).toBeTruthy()
-    expect(screen.getAllByRole('columnheader')).toHaveLength(4)
+    expect(screen.getAllByRole('columnheader')).toHaveLength(5)
   })
 
   it('uses no dangerouslySetInnerHTML in the view sources', async () => {
     const { readFileSync } = await import('node:fs')
-    for (const f of ['Library.tsx', '../hooks/useVideos.ts', '../lib/library.ts']) {
+    for (const f of [
+      'Library.tsx',
+      '../components/AddVideoForm.tsx',
+      '../hooks/useSubmitVideo.ts',
+      '../hooks/useVideos.ts',
+      '../lib/library.ts',
+    ]) {
       expect(readFileSync(new URL(f, import.meta.url), 'utf8')).not.toContain('dangerouslySetInnerHTML')
     }
   })
