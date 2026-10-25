@@ -211,15 +211,21 @@ def _summary_table(entries: Sequence[VideoEntry]) -> list[str]:
 
 
 def _details_table(a: AnalysisRun | None, b: AnalysisRun | None) -> list[str]:
+    def count(value: int | None) -> str:
+        return str(value) if value is not None else "not recorded"
+
     def cells(run: AnalysisRun | None) -> list[str]:
         if run is None:
-            return ["-"] * 10
+            return ["-"] * len(names)
         x = run.analysis
         return [
             md_text(run.transcript_source),
             md_text(x.chunk_strategy),
             _created(x),
             f"{x.input_tokens} / {x.output_tokens}",
+            count(x.cache_read_tokens),
+            count(x.cache_write_tokens),
+            count(x.calls),
             f"{x.duration_ms}" if x.duration_ms is not None else "not recorded",
             f"{x.cost_usd:.4f}" if x.cost_usd is not None else "not recorded",
             f"{len(x.topics)} / {len(x.claims)} / {len(x.quotes)}",
@@ -233,6 +239,9 @@ def _details_table(a: AnalysisRun | None, b: AnalysisRun | None) -> list[str]:
         "Chunk strategy",
         "Created (UTC)",
         "Tokens (in / out)",
+        "Cache read tokens",
+        "Cache write tokens",
+        "Model calls",
         "Duration (ms)",
         "Cost (USD)",
         "Topics / claims / quotes",

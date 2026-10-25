@@ -4,7 +4,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +123,8 @@ class Channel:
     added_at: datetime
     poll_failing_since: datetime | None  # start of the current failed-poll run (#90)
     poll_failures: int  # failed polls in a row (#90)
+    feed_gap_detected_at: datetime | None = None
+    feed_gap_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,6 +261,10 @@ class Analysis:
     duration_ms: int | None = None
     #: Speakers the analyzer coerced to ``unknown`` (#60); ``None`` = not recorded.
     speakers_coerced: int | None = None
+    #: Prompt-cache tokens and model calls of the job (#139); ``None`` = not recorded.
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    calls: int | None = None
     topics: tuple[Topic, ...] = ()
     claims: tuple[Claim, ...] = ()
     quotes: tuple[Quote, ...] = ()
@@ -416,6 +422,22 @@ class JobScopedSummarizer(Protocol):
     def end_job(self) -> None: ...
 
 
+#: What cancelling an orphaned batch came to (#160). ``cancelled`` and
+#: ``not_cancellable`` both mean the row can go; ``retry_later`` keeps it.
+type OrphanOutcome = Literal["cancelled", "not_cancellable", "retry_later"]
+
+
+@runtime_checkable
+class OrphanBatchCanceller(Protocol):
+    """A summarizer that can cancel a batch no job is waiting on (#160). Optional.
+
+    Must read and write no per-job state: it is called from another thread
+    while a job runs. Never raises.
+    """
+
+    def cancel_orphan_batch(self, batch_id: str) -> OrphanOutcome: ...
+
+
 # ActiveJob, JobFailure, VideoSummary, VideoPage, AnalysisRun, TranscriptInfo,
 # IndexedSegment and TranscriptPage belong to #42 (read endpoints). They are
 # what the common/repo/ read functions behind GET /videos... return.
@@ -458,6 +480,7 @@ class VideoSummary:
     active_job: ActiveJob | None
     last_failure: JobFailure | None
     latest_analysis_at: datetime | None
+    has_transcript: bool = False
 
 
 @dataclass(frozen=True, slots=True)

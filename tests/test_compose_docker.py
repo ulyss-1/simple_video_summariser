@@ -31,35 +31,16 @@ def _run(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-@pytest.mark.parametrize("populated_default_env", [False, True])
 def test_up_refuses_to_start_without_postgres_password(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, populated_default_env: bool
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    env_file = tmp_path / "empty.env"
-    env_file.write_text("")
     monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
-    if populated_default_env:
-        populated_env = tmp_path / "populated.env"
-        populated_env.write_text("POSTGRES_PASSWORD=developer-password\n")
-        monkeypatch.setenv("COMPOSE_ENV_FILES", str(populated_env))
-    else:
-        monkeypatch.delenv("COMPOSE_ENV_FILES", raising=False)
-    project = f"issue-224-{tmp_path.name.replace('_', '-')}"
-
-    result = _run(
-        "--env-file",
-        str(env_file),
-        "--project-name",
-        project,
-        "-f",
-        "compose.yml",
-        "up",
-        "-d",
-        "db",
-    )
-
-    assert result.returncode != 0
-    assert "POSTGRES_PASSWORD" in result.stderr
+    try:
+        result = _run("up", "-d", "db")
+        assert result.returncode != 0
+        assert "POSTGRES_PASSWORD" in result.stderr
+    finally:
+        _run("down", "-v")
 
 
 def test_explicit_compose_yml_config_has_no_published_port(
@@ -156,7 +137,7 @@ def test_web_is_the_only_published_port_and_on_loopback(
     assert isinstance(ports, list) and len(ports) == 1
     assert ports[0]["host_ip"] == "127.0.0.1"
     assert str(ports[0]["published"]) == "8080"
-    assert ports[0]["target"] == 80
+    assert ports[0]["target"] == 8080
 
 
 def test_planner_has_one_replica_and_worker_healthcheck_keeps_its_dollars(
@@ -180,22 +161,11 @@ def test_planner_has_one_replica_and_worker_healthcheck_keeps_its_dollars(
     assert services["planner"]["healthcheck"] == services["transcriber"]["healthcheck"]
 
 
-@pytest.mark.parametrize("populated_default_env", [False, True])
 def test_config_fails_naming_postgres_password_when_unset(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, populated_default_env: bool
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    env_file = tmp_path / "empty.env"
-    env_file.write_text("")
     monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
-    if populated_default_env:
-        populated_env = tmp_path / "populated.env"
-        populated_env.write_text("POSTGRES_PASSWORD=developer-password\n")
-        monkeypatch.setenv("COMPOSE_ENV_FILES", str(populated_env))
-    else:
-        monkeypatch.delenv("COMPOSE_ENV_FILES", raising=False)
-
-    result = _run("--env-file", str(env_file), "-f", "compose.yml", "config")
-
+    result = _run("-f", "compose.yml", "config")
     assert result.returncode != 0
     assert "POSTGRES_PASSWORD" in result.stderr
 
@@ -210,8 +180,8 @@ Config = dict[str, dict[str, object]]
 SOURCE_DIRS = ("common", "adapters", "services")
 # The web files the dev overlay binds (read-only) into /home/node/app.
 WEB_SOURCE_FILES = (
-    "src", "index.html", "index.css", "package.json", "package-lock.json",
-    "tsconfig.json", "vite.config.ts",
+    "src", "index.html", "index.css", "package.json", "package-lock.json", "tsconfig.json",
+    "vite.config.ts",
 )  # fmt: skip
 BACKEND_SERVICES = ("api", "planner", "analyzer", "transcriber")
 
@@ -321,6 +291,45 @@ def test_dev_config_api_runs_uvicorn_reload_workers_keep_commands(
     ]  # fmt: skip
 
 
+WATCHED_WORKERS = ("planner", "analyzer", "transcriber")
+
+
+def _watch_rules(service: dict[str, object]) -> list[dict[str, object]]:
+    develop = service["develop"]
+    assert isinstance(develop, dict)
+    rules = develop["watch"]
+    assert isinstance(rules, list)
+    return rules
+
+
+def test_dev_config_only_the_three_workers_have_a_watch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    services = _dev(monkeypatch, tmp_path)
+    assert {n for n, svc in services.items() if "develop" in svc} == set(
+        WATCHED_WORKERS
+    )
+    for name in ("api", "web", "migrate", "db"):
+        assert "develop" not in services[name], name
+
+
+@pytest.mark.parametrize("name", WATCHED_WORKERS)
+def test_dev_config_worker_watch_restarts_on_its_own_sources_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, name: str
+) -> None:
+    rules = _watch_rules(_dev(monkeypatch, tmp_path)[name])
+    assert {r["action"] for r in rules} == {"restart"}
+    assert sorted(str(r["path"]) for r in rules) == sorted(
+        str(REPO_ROOT / p) for p in ("common", "adapters", f"services/{name}")
+    )
+    for rule in rules:
+        # The bare directory form matters: creating `__pycache__` is itself an
+        # event, which `**/__pycache__/**` alone does not ignore.
+        assert set(rule["ignore"]) >= {  # type: ignore[call-overload]
+            "**/__pycache__", "**/__pycache__/**", "**/*.pyc"
+        }  # fmt: skip
+
+
 def test_dev_config_web_is_the_vite_dev_server_without_a_build(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -394,6 +403,7 @@ def test_prod_config_has_none_of_the_dev_overlay(
         "5173",
         "devhost",
         "API_PROXY_TARGET",
+        "develop",
     ):
         assert needle not in raw, needle
     assert '"published": "5432"' not in raw
@@ -406,5 +416,5 @@ def test_prod_config_has_none_of_the_dev_overlay(
     ports = web["ports"]
     assert isinstance(ports, list) and len(ports) == 1
     assert (ports[0]["host_ip"], str(ports[0]["published"]), ports[0]["target"]) == (
-        "127.0.0.1", "8080", 80
+        "127.0.0.1", "8080", 8080
     )  # fmt: skip

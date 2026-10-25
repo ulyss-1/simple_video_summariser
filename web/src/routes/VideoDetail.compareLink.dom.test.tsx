@@ -22,6 +22,7 @@ function video(id = ID): VideoDetailOut {
     published_at: null,
     duration_sec: null,
     latest_analysis_at: null,
+    has_transcript: false,
     origin: 'manual',
     unavailable: null,
     status: 'idle',
@@ -29,6 +30,7 @@ function video(id = ID): VideoDetailOut {
     last_failure: null,
     transcript: null,
     analysis: null,
+    progress: null,
   }
 }
 
@@ -141,7 +143,7 @@ describe('query cache', () => {
   it('keeps the count and the full walk under separate keys in one client', async () => {
     const run = (id: number, model: string) => ({
       id, transcript_id: 1, transcript_source: 'captions', chunk_strategy: 'fixed', model, prompt_version: 'v1',
-      created_at: '2026-10-01T08:09:10Z', input_tokens: 1, output_tokens: 1, cost_usd: null, duration_ms: null,
+      created_at: '2026-10-01T08:09:10Z', input_tokens: 1, output_tokens: 1, cache_read_tokens: null, cache_write_tokens: null, calls: null, cost_usd: null, duration_ms: null,
       tldr: 't', speaker_roster: null, topics: [], claims: [], quotes: [],
     })
     const items = [run(2, 'a'), run(1, 'b')]

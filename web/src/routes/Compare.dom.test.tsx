@@ -27,6 +27,9 @@ function run(over: Partial<AnalysisOut> = {}): AnalysisOut {
     created_at: '2026-10-01T08:09:10Z',
     input_tokens: 1000,
     output_tokens: 200,
+    cache_read_tokens: null,
+    cache_write_tokens: null,
+    calls: null,
     cost_usd: null,
     duration_ms: null,
     tldr: `TLDR of ${id}`,
@@ -55,6 +58,7 @@ function video(over: Partial<VideoDetailOut> = {}): VideoDetailOut {
     published_at: '2026-09-30T23:30:00-07:00',
     duration_sec: 3723,
     latest_analysis_at: null,
+    has_transcript: false,
     origin: 'manual',
     unavailable: null,
     status: 'done',
@@ -62,6 +66,7 @@ function video(over: Partial<VideoDetailOut> = {}): VideoDetailOut {
     last_failure: null,
     transcript: null,
     analysis: null,
+    progress: null,
     ...over,
   }
 }
@@ -465,6 +470,14 @@ describe('page states', () => {
     ['a non-JSON 200', () => new Response('<html>SECRET-STACK</html>', { status: 200 })],
     ['a JSON 200 of the wrong shape', () => json({ items: 'nope', total: 1 })],
     ['an item of the wrong shape', () => json({ items: [{ id: 1 }], limit: 50, offset: 0, total: 1 })],
+    ['a string in a usage field', () => json({ items: [run({ calls: '7' as unknown as number })], limit: 50, offset: 0, total: 1 })],
+    [
+      'a missing usage key',
+      () => {
+        const { calls: _calls, ...rest } = run()
+        return json({ items: [rest], limit: 50, offset: 0, total: 1 })
+      },
+    ],
   ])('shows the error state with Retry for %s, leaking nothing', async (_n, respond) => {
     stubApi({ runs: MIXED, analyses: respond })
     await mount()
@@ -689,6 +702,9 @@ describe('run details', () => {
       'created_at',
       'input_tokens',
       'output_tokens',
+      'cache_read_tokens',
+      'cache_write_tokens',
+      'calls',
       'cost_usd',
       'duration_ms',
       'claim count',
@@ -705,6 +721,30 @@ describe('run details', () => {
     expect(cells(rowOf('duration_ms'))).toEqual(['1 h 2 min 3 s', 'not recorded'])
     expect(cells(rowOf('created_at'))).toEqual(['2026-10-01 08:09:10 UTC', '2026-10-01 08:09:10 UTC'])
     expect(cells(rowOf('input_tokens'))).toEqual(['1000', '1000'])
+  })
+
+  it('shows recorded usage against not recorded, and marks the rows as differing', async () => {
+    await mountPair(
+      { cache_read_tokens: 5, cache_write_tokens: 7, calls: 2 },
+      { cache_read_tokens: null, cache_write_tokens: null, calls: null },
+    )
+    expect(cells(rowOf('cache_read_tokens'))).toEqual(['5', 'not recorded'])
+    expect(cells(rowOf('cache_write_tokens'))).toEqual(['7', 'not recorded'])
+    expect(cells(rowOf('calls'))).toEqual(['2', 'not recorded'])
+    for (const name of ['cache_read_tokens', 'cache_write_tokens', 'calls']) {
+      expect(rowOf(name).textContent).toContain('differs')
+    }
+  })
+
+  it('shows equal zero usage without a differs marker, and two nulls the same', async () => {
+    await mountPair(
+      { cache_read_tokens: 0, cache_write_tokens: 0, calls: 0 },
+      { cache_read_tokens: 0, cache_write_tokens: 0, calls: 0 },
+    )
+    for (const name of ['cache_read_tokens', 'cache_write_tokens', 'calls']) {
+      expect(cells(rowOf(name))).toEqual(['0', '0'])
+      expect(rowOf(name).textContent).not.toContain('differs')
+    }
   })
 
   it('shows $0.0000 for a zero cost and 0 s for a zero duration', async () => {
