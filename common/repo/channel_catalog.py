@@ -86,11 +86,18 @@ def get_catalog_page(
         FROM channel_catalog_entries c
         LEFT JOIN videos v ON v.video_id = c.video_id
         {_VIDEO_STATUS_JOINS}
-        WHERE c.channel_id = %s
+        WHERE c.channel_id = %(channel_id)s
         ORDER BY c.position ASC, c.video_id ASC
-        LIMIT %s
+        LIMIT %(limit)s
         """,
-        (channel_id, limit),
+        # The shared status joins take the display preference (#146); a catalog row
+        # needs only its status, which does not depend on which analysis is shown.
+        {
+            "channel_id": channel_id,
+            "limit": limit,
+            "prefer_model": None,
+            "prefer_prompt_version": None,
+        },
     ).fetchall()
     if not rows:
         return None
