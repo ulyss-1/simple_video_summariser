@@ -47,6 +47,7 @@ from common.repo.analyses import (
     list_analysis_runs,
 )
 from common.repo.backfill_requests import get_request
+from common.repo.channel_catalog import get_catalog_page
 from common.repo.channels import get_channel_title, list_channels
 from common.repo.jobs import get_job
 from common.repo.search import search_transcripts
@@ -102,6 +103,7 @@ VIDEO_NOT_FOUND = "video not found"
 BAD_BACKFILL_CHANNEL = "channel_id must be a canonical YouTube channel ID (UC + 22 characters)"
 BAD_REQUEST_ID = "request id must be a positive integer"
 BACKFILL_REQUEST_NOT_FOUND = "backfill request not found"
+CATALOG_NOT_FOUND = "channel catalog not found; discover it first"
 TRANSCRIPT_NOT_FOUND = "transcript not found"
 NO_ANALYSIS_YET = "no analysis yet"
 ANALYSIS_NOT_FOUND = "analysis not found"
@@ -265,6 +267,12 @@ class SearchQuery(BaseModel):
     limit: QueryInt = Field(20, ge=1, le=50)
 
 
+class CatalogQuery(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    limit: Annotated[schemas.CatalogLimit, BeforeValidator(_query_int)] = 50
+
+
 class AnalysesQuery(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -392,6 +400,28 @@ def get_backfill_request(
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, BACKFILL_REQUEST_NOT_FOUND)
     return schemas.backfill_request_out(row)
+
+
+@router.get(
+    "/channels/{channel_id}/catalog",
+    response_model=schemas.CatalogPageOut,
+    responses={404: {"description": "Not discovered yet"}},
+)
+def get_channel_catalog(
+    channel_id: BackfillChannelId,
+    _: Annotated[None, Depends(_gate(CatalogQuery))],
+    params: Annotated[CatalogQuery, Query()],
+    conn: ReadConn,
+) -> schemas.CatalogPageOut:
+    """The persisted catalog snapshot (#242): no subprocess, no write.
+
+    Polled by the UI while rows are still being enriched. 404 until
+    ``POST /channels/{id}/catalog/discover`` has stored a non-empty snapshot.
+    """
+    page = get_catalog_page(conn, channel_id, limit=params.limit)
+    if page is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, CATALOG_NOT_FOUND)
+    return schemas.catalog_page_out(page)
 
 
 def _transcribe_progress(

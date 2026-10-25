@@ -194,3 +194,17 @@ def retry_enrichment(
         (channel_id, video_id),
     ).fetchone()
     return row is not None
+
+
+def get_enrichment_state(
+    conn: psycopg.Connection[Any], channel_id: str, video_id: str
+) -> CatalogEnrichmentState | None:
+    """The enrichment state of one catalog row, or ``None`` if the channel's catalog lacks it."""
+    row = conn.execute(
+        """
+        SELECT enrichment_state FROM channel_catalog_entries
+        WHERE channel_id = %s AND video_id = %s
+        """,
+        (channel_id, video_id),
+    ).fetchone()
+    return None if row is None else cast(CatalogEnrichmentState, row[0])

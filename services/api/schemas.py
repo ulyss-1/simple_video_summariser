@@ -15,6 +15,8 @@ from pydantic import AfterValidator, BaseModel, Field, JsonValue, ValidationErro
 from common.models import (
     Analysis,
     AnalysisRun,
+    CatalogPage,
+    CatalogVideo,
     ChannelPage,
     TranscriptInfo,
     TranscriptPage,
@@ -24,6 +26,7 @@ from common.progress import estimate_effort
 from common.repo.backfill_requests import BackfillRequestRow
 from common.repo.jobs import JobRow
 from common.repo.search import SearchPage as RepoSearchPage
+from common.youtube_refs import is_video_id
 
 UtcDatetime = Annotated[datetime, AfterValidator(lambda value: value.astimezone(UTC))]
 VideoStatus = Literal["done", "processing", "unavailable", "failed", "idle"]
@@ -522,4 +525,63 @@ def backfill_request_out(row: BackfillRequestRow) -> BackfillRequestOut:
         updated_at=row.updated_at,
         finished_at=row.finished_at,
         result=cast(Any, row.result),
+    )
+
+
+CatalogEnrichmentState = Literal["pending", "running", "done", "failed"]
+CatalogLimit = Literal[50, 200, 500, 5000]
+
+
+class CatalogItemOut(BaseModel):
+    """One upload in a channel catalog (#242).
+
+    ``url`` is derived from the validated ``video_id``; no source URL is stored.
+    ``title`` comes with the flat listing, ``description`` and ``published_at``
+    are null until ``enrichment_state`` is ``done``. ``known`` is true when the
+    video already has a library row or was deleted; ``processing_status`` is its
+    library status, null when not in the library.
+    """
+
+    video_id: str
+    title: str | None
+    url: str
+    description: str | None
+    published_at: UtcDatetime | None
+    enrichment_state: CatalogEnrichmentState
+    enrichment_error: str | None
+    known: bool
+    processing_status: VideoStatus | None
+
+
+class CatalogPageOut(BaseModel):
+    """A channel's persisted catalog, newest first (#242)."""
+
+    channel_id: str
+    limit: CatalogLimit
+    total_count: int | None
+    items: list[CatalogItemOut]
+
+
+def catalog_item_out(video: CatalogVideo) -> CatalogItemOut:
+    if not is_video_id(video.video_id):  # the table's CHECK makes this unreachable
+        raise ValueError("catalog row has a non-canonical video ID")
+    return CatalogItemOut(
+        video_id=video.video_id,
+        title=video.title,
+        url=f"https://www.youtube.com/watch?v={video.video_id}",
+        description=video.description,
+        published_at=video.published_at,
+        enrichment_state=video.enrichment_state,
+        enrichment_error=video.enrichment_error,
+        known=video.known,
+        processing_status=video.processing_status,
+    )
+
+
+def catalog_page_out(page: CatalogPage) -> CatalogPageOut:
+    return CatalogPageOut(
+        channel_id=page.channel_id,
+        limit=cast(CatalogLimit, page.limit),
+        total_count=page.total_count,
+        items=[catalog_item_out(item) for item in page.items],
     )
