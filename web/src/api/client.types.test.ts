@@ -88,6 +88,45 @@ async function typeCases(): Promise<void> {
   // @ts-expect-error a field the schema does not have
   health.nope
 
+  // -- channel catalog (#242) ----------------------------------------------------------
+  const catalog = await api.get('/channels/{channel_id}/catalog', {
+    params: { path: { channel_id: 'UCabc' }, query: { limit: 50 } },
+  })
+  expectTypeOf(catalog).toEqualTypeOf<components['schemas']['CatalogPageOut']>()
+  expectTypeOf(catalog.limit).toEqualTypeOf<50 | 200 | 500 | 5000>()
+  await api.get('/channels/{channel_id}/catalog', {
+    // @ts-expect-error the catalog range is a closed set
+    params: { path: { channel_id: 'UCabc' }, query: { limit: 51 } },
+  })
+  const discovered = await api.post('/channels/{channel_id}/catalog/discover', {
+    params: { path: { channel_id: 'UCabc' } },
+    body: { limit: 200 },
+  })
+  expectTypeOf(discovered).toEqualTypeOf<components['schemas']['CatalogPageOut']>()
+  await api.post('/channels/{channel_id}/catalog/discover', {
+    params: { path: { channel_id: 'UCabc' } },
+    // @ts-expect-error the discovery range is a closed set
+    body: { limit: 51 },
+  })
+  const processed = await api.post('/channels/{channel_id}/catalog/process', {
+    params: { path: { channel_id: 'UCabc' } },
+    body: { video_ids: ['aaaaaaaaaaa'] },
+  })
+  expectTypeOf(processed).toEqualTypeOf<components['schemas']['CatalogProcessResponse']>()
+  expectTypeOf(processed.results[0].outcome).toEqualTypeOf<
+    'queued' | 'already_known' | 'rejected'
+  >()
+  await api.post('/channels/{channel_id}/catalog/process', {
+    params: { path: { channel_id: 'UCabc' } },
+    // @ts-expect-error video_ids is required
+    body: {},
+  })
+  const retried = await api.post(
+    '/channels/{channel_id}/catalog/{video_id}/metadata/retry',
+    { params: { path: { channel_id: 'UCabc', video_id: 'aaaaaaaaaaa' } } },
+  )
+  expectTypeOf(retried).toEqualTypeOf<components['schemas']['MetadataRetryOut']>()
+
   // -- a text/html success response is not fetched ----------------------------------------
   // @ts-expect-error GET /videos/{video_id}/render is text/html
   await api.get('/videos/{video_id}/render', { params: { path: { video_id: 'abc' } } })

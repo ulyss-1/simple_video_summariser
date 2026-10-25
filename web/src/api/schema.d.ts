@@ -138,6 +138,104 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/channels/{channel_id}/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Channel Catalog
+         * @description The persisted catalog snapshot (#242): no subprocess, no write.
+         *
+         *     Polled by the UI while rows are still being enriched. 404 until
+         *     ``POST /channels/{id}/catalog/discover`` has stored a non-empty snapshot.
+         */
+        get: operations["get_channel_catalog_channels__channel_id__catalog_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/channels/{channel_id}/catalog/discover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Channel Catalog Discover
+         * @description List a registered channel's newest ``limit`` uploads and store the snapshot (#242).
+         *
+         *     Runs one yt-dlp flat listing (bounded by ``deps.BACKFILL_LIST_TIMEOUT_SEC``,
+         *     below the proxy timeout) and returns titles at once. Publication dates and
+         *     descriptions arrive later: the planner's ``catalog_enrichment`` task fills
+         *     them and ``GET /channels/{id}/catalog`` shows them. Nothing is added to the
+         *     library; only ``POST /channels/{id}/catalog/process`` does that.
+         */
+        post: operations["post_channel_catalog_discover_channels__channel_id__catalog_discover_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/channels/{channel_id}/catalog/process": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Channel Catalog Process
+         * @description Queue the selected catalog videos like a backfill would (#242).
+         *
+         *     The server re-checks every ID against this channel's stored catalog and the
+         *     library, never the browser's view. The 202 is a receipt: every requested ID
+         *     has one result (``queued`` with its ``job_id``, ``already_known``, or
+         *     ``rejected`` as ``not_in_catalog``), in request order. Repeating a request
+         *     is harmless: already-queued videos come back ``already_known``.
+         */
+        post: operations["post_channel_catalog_process_channels__channel_id__catalog_process_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/channels/{channel_id}/catalog/{video_id}/metadata/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Catalog Metadata Retry
+         * @description Put one failed metadata lookup back in the planner's queue (#242).
+         *
+         *     Does no lookup itself. A pending, running or done row answers 409 and is
+         *     left as it is.
+         */
+        post: operations["post_catalog_metadata_retry_channels__channel_id__catalog__video_id__metadata_retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -694,6 +792,91 @@ export interface components {
             /** Videos Removed */
             videos_removed: number;
         };
+        /** CatalogDiscoverRequest */
+        CatalogDiscoverRequest: {
+            /**
+             * Limit
+             * @default 50
+             * @enum {integer}
+             */
+            limit: 50 | 200 | 500 | 5000;
+        };
+        /**
+         * CatalogItemOut
+         * @description One upload in a channel catalog (#242).
+         *
+         *     ``url`` is derived from the validated ``video_id``; no source URL is stored.
+         *     ``title`` comes with the flat listing, ``description`` and ``published_at``
+         *     are null until ``enrichment_state`` is ``done``. ``known`` is true when the
+         *     video already has a library row or was deleted; ``processing_status`` is its
+         *     library status, null when not in the library.
+         */
+        CatalogItemOut: {
+            /** Description */
+            description: string | null;
+            /** Enrichment Error */
+            enrichment_error: string | null;
+            /**
+             * Enrichment State
+             * @enum {string}
+             */
+            enrichment_state: "pending" | "running" | "done" | "failed";
+            /** Known */
+            known: boolean;
+            /** Processing Status */
+            processing_status: ("done" | "processing" | "unavailable" | "failed" | "idle") | null;
+            /** Published At */
+            published_at: string | null;
+            /** Title */
+            title: string | null;
+            /** Url */
+            url: string;
+            /** Video Id */
+            video_id: string;
+        };
+        /**
+         * CatalogPageOut
+         * @description A channel's persisted catalog, newest first (#242).
+         */
+        CatalogPageOut: {
+            /** Channel Id */
+            channel_id: string;
+            /** Items */
+            items: components["schemas"]["CatalogItemOut"][];
+            /**
+             * Limit
+             * @enum {integer}
+             */
+            limit: 50 | 200 | 500 | 5000;
+            /** Total Count */
+            total_count: number | null;
+        };
+        /** CatalogProcessItemOut */
+        CatalogProcessItemOut: {
+            /** Job Id */
+            job_id: number | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "queued" | "already_known" | "rejected";
+            /** Reason */
+            reason: "not_in_catalog" | null;
+            /** Video Id */
+            video_id: string;
+        };
+        /** CatalogProcessRequest */
+        CatalogProcessRequest: {
+            /** Video Ids */
+            video_ids: string[];
+        };
+        /** CatalogProcessResponse */
+        CatalogProcessResponse: {
+            /** Channel Id */
+            channel_id: string;
+            /** Results */
+            results: components["schemas"]["CatalogProcessItemOut"][];
+        };
         /** ChannelItem */
         ChannelItem: {
             /** Active */
@@ -837,6 +1020,18 @@ export interface components {
             job_id: number;
             /** Kind */
             kind: string;
+        };
+        /** MetadataRetryOut */
+        MetadataRetryOut: {
+            /** Channel Id */
+            channel_id: string;
+            /**
+             * Enrichment State
+             * @constant
+             */
+            enrichment_state: "pending";
+            /** Video Id */
+            video_id: string;
         };
         /** OpsChannelListOut */
         OpsChannelListOut: {
@@ -1325,6 +1520,190 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["CancelBackfillResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_channel_catalog_channels__channel_id__catalog_get: {
+        parameters: {
+            query?: {
+                limit?: 50 | 200 | 500 | 5000;
+            };
+            header?: never;
+            path: {
+                channel_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogPageOut"];
+                };
+            };
+            /** @description Not discovered yet */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_channel_catalog_discover_channels__channel_id__catalog_discover_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channel_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CatalogDiscoverRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogPageOut"];
+                };
+            };
+            /** @description Channel not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description The YouTube listing failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description YouTube is unavailable or rate limiting */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    post_channel_catalog_process_channels__channel_id__catalog_process_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channel_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CatalogProcessRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProcessResponse"];
+                };
+            };
+            /** @description Channel not registered */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_catalog_metadata_retry_channels__channel_id__catalog__video_id__metadata_retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channel_id: string;
+                video_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MetadataRetryOut"];
+                };
+            };
+            /** @description Not in this channel's catalog */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The metadata lookup has not failed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
