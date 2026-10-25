@@ -15,7 +15,7 @@ export type OpsChannelListOut = components['schemas']['OpsChannelListOut']
 /** The one place the sets and their order live: the depth table and the filters both use it. */
 export const JOB_KINDS = ['ingest', 'transcribe', 'analyze'] as const satisfies readonly NonNullable<Query['kind']>[]
 export const JOB_STATES = ['pending', 'running', 'done', 'dead'] as const satisfies readonly NonNullable<Query['state']>[]
-/** The eight `common.errors.ErrorClass` values (architecture §8.4). */
+/** The nine `common.errors.ErrorClass` values (architecture §8.4). */
 export const ERROR_CLASSES = [
   'PERMANENT_SOURCE',
   'TRANSIENT_NETWORK',
@@ -25,6 +25,7 @@ export const ERROR_CLASSES = [
   'LLM_UNAVAILABLE',
   'RESOURCE',
   'BUG',
+  'CANCELLED',
 ] as const satisfies readonly NonNullable<Query['error_class']>[]
 /** Sent as `error_class=none`: jobs with a NULL class (for example a reaped job). */
 export const NO_CLASS = 'none' as const satisfies NonNullable<Query['error_class']>

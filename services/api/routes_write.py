@@ -61,8 +61,13 @@ from common.queue import (
 from common.repo.backfill_requests import create_request
 from common.repo.channel_catalog import get_enrichment_state, retry_enrichment
 from common.repo.channels import channel_exists, fill_channel_title, register_channel
-from common.repo.deleted_videos import VideoNotFound, VideoRunning, delete_video
-from common.repo.jobs import active_job, latest_job
+from common.repo.deleted_videos import (
+    VideoCancelling,
+    VideoNotFound,
+    VideoRunning,
+    delete_video,
+)
+from common.repo.jobs import active_job, cancel_video, latest_job
 from common.repo.media import UnsafeMediaPath, resolve_media_path
 from common.repo.transcripts import get_best_transcript
 from common.repo.videos import insert_submitted_video, video_exists
@@ -140,6 +145,7 @@ LISTING_UNAVAILABLE = "YouTube listing unavailable, try again later"
 LISTING_FAILED = "YouTube listing failed"
 VIDEO_NOT_FOUND = "video not found"
 VIDEO_RUNNING = "video is currently processing"
+VIDEO_CANCELLING = "cancellation in progress"
 NO_TRANSCRIPT = "no transcript yet"
 ANALYSIS_RUNNING = "an analysis is already running for this video"
 REANALYSIS_CONTENDED = "the analysis job kept changing, try again"
@@ -552,7 +558,9 @@ def _resolve_channel_name(resolve: ChannelResolver, ref: NameRef) -> ResolvedCha
     status_code=status.HTTP_204_NO_CONTENT,
     responses={
         404: {"description": "No such video"},
-        409: {"description": "The video has a running job"},
+        409: {
+            "description": "The video has a running job, or its running jobs are being cancelled"
+        },
         422: {"description": "Malformed video ID"},
     },
 )
@@ -565,6 +573,8 @@ def delete_stored_video(
         deleted = delete_video(conn, video_id)
     except VideoNotFound:
         raise HTTPException(status.HTTP_404_NOT_FOUND, VIDEO_NOT_FOUND) from None
+    except VideoCancelling:
+        raise HTTPException(status.HTTP_409_CONFLICT, VIDEO_CANCELLING) from None
     except VideoRunning:
         raise HTTPException(status.HTTP_409_CONFLICT, VIDEO_RUNNING) from None
     except psycopg.OperationalError as exc:
@@ -580,6 +590,63 @@ def delete_stored_video(
                 error_class=type(exc).__name__,
             )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+class CancelVideoRequest(BaseModel):
+    """The body of ``POST /videos/{id}/cancel`` is ``{}``; anything else is a 422."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+
+class VideoCancelJob(BaseModel):
+    job_id: int
+    kind: str
+    outcome: Literal["cancelled", "cancel_requested"]
+
+
+class VideoCancelResponse(BaseModel):
+    video_id: str
+    jobs: list[VideoCancelJob]
+
+
+@router.post(
+    "/videos/{video_id:untrusted}/cancel",
+    response_model=VideoCancelResponse,
+    dependencies=[Depends(_require_json_content_type)],
+    responses={
+        202: {
+            "model": VideoCancelResponse,
+            "description": "At least one running job was asked to stop",
+        },
+        404: {"description": "No such video"},
+        415: {"description": "The body is not JSON"},
+        422: {"description": "Malformed video ID"},
+    },
+)
+def post_video_cancel(
+    video_id: Annotated[str, Depends(_reanalyze_video_id)],
+    body: CancelVideoRequest,
+    response: Response,
+    conn: Annotated[psycopg.Connection[Any], Depends(get_conn)],
+) -> VideoCancelResponse:
+    """Stop all processing of one video (#237).
+
+    Pending jobs end at once as ``CANCELLED``. A running job is asked to stop and
+    ends at its next checkpoint (``cancel_requested``, status 202); until then
+    ``DELETE /videos/{id}`` answers 409. Repeating the request is safe. Nothing is
+    deleted. Resume a cancelled job with ``POST /ops/jobs/{id}/retry``.
+    """
+    _require_idle(conn)
+    try:
+        entries = cancel_video(conn, video_id)
+    except VideoNotFound:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, VIDEO_NOT_FOUND) from None
+    except psycopg.OperationalError as exc:
+        raise DatabaseUnavailable from exc
+    jobs = [VideoCancelJob(job_id=e.job_id, kind=e.kind, outcome=e.outcome) for e in entries]
+    if any(job.outcome == "cancel_requested" for job in jobs):
+        response.status_code = status.HTTP_202_ACCEPTED
+    return VideoCancelResponse(video_id=video_id, jobs=jobs)
 
 
 def _reanalyze_video_id(request: Request, video_id: str) -> str:

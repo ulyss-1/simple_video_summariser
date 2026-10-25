@@ -43,7 +43,7 @@ from psycopg.rows import dict_row
 
 from common.config import Settings, get_settings
 from common.errors import PermanentSourceError, TransientNetworkError
-from common.queue import Job, PostgresQueue
+from common.queue import HeartbeatResult, Job, PostgresQueue
 
 pytestmark = pytest.mark.integration
 
@@ -597,7 +597,7 @@ def test_split_brain_leaves_b_as_sole_owner_after_a_resolves(
         assert job_b.attempts == 2
 
         # A checks in, unaware it lost the job.
-        assert queue_a.heartbeat(job_id, "A") is False
+        assert queue_a.heartbeat(job_id, "A") is HeartbeatResult.LOST
 
         # A's handler finally finishes - clean exit or a failure, either way
         # its outcome update must be a no-op: it no longer owns the row.

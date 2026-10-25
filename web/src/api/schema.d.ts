@@ -455,6 +455,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/videos/{video_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Video Cancel
+         * @description Stop all processing of one video (#237).
+         *
+         *     Pending jobs end at once as ``CANCELLED``. A running job is asked to stop and
+         *     ends at its next checkpoint (``cancel_requested``, status 202); until then
+         *     ``DELETE /videos/{id}`` answers 409. Repeating the request is safe. Nothing is
+         *     deleted. Resume a cancelled job with ``POST /ops/jobs/{id}/retry``.
+         */
+        post: operations["post_video_cancel_videos__video_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/videos/{video_id}/reanalyze": {
         parameters: {
             query?: never;
@@ -529,6 +554,8 @@ export interface components {
     schemas: {
         /** ActiveJobOut */
         ActiveJobOut: {
+            /** Cancel Requested At */
+            cancel_requested_at?: string | null;
             /** Id */
             id: number;
             /** Kind */
@@ -780,7 +807,7 @@ export interface components {
              */
             dry_run: boolean;
             /** Error Class */
-            error_class?: ("PERMANENT_SOURCE" | "TRANSIENT_NETWORK" | "RATE_LIMITED" | "TOOL_FAILURE" | "LLM_INVALID_OUTPUT" | "LLM_UNAVAILABLE" | "RESOURCE" | "BUG" | "none") | null;
+            error_class?: ("PERMANENT_SOURCE" | "TRANSIENT_NETWORK" | "RATE_LIMITED" | "TOOL_FAILURE" | "LLM_INVALID_OUTPUT" | "LLM_UNAVAILABLE" | "RESOURCE" | "BUG" | "CANCELLED" | "none") | null;
             /** Kind */
             kind?: ("analyze" | "ingest" | "transcribe") | null;
             /** Limit */
@@ -819,6 +846,11 @@ export interface components {
             /** Videos Removed */
             videos_removed: number;
         };
+        /**
+         * CancelVideoRequest
+         * @description The body of ``POST /videos/{id}/cancel`` is ``{}``; anything else is a 422.
+         */
+        CancelVideoRequest: Record<string, never>;
         /** CatalogDiscoverRequest */
         CatalogDiscoverRequest: {
             /**
@@ -1000,6 +1032,8 @@ export interface components {
         JobOut: {
             /** Attempts */
             attempts: number;
+            /** Cancel Requested At */
+            cancel_requested_at?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -1268,6 +1302,25 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /** VideoCancelJob */
+        VideoCancelJob: {
+            /** Job Id */
+            job_id: number;
+            /** Kind */
+            kind: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "cancelled" | "cancel_requested";
+        };
+        /** VideoCancelResponse */
+        VideoCancelResponse: {
+            /** Jobs */
+            jobs: components["schemas"]["VideoCancelJob"][];
+            /** Video Id */
+            video_id: string;
         };
         /** VideoDetail */
         VideoDetail: {
@@ -1831,7 +1884,7 @@ export interface operations {
             query?: {
                 state?: ("pending" | "running" | "done" | "dead") | null;
                 kind?: ("analyze" | "ingest" | "transcribe") | null;
-                error_class?: ("PERMANENT_SOURCE" | "TRANSIENT_NETWORK" | "RATE_LIMITED" | "TOOL_FAILURE" | "LLM_INVALID_OUTPUT" | "LLM_UNAVAILABLE" | "RESOURCE" | "BUG" | "none") | null;
+                error_class?: ("PERMANENT_SOURCE" | "TRANSIENT_NETWORK" | "RATE_LIMITED" | "TOOL_FAILURE" | "LLM_INVALID_OUTPUT" | "LLM_UNAVAILABLE" | "RESOURCE" | "BUG" | "CANCELLED" | "none") | null;
                 before_id?: number | null;
                 limit?: number;
             };
@@ -2120,7 +2173,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The video has a running job */
+            /** @description The video has a running job, or its running jobs are being cancelled */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2167,6 +2220,62 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    post_video_cancel_videos__video_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                video_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CancelVideoRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VideoCancelResponse"];
+                };
+            };
+            /** @description At least one running job was asked to stop */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VideoCancelResponse"];
+                };
+            };
+            /** @description No such video */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The body is not JSON */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Malformed video ID */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

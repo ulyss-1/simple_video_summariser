@@ -8,13 +8,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from common.errors import CANCELLED_LAST_ERROR, log_job_cancelled
 from common.metrics import DURATION_BUCKETS, DurationHistogram
+from common.repo.deleted_videos import VideoNotFound
 
 
 class _Unset:
@@ -45,6 +47,26 @@ def latest_job_state(conn: psycopg.Connection[Any], video_id: str, kind: str) ->
         (video_id, kind),
     ).fetchone()
     return None if row is None else str(row[0])
+
+
+def latest_job_outcome(
+    conn: psycopg.Connection[Any], video_id: str, kind: str
+) -> tuple[str | None, str | None]:
+    """``(state, error_class)`` of the newest ``kind`` job, ``(None, None)`` without one (#237).
+
+    Ordered like ``latest_job_state``. ``error_class`` is the stored value, so a
+    ``dead`` job a user cancelled reads ``CANCELLED``.
+    """
+    row = conn.execute(
+        """
+        SELECT state, error_class FROM jobs
+        WHERE video_id = %s AND kind = %s
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        (video_id, kind),
+    ).fetchone()
+    return (None, None) if row is None else (str(row[0]), row[1])
 
 
 def latest_job(conn: psycopg.Connection[Any], video_id: str, kind: str) -> tuple[int, str] | None:
@@ -133,6 +155,8 @@ class JobRow:
     #: ``payload.duration_sec`` when it is a plausible number, else ``None`` (#245).
     #: Lets the API estimate a pending transcribe job without exposing ``payload``.
     payload_duration_sec: float | None
+    #: When a user asked to cancel this job (#237), else ``None``.
+    cancel_requested_at: datetime | None = None
 
 
 #: The columns ``JobRow`` is built from, shared by the list and the single-row read.
@@ -140,7 +164,7 @@ _JOB_COLUMNS = """
     j.id, j.video_id, v.title AS video_title, j.kind, j.dedupe_key,
     j.state, j.priority, j.attempts, j.error_class, j.last_error,
     j.run_after, j.locked_by, j.heartbeat_at, j.finished_at, j.created_at,
-    j.progress,
+    j.progress, j.cancel_requested_at,
     CASE WHEN jsonb_typeof(j.payload -> 'duration_sec') = 'number'
           AND abs((j.payload ->> 'duration_sec')::numeric) < 1e9
          THEN (j.payload ->> 'duration_sec')::float8
@@ -274,3 +298,69 @@ def duration_histograms(conn: psycopg.Connection[Any]) -> dict[str, DurationHist
         )
         for row in rows
     }
+
+
+@dataclass(frozen=True, slots=True)
+class VideoCancelEntry:
+    """One job a cancel request touched (#237): ``cancelled`` or ``cancel_requested``."""
+
+    job_id: int
+    kind: str
+    outcome: Literal["cancelled", "cancel_requested"]
+
+
+#: The cancelled outcome of a ``pending`` job and the request on a ``running`` one, in one
+#: statement. ``RETURNING state``: ``dead`` is a job that ended, ``running`` one that was asked to.
+_CANCEL_VIDEO_SQL = """
+    UPDATE jobs SET
+        state = CASE WHEN state = 'pending' THEN 'dead' ELSE state END,
+        error_class = CASE WHEN state = 'pending' THEN 'CANCELLED' ELSE error_class END,
+        last_error = CASE WHEN state = 'pending' THEN %(message)s ELSE last_error END,
+        finished_at = CASE WHEN state = 'pending' THEN now() ELSE finished_at END,
+        locked_by = CASE WHEN state = 'pending' THEN NULL ELSE locked_by END,
+        locked_at = CASE WHEN state = 'pending' THEN NULL ELSE locked_at END,
+        progress = CASE WHEN state = 'pending' THEN NULL ELSE progress END,
+        cancel_requested_at = CASE WHEN state = 'running'
+                                   THEN COALESCE(cancel_requested_at, now())
+                                   ELSE cancel_requested_at END
+    WHERE video_id = %(video_id)s AND state IN ('pending', 'running')
+    RETURNING id, kind, state
+"""
+
+
+def cancel_video(conn: psycopg.Connection[Any], video_id: str) -> list[VideoCancelEntry]:
+    """Ask to stop all processing of one video (#237), in one transaction.
+
+    Every ``pending`` job ends at once (``dead``, ``error_class = 'CANCELLED'``,
+    ``last_error = 'cancelled on request'``); every ``running`` job gets ``cancel_requested_at =
+    now()`` unless it has one (the first stays), and ends when its worker next
+    checks. ``done`` and ``dead`` jobs are not touched. Returns the touched jobs in
+    ``id`` order. Raises ``VideoNotFound`` for an unknown or deleted video.
+
+    Lock order is the one ``delete_video``, ``handoff`` and ``raise_priority`` use:
+    the video's jobs (by id), then the ``videos`` row. The write is a *second*
+    statement, so it sees a successor ``handoff`` committed while the lock waited.
+    The caller passes a connection with no open transaction.
+    """
+    with conn.transaction():
+        conn.execute(
+            "SELECT id FROM jobs WHERE video_id = %s ORDER BY id FOR UPDATE", (video_id,)
+        ).fetchall()
+        video = conn.execute(
+            "SELECT 1 FROM videos WHERE video_id = %s FOR SHARE", (video_id,)
+        ).fetchone()
+        if video is None:
+            raise VideoNotFound(video_id)
+        rows = conn.execute(
+            _CANCEL_VIDEO_SQL, {"video_id": video_id, "message": CANCELLED_LAST_ERROR}
+        ).fetchall()
+    entries = [
+        VideoCancelEntry(
+            int(row[0]), str(row[1]), "cancelled" if row[2] == "dead" else "cancel_requested"
+        )
+        for row in sorted(rows)
+    ]
+    for entry in entries:
+        if entry.outcome == "cancelled":
+            log_job_cancelled(job_id=entry.job_id, video_id=video_id, kind=entry.kind)
+    return entries

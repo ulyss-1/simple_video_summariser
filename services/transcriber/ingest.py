@@ -26,7 +26,7 @@ from common.errors import (
 )
 from common.models import MetadataSource, Segment, VideoMeta
 from common.queue import Job, JobQueue
-from common.repo.jobs import latest_job_state
+from common.repo.jobs import latest_job_outcome
 from common.repo.transcripts import get_best_transcript
 from common.repo.videos import (
     clear_unavailable,
@@ -92,13 +92,19 @@ def choose_transcript_path(
     auto_caption_fallback: bool,
     existing_source: str | None,
     transcribe_state: str | None,
+    transcribe_error_class: str | None = None,
 ) -> TranscriptPath:
-    """The ingest decision table (issue #28), as a pure function."""
+    """The ingest decision table (issue #28), as a pure function.
+
+    A newest ``transcribe`` job that a user cancelled (``CANCELLED``, #237) is
+    not a dead-letter: the video transcribes again, it does not fall back to
+    auto-captions.
+    """
     if existing_source in _STRONG_SOURCES:
         return TranscriptPath.HAVE_TRANSCRIPT
     if availability.manual is not None and not prefer_whisper:
         return TranscriptPath.MANUAL
-    if transcribe_state != "dead":
+    if transcribe_state != "dead" or transcribe_error_class == "CANCELLED":
         return TranscriptPath.TRANSCRIBE
     if availability.auto is not None and auto_caption_fallback:
         return TranscriptPath.AUTO_FALLBACK
@@ -201,7 +207,7 @@ def make_ingest_handler(
         available = subtitles.available(meta)
         best = get_best_transcript(conn, video_id)
         existing_source = best.source if best is not None else None
-        transcribe_state = latest_job_state(conn, video_id, "transcribe")
+        transcribe_state, transcribe_error_class = latest_job_outcome(conn, video_id, "transcribe")
         conn.commit()  # end the read transaction: enqueue() opens its own
 
         def choose(availability: SubtitleAvailability) -> TranscriptPath:
@@ -211,6 +217,7 @@ def make_ingest_handler(
                 auto_caption_fallback=settings.AUTO_CAPTION_FALLBACK,
                 existing_source=existing_source,
                 transcribe_state=transcribe_state,
+                transcribe_error_class=transcribe_error_class,
             )
 
         path = choose(available)

@@ -86,7 +86,7 @@ def test_a_library_item_has_exactly_the_documented_fields(
             "origin": "rss",
             "unavailable": None,
             "status": "done",
-            "active_job": {"id": job_id, "kind": "analyze", "state": "pending"},
+            "active_job": {"id": job_id, "kind": "analyze", "state": "pending", "cancel_requested_at": None},
             "last_failure": {"job_id": dead, "kind": "ingest", "error_class": "BUG",
                              "finished_at": "2026-01-01T00:02:00Z"},
             "latest_analysis_at": "2026-01-01T00:07:00Z",
@@ -268,7 +268,7 @@ def test_a_processing_video_detail(api: TestClient, db: psycopg.Connection[Any])
     body = api.get(f"/videos/{VID}").json()
 
     assert body["status"] == "processing"
-    assert body["active_job"] == {"id": job_id, "kind": "ingest", "state": "running"}
+    assert body["active_job"] == {"id": job_id, "kind": "ingest", "state": "running", "cancel_requested_at": None}
     assert (body["analysis"], body["transcript"]) == (None, None)
     assert body["progress"] is None
 

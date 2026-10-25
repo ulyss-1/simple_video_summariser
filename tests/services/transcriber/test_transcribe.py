@@ -31,7 +31,7 @@ from common.errors import (
     TransientNetworkError,
 )
 from common.models import AudioRef, Chunk, Segment, TranscriptResult
-from common.queue import Job, PostgresQueue
+from common.queue import HeartbeatResult, Job, PostgresQueue
 from common.repo.media import delete_media as real_delete_media
 from common.repo.transcripts import save_transcript
 from services.transcriber.transcribe import (
@@ -142,7 +142,7 @@ class SpyQueue:
             raise ConnectionError("boom")
         return self.inner.handoff(parent_job_id, kind, video_id, **kwargs)
 
-    def heartbeat(self, job_id: int, worker: str) -> bool:
+    def heartbeat(self, job_id: int, worker: str) -> HeartbeatResult:
         self.heartbeats += 1
         return self.inner.heartbeat(job_id, worker)
 
@@ -558,11 +558,30 @@ def test_the_transcriber_gets_the_fetched_audio_and_is_called_once(
     assert call["audio"] == AudioRef(REL, 4, 77.5)
 
 
-def test_cancellation_is_checked_after_the_fetch_before_speech_to_text(
+def test_cancellation_is_checked_before_the_audio_download(
     make_rig: Callable[..., Rig],
 ) -> None:
     rig = make_rig()
     rig.ctx._cancel()
+
+    with pytest.raises(Cancelled):
+        rig.run()
+
+    assert rig.audio.calls == []  # the download has no checkpoint inside it (#237)
+    assert rig.transcriber.calls == []
+    assert rig.media() == []
+
+
+def test_cancellation_is_checked_after_the_fetch_before_speech_to_text(
+    make_rig: Callable[..., Rig],
+) -> None:
+    class CancellingAudio(FakeAudio):
+        def fetch_normalized(self, video_id: str, dest: Path) -> AudioRef:
+            ref = super().fetch_normalized(video_id, dest)
+            rig.ctx._cancel()  # the request arrives while the download runs
+            return ref
+
+    rig = make_rig(audio=CancellingAudio())
 
     with pytest.raises(Cancelled):
         rig.run()

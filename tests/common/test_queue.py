@@ -38,7 +38,7 @@ from common.errors import (
     ToolFailureError,
     TransientNetworkError,
 )
-from common.queue import Job, PostgresQueue, RetryOutcome
+from common.queue import HeartbeatResult, Job, PostgresQueue, RetryOutcome
 from tests.common.test_redact import SENTINELS
 
 pytestmark = pytest.mark.integration
@@ -658,7 +658,7 @@ def test_outcome_update_is_a_noop_when_the_job_was_reclaimed_by_another_worker(
 # ---------------------------------------------------------------------------
 
 
-def test_heartbeat_returns_true_and_advances_heartbeat_at_when_owned(
+def test_heartbeat_returns_held_and_advances_heartbeat_at_when_owned(
     queue: PostgresQueue, conn: psycopg.Connection[Any]
 ) -> None:
     job_id = queue.enqueue("ingest", "v1")
@@ -673,12 +673,12 @@ def test_heartbeat_returns_true_and_advances_heartbeat_at_when_owned(
 
         result = queue.heartbeat(job_id, "w1")
 
-        assert result is True
+        assert result is HeartbeatResult.HELD
         after = _row(conn, job_id)["heartbeat_at"]
         assert after > before - timedelta(seconds=30)
 
 
-def test_heartbeat_returns_false_when_not_owned_by_that_worker(
+def test_heartbeat_returns_lost_when_not_owned_by_that_worker(
     queue: PostgresQueue, conn: psycopg.Connection[Any]
 ) -> None:
     job_id = queue.enqueue("ingest", "v1")
@@ -689,17 +689,17 @@ def test_heartbeat_returns_false_when_not_owned_by_that_worker(
 
         result = queue.heartbeat(job_id, "w2")
 
-        assert result is False
+        assert result is HeartbeatResult.LOST
         assert _row(conn, job_id)["heartbeat_at"] == before
 
 
-def test_heartbeat_returns_false_for_a_job_that_is_not_running(
+def test_heartbeat_returns_lost_for_a_job_that_is_not_running(
     queue: PostgresQueue,
 ) -> None:
     job_id = queue.enqueue("ingest", "v1")  # still 'pending', never claimed
     assert job_id is not None
 
-    assert queue.heartbeat(job_id, "w1") is False
+    assert queue.heartbeat(job_id, "w1") is HeartbeatResult.LOST
 
 
 # ---------------------------------------------------------------------------

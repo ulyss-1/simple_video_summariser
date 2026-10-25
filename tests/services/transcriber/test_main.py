@@ -41,7 +41,7 @@ from common.errors import (
 )
 from common.logging import configure_logging
 from common.models import AudioRef, TranscriptResult
-from common.queue import Job, JobQueue
+from common.queue import HeartbeatResult, Job, JobQueue
 from services.transcriber.main import (
     LazyTranscriber,
     QueuePool,
@@ -159,8 +159,8 @@ class FakeQueue:
         else:
             shared.outcomes.append("done")
 
-    def heartbeat(self, job_id: int, worker: str) -> bool:
-        return True
+    def heartbeat(self, job_id: int, worker: str) -> HeartbeatResult:
+        return HeartbeatResult.HELD
 
     def enqueue(self, kind: str, video_id: str, **kwargs: Any) -> int | None:
         raise NotImplementedError

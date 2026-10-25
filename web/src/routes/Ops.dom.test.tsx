@@ -276,7 +276,7 @@ describe('filters', () => {
     ])
     expect(opts(select('Error class')).map((o) => o[0])).toEqual([
       '', 'PERMANENT_SOURCE', 'TRANSIENT_NETWORK', 'RATE_LIMITED', 'TOOL_FAILURE',
-      'LLM_INVALID_OUTPUT', 'LLM_UNAVAILABLE', 'RESOURCE', 'BUG', 'none',
+      'LLM_INVALID_OUTPUT', 'LLM_UNAVAILABLE', 'RESOURCE', 'BUG', 'CANCELLED', 'none',
     ])
     expect(opts(select('Error class'))[0]).toEqual(['', 'Any'])
     expect(opts(select('Error class')).at(-1)).toEqual(['none', 'No class'])

@@ -32,6 +32,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from enum import StrEnum
 from typing import Any, Literal, Protocol
 
 import psycopg
@@ -40,12 +41,14 @@ from psycopg.types.json import Jsonb
 
 from common.config import Settings, get_settings
 from common.errors import (
+    CANCELLED_LAST_ERROR,
     Cancelled,
     Defer,
     ErrorClass,
     classify,
     format_error,
     log_dead_letter,
+    log_job_cancelled,
     policy,
 )
 from common.repo.jobs import UNSET
@@ -90,6 +93,95 @@ _MAX_BACKOFF_SEC = 6 * 60 * 60  # 6 h
 _JITTER_FRACTION = 0.10
 
 _REAP_LAST_ERROR = "worker lost: heartbeat stale"
+
+#: What a cancelled outcome writes (#237), per column. Every other column is left as it is
+#: (``attempts`` stays: the attempt is not refunded).
+_CANCELLED_SET = {
+    "state": "'dead'",
+    "error_class": "'CANCELLED'",
+    "last_error": "%(cancelled_error)s",
+    "finished_at": "now()",
+    # Typed: a ``CASE`` whose branches are both a bare NULL would be ``text``.
+    "locked_by": "NULL::text",
+    "locked_at": "NULL::timestamptz",
+    "progress": "NULL::jsonb",
+}
+
+
+def _outcome_sql(normal: dict[str, str]) -> str:
+    """A guarded outcome ``UPDATE`` that ends ``CANCELLED`` when a cancel was requested (#237).
+
+    ``normal`` maps each column the usual outcome writes to its expression. Each column of
+    either set becomes ``CASE WHEN cancel_requested_at IS NOT NULL THEN <cancelled> ELSE
+    <usual> END``, so one statement decides: the ``SET`` list is evaluated against the
+    latest committed row version, also when a cancel request committed while this
+    waited on the row lock. ``RETURNING`` says which of the two happened.
+    """
+    items = []
+    for column in dict.fromkeys([*normal, *_CANCELLED_SET]):
+        usual = normal.get(column, column)
+        cancelled = _CANCELLED_SET.get(column, column)
+        items.append(
+            f"{column} = CASE WHEN cancel_requested_at IS NOT NULL "
+            f"THEN {cancelled} ELSE {usual} END"
+        )
+    return (
+        f"UPDATE jobs SET {', '.join(items)} "
+        "WHERE id=%(id)s AND locked_by=%(worker)s AND state='running' "
+        "RETURNING cancel_requested_at IS NOT NULL AS cancelled"
+    )
+
+
+_DEFER_SQL = _outcome_sql(
+    {
+        "state": "'pending'",
+        "run_after": "%(until)s",
+        "attempts": "attempts-1",
+        "locked_by": "NULL",
+        "locked_at": "NULL",
+        "progress": "NULL",
+    }
+)
+_HAND_BACK_SQL = _outcome_sql(
+    {
+        "state": "'pending'",
+        "run_after": "now()",
+        "attempts": "attempts-1",
+        "locked_by": "NULL",
+        "locked_at": "NULL",
+        "progress": "NULL",
+    }
+)
+_DEAD_SQL = _outcome_sql(
+    {
+        "state": "'dead'",
+        "finished_at": "now()",
+        "locked_by": "NULL",
+        "locked_at": "NULL",
+        "progress": "NULL",
+        "last_error": "%(last_error)s",
+        "error_class": "%(error_class)s",
+    }
+)
+_RETRY_LATER_SQL = _outcome_sql(
+    {
+        "state": "'pending'",
+        "run_after": "now() + (%(delay_sec)s * interval '1 second')",
+        "locked_by": "NULL",
+        "locked_at": "NULL",
+        "progress": "NULL",
+        "last_error": "%(last_error)s",
+        "error_class": "%(error_class)s",
+    }
+)
+#: A normal return ends ``done`` even with a cancel request (decision 5): its work is real.
+_DONE_SQL = """
+    UPDATE jobs SET state='done', finished_at=now(),
+           locked_by=NULL, locked_at=NULL, progress=NULL,
+           last_error=NULL, error_class=NULL
+    WHERE id=%(id)s AND locked_by=%(worker)s AND state='running'
+    RETURNING false AS cancelled
+"""
 # last_error of a malformed-key analyze job dead-lettered by resolve_stale_analyze (#200).
 MALFORMED_ANALYZE_ERROR = (
     "BUG: analyze dedupe_key is malformed (not <version>:<summarizer>); "
@@ -201,7 +293,7 @@ _RETRY_DEAD_SQL = f"""
     )
     UPDATE jobs j SET state='pending', attempts=0, run_after=now(),
                       finished_at=NULL, locked_by=NULL, locked_at=NULL,
-                      heartbeat_at=NULL
+                      heartbeat_at=NULL, cancel_requested_at=NULL
     FROM candidate c
     WHERE j.id = c.id
     RETURNING j.*, c.prev_attempts
@@ -232,7 +324,7 @@ _RETRY_DEAD_MATCHING_SQL = f"""
     )
     UPDATE jobs j SET state='pending', attempts=0, run_after=now(),
                       finished_at=NULL, locked_by=NULL, locked_at=NULL,
-                      heartbeat_at=NULL
+                      heartbeat_at=NULL, cancel_requested_at=NULL
     FROM chosen c
     WHERE j.id = c.id AND j.state = 'dead'
     RETURNING j.id, j.video_id, j.kind, j.error_class, c.prev_attempts,
@@ -321,6 +413,19 @@ class Job:
     alerted_at: datetime | None = None
     #: Live figures of a running transcribe job (#245); cleared on every exit from ``running``.
     progress: dict[str, Any] | None = None
+    #: When a user asked to cancel this job (#237); ``None`` when nobody did.
+    cancel_requested_at: datetime | None = None
+
+
+class HeartbeatResult(StrEnum):
+    """What ``JobQueue.heartbeat`` found (#237)."""
+
+    #: The job is still held by this worker, and nobody asked to cancel it.
+    HELD = "held"
+    #: Still held, and a user asked to cancel it: the worker sets ``ctx.cancelled``.
+    CANCEL_REQUESTED = "cancel_requested"
+    #: Not held any more (reaped, finished, reclaimed).
+    LOST = "lost"
 
 
 def _job_from_row(row: dict[str, Any]) -> Job:
@@ -374,13 +479,16 @@ class JobQueue(Protocol):
         payload: dict[str, Any] | None = None,
         priority: int = 0,
         run_after: datetime | None = None,
-    ) -> int | None: ...
+    ) -> int | None:
+        """Enqueue the successor of a running job; raises ``Cancelled`` (#237) and
+        enqueues nothing when the parent has a cancel request."""
+        ...
 
     def claim(
         self, kinds: Sequence[str], *, worker: str, dedupe_key: str | None = None
     ) -> AbstractContextManager[Job | None]: ...
 
-    def heartbeat(self, job_id: int, worker: str) -> bool: ...
+    def heartbeat(self, job_id: int, worker: str) -> HeartbeatResult: ...
 
     def reap_stale(self, older_than_sec: int | None = None) -> int: ...
 
@@ -389,6 +497,12 @@ class JobQueue(Protocol):
     def force_pending(self, job_id: int, priority: int) -> bool: ...
 
     def raise_priority(self, video_id: str, priority: int) -> list[int]: ...
+
+
+class _Outcome(StrEnum):
+    LOST = "lost"
+    APPLIED = "applied"
+    CANCELLED = "cancelled"
 
 
 class PostgresQueue:
@@ -473,18 +587,24 @@ class PostgresQueue:
                 f"unknown job kind {kind!r}; expected one of {sorted(_VALID_KINDS)}"
             )
         with self._conn.transaction(), self._conn.cursor() as cur:
-            cur.execute("SELECT 1 FROM videos WHERE video_id = %s FOR UPDATE", (video_id,))
-            if cur.fetchone() is None:
-                raise ValueError(f"no video {video_id!r} for handoff")
+            # Lock order: the parent job row, then the video (as delete_video, #237).
+            # The parent lock serializes this with a cancel request, which locks the
+            # video's jobs before it writes; the refusal below reads the committed value.
             cur.execute(
-                "SELECT priority FROM jobs WHERE id = %s AND video_id = %s",
+                "SELECT priority, cancel_requested_at FROM jobs"
+                " WHERE id = %s AND video_id = %s FOR UPDATE",
                 (parent_job_id, video_id),
             )
             parent = cur.fetchone()
+            cur.execute("SELECT 1 FROM videos WHERE video_id = %s FOR UPDATE", (video_id,))
+            if cur.fetchone() is None:
+                raise ValueError(f"no video {video_id!r} for handoff")
             if parent is None:
                 raise ValueError(
                     f"parent job {parent_job_id} does not belong to video {video_id!r}"
                 )
+            if parent[1] is not None:
+                raise Cancelled()
             cur.execute(
                 """
                 INSERT INTO jobs (video_id, kind, dedupe_key, payload, priority, run_after)
@@ -527,28 +647,15 @@ class PostgresQueue:
         try:
             yield job
         except Defer as defer:
-            self._resolve(
-                job,
-                worker,
-                """
-                UPDATE jobs SET state='pending', run_after=%(until)s,
-                       attempts=attempts-1, locked_by=NULL, locked_at=NULL, progress=NULL
-                WHERE id=%(id)s AND locked_by=%(worker)s AND state='running'
-                """,
-                {"until": defer.until},
-            )
-        except (Cancelled, KeyboardInterrupt, SystemExit):
-            self._resolve(
-                job,
-                worker,
-                """
-                UPDATE jobs SET state='pending', run_after=now(),
-                       attempts=attempts-1, locked_by=NULL, locked_at=NULL, progress=NULL
-                WHERE id=%(id)s AND locked_by=%(worker)s AND state='running'
-                """,
-                {},
-            )
-            raise
+            outcome = self._resolve(job, worker, _DEFER_SQL, {"until": defer.until})
+            self._log_cancelled(job, outcome)
+        except (Cancelled, KeyboardInterrupt, SystemExit) as stop:
+            outcome = self._resolve(job, worker, _HAND_BACK_SQL, {})
+            self._log_cancelled(job, outcome)
+            # A user cancel (#237) is terminal and the worker carries on, so the
+            # exception ends here; a shutdown hands the job back and propagates.
+            if outcome is not _Outcome.CANCELLED or not isinstance(stop, Cancelled):
+                raise
         except Exception as exc:  # noqa: BLE001
             # Intentionally blind: this is the queue's safety net. Every
             # failure a handler can raise must be classified and recorded
@@ -557,17 +664,7 @@ class PostgresQueue:
             # propagate, are already peeled off above.
             self._fail(job, worker, exc)
         else:
-            self._resolve(
-                job,
-                worker,
-                """
-                UPDATE jobs SET state='done', finished_at=now(),
-                       locked_by=NULL, locked_at=NULL, progress=NULL,
-                       last_error=NULL, error_class=NULL
-                WHERE id=%(id)s AND locked_by=%(worker)s AND state='running'
-                """,
-                {},
-            )
+            self._resolve(job, worker, _DONE_SQL, {})
 
     def _do_claim(
         self, kinds: Sequence[str], worker: str, dedupe_key: str | None = None
@@ -607,20 +704,16 @@ class PostgresQueue:
             dead = job.attempts >= effective_max
 
         if dead:
-            transitioned = self._resolve(
+            outcome = self._resolve(
                 job,
                 worker,
-                """
-                UPDATE jobs SET state='dead', finished_at=now(),
-                       locked_by=NULL, locked_at=NULL, progress=NULL,
-                       last_error=%(last_error)s, error_class=%(error_class)s
-                WHERE id=%(id)s AND locked_by=%(worker)s AND state='running'
-                """,
+                _DEAD_SQL,
                 {"last_error": last_error, "error_class": error_class.value},
             )
             # Only a row actually moved to 'dead' is a dead-letter; a zero-row
-            # outcome is the reaped-and-reclaimed race (#193).
-            if transitioned:
+            # outcome is the reaped-and-reclaimed race (#193), and a cancelled
+            # one is not a failure (#237).
+            if outcome is _Outcome.APPLIED:
                 log_dead_letter(
                     job_id=job.id,
                     kind=job.kind,
@@ -628,28 +721,24 @@ class PostgresQueue:
                     last_error=last_error,
                     video_id=job.video_id,
                 )
+            self._log_cancelled(job, outcome)
             return
 
         retry_after_sec = getattr(exc, "retry_after_sec", None)
         delay_sec = self._compute_backoff_sec(
             job.attempts, pol.min_backoff, retry_after_sec
         )
-        self._resolve(
+        outcome = self._resolve(
             job,
             worker,
-            """
-            UPDATE jobs SET state='pending',
-                   run_after = now() + (%(delay_sec)s * interval '1 second'),
-                   locked_by=NULL, locked_at=NULL, progress=NULL,
-                   last_error=%(last_error)s, error_class=%(error_class)s
-            WHERE id=%(id)s AND locked_by=%(worker)s AND state='running'
-            """,
+            _RETRY_LATER_SQL,
             {
                 "delay_sec": delay_sec,
                 "last_error": last_error,
                 "error_class": error_class.value,
             },
         )
+        self._log_cancelled(job, outcome)
 
     def _compute_backoff_sec(
         self,
@@ -675,18 +764,32 @@ class PostgresQueue:
 
     def _resolve(
         self, job: Job, worker: str, sql: str, params: dict[str, Any]
-    ) -> bool:
-        """Run an outcome UPDATE; True when it matched a row."""
+    ) -> _Outcome:
+        """Run an outcome UPDATE (which ``RETURNING``s whether it cancelled the job)."""
         with self._conn.transaction(), self._conn.cursor() as cur:
-            cur.execute(sql, {**params, "id": job.id, "worker": worker})
-            if cur.rowcount == 0:
-                _logger.warning(
-                    "job outcome update matched no rows; it was likely "
-                    "reaped and reclaimed by another worker",
-                    extra={"job_id": job.id, "worker": worker, "kind": job.kind},
-                )
-                return False
-            return True
+            cur.execute(
+                sql,
+                {
+                    **params,
+                    "id": job.id,
+                    "worker": worker,
+                    "cancelled_error": CANCELLED_LAST_ERROR,
+                },
+            )
+            row = cur.fetchone()
+        if row is None:
+            _logger.warning(
+                "job outcome update matched no rows; it was likely "
+                "reaped and reclaimed by another worker",
+                extra={"job_id": job.id, "worker": worker, "kind": job.kind},
+            )
+            return _Outcome.LOST
+        return _Outcome.CANCELLED if row[0] else _Outcome.APPLIED
+
+    @staticmethod
+    def _log_cancelled(job: Job, outcome: _Outcome) -> None:
+        if outcome is _Outcome.CANCELLED:
+            log_job_cancelled(job_id=job.id, video_id=job.video_id, kind=job.kind)
 
     # -- retry_dead ------------------------------------------------------------
 
@@ -819,16 +922,21 @@ class PostgresQueue:
             has_more=has_more,
         )
 
-    def heartbeat(self, job_id: int, worker: str) -> bool:
+    def heartbeat(self, job_id: int, worker: str) -> HeartbeatResult:
+        """Refresh ``heartbeat_at``; say whether the job is held and cancel-requested (#237)."""
         with self._conn.transaction(), self._conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE jobs SET heartbeat_at = now()
                 WHERE id = %(id)s AND state = 'running' AND locked_by = %(worker)s
+                RETURNING cancel_requested_at IS NOT NULL
                 """,
                 {"id": job_id, "worker": worker},
             )
-            return cur.rowcount > 0
+            row = cur.fetchone()
+        if row is None:
+            return HeartbeatResult.LOST
+        return HeartbeatResult.CANCEL_REQUESTED if row[0] else HeartbeatResult.HELD
 
     def force_pending(self, job_id: int, priority: int) -> bool:
         """Make a ``pending`` job a forced one at no less than ``priority`` (#101).
@@ -850,6 +958,12 @@ class PostgresQueue:
     def raise_priority(self, video_id: str, priority: int) -> list[int]:
         """Raise queued work and running successor producers for one video (#103, #155)."""
         with self._conn.transaction(), self._conn.cursor() as cur:
+            # Jobs first, then the video: the order of delete_video, handoff and
+            # the cancel request (#237), so none of them can deadlock another.
+            cur.execute(
+                "SELECT id FROM jobs WHERE video_id = %s ORDER BY id FOR UPDATE", (video_id,)
+            )
+            cur.fetchall()
             cur.execute("SELECT 1 FROM videos WHERE video_id = %s FOR UPDATE", (video_id,))
             cur.fetchone()
             cur.execute(
@@ -954,15 +1068,18 @@ class PostgresQueue:
                     ORDER BY id
                     FOR UPDATE SKIP LOCKED)
                 UPDATE jobs j SET
-                    state = CASE WHEN j.attempts >= CASE j.kind
+                    state = CASE WHEN j.cancel_requested_at IS NOT NULL
+                                      OR j.attempts >= CASE j.kind
                                           WHEN 'transcribe' THEN %(max_transcribe)s
                                           ELSE %(max_default)s END
                                  THEN 'dead' ELSE 'pending' END,
-                    finished_at = CASE WHEN j.attempts >= CASE j.kind
+                    finished_at = CASE WHEN j.cancel_requested_at IS NOT NULL
+                                      OR j.attempts >= CASE j.kind
                                           WHEN 'transcribe' THEN %(max_transcribe)s
                                           ELSE %(max_default)s END
                                  THEN now() ELSE j.finished_at END,
-                    run_after = CASE WHEN j.attempts >= CASE j.kind
+                    run_after = CASE WHEN j.cancel_requested_at IS NOT NULL
+                                      OR j.attempts >= CASE j.kind
                                           WHEN 'transcribe' THEN %(max_transcribe)s
                                           ELSE %(max_default)s END
                                  THEN j.run_after
@@ -972,14 +1089,17 @@ class PostgresQueue:
                                       * (1 + (random() * 2 - 1) * %(jitter)s))
                             END,
                     locked_by = NULL, locked_at = NULL, progress = NULL,
-                    last_error = %(last_error)s, error_class = NULL
+                    last_error = CASE WHEN j.cancel_requested_at IS NOT NULL
+                                      THEN %(cancelled_error)s ELSE %(last_error)s END,
+                    error_class = CASE WHEN j.cancel_requested_at IS NOT NULL
+                                       THEN 'CANCELLED' END
                 FROM stale
                 WHERE j.id = stale.id AND j.state = 'running'
                   AND (j.heartbeat_at IS NULL
                        OR j.heartbeat_at < now() - (%(threshold)s * interval '1 second'))
                 RETURNING j.id, stale.video_id, stale.kind, stale.attempts,
                           stale.locked_by AS lost_worker, j.state AS outcome,
-                          j.run_after AS run_after
+                          j.run_after AS run_after, j.error_class AS error_class
                 """,
                 {
                     "threshold": threshold,
@@ -989,10 +1109,15 @@ class PostgresQueue:
                     "max_backoff": _MAX_BACKOFF_SEC,
                     "jitter": _JITTER_FRACTION,
                     "last_error": _REAP_LAST_ERROR,
+                    "cancelled_error": CANCELLED_LAST_ERROR,
                 },
             )
             reaped = cur.fetchall()
         for row in reaped:
+            if row["error_class"] == ErrorClass.CANCELLED.value:
+                # A user's cancel request, not a lost worker: terminal, not a dead-letter (#237).
+                log_job_cancelled(job_id=row["id"], video_id=row["video_id"], kind=row["kind"])
+                continue
             extra: dict[str, Any] = {
                 "job_id": row["id"],
                 "video_id": row["video_id"],

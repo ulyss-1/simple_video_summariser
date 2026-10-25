@@ -1,7 +1,9 @@
 """Error taxonomy (architecture.md 8.4).
 
 Every job failure is sorted into one of eight classes, and each class carries a
-retry policy. The class string is what ``jobs.error_class`` stores.
+retry policy. The class string is what ``jobs.error_class`` stores. A ninth,
+``CANCELLED`` (#237), is not a failure: it is the outcome of a job a user
+cancelled, written by the queue and never returned by ``classify``.
 
 Adapters translate what they know about their tool into a ``JobError``
 subclass; anything else is classified by ``classify`` from its exception type
@@ -22,6 +24,9 @@ from typing import ClassVar
 
 from common.safe_url import redact
 
+#: ``last_error`` of a cancelled job (#237): fixed, so it carries no user input.
+CANCELLED_LAST_ERROR = "cancelled on request"
+
 #: ``format_error`` output never exceeds this many UTF-8 bytes.
 MAX_ERROR_BYTES = 8 * 1024
 
@@ -39,6 +44,9 @@ class ErrorClass(StrEnum):
     LLM_UNAVAILABLE = "LLM_UNAVAILABLE"
     RESOURCE = "RESOURCE"
     BUG = "BUG"
+    #: A user cancelled the job (#237). Written by the queue only; no exception
+    #: classifies to it.
+    CANCELLED = "CANCELLED"
 
 
 class UnavailableReason(StrEnum):
@@ -93,6 +101,7 @@ _POLICIES: dict[ErrorClass, RetryPolicy] = {
         retry=False, max_attempts=None, min_backoff=None, alert=True
     ),
     ErrorClass.BUG: _NO_RETRY,
+    ErrorClass.CANCELLED: _NO_RETRY,
 }
 
 
@@ -248,3 +257,11 @@ def log_dead_letter(
             "alert": alert,
         },
     )
+
+
+def log_job_cancelled(*, job_id: int, video_id: str, kind: str) -> None:
+    """The one ``job.cancelled`` line (#237): INFO, never through ``log_dead_letter``.
+
+    A user's cancel is not a failure, so it is neither an ERROR nor an alert.
+    """
+    _logger.info("job.cancelled", extra={"job_id": job_id, "video_id": video_id, "kind": kind})

@@ -78,7 +78,9 @@ class UnitRig:
             ingest_module, "clear_unavailable", lambda conn, vid: events.append(("clear", vid))
         )
         monkeypatch.setattr(ingest_module, "get_best_transcript", lambda conn, vid: None)
-        monkeypatch.setattr(ingest_module, "latest_job_state", lambda conn, vid, kind: None)
+        monkeypatch.setattr(
+            ingest_module, "latest_job_outcome", lambda conn, vid, kind: (None, None)
+        )
         self.handler = make_ingest_handler(
             conn=self.conn,  # type: ignore[arg-type]
             queue=self.queue,  # type: ignore[arg-type]

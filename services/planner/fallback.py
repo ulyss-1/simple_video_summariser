@@ -17,8 +17,8 @@ back to ``1``; that is intended.
 
 A video is a candidate when its newest ``transcribe`` job (``created_at DESC,
 id DESC``, the order ``latest_job_state`` uses) is ``dead`` with an
-``error_class`` other than ``PERMANENT_SOURCE`` (NULL, as a reaped job has, is
-eligible), the video is not marked unavailable, it has no transcript with
+``error_class`` other than ``PERMANENT_SOURCE`` and ``CANCELLED`` (a user's cancel,
+#237, never triggers a fallback; NULL, as a reaped job has, is eligible), the video is not marked unavailable, it has no transcript with
 non-blank text from any source, and no ``ingest`` job in any state was created
 after the dead job finished. The last rule is the loop guard: each dead
 transcribe job earns at most one fallback ingest, and an ad-hoc resubmission
@@ -57,6 +57,7 @@ _CANDIDATES_SQL = r"""
     JOIN videos v ON v.video_id = d.video_id
     WHERE d.state = 'dead'
       AND d.error_class IS DISTINCT FROM 'PERMANENT_SOURCE'
+      AND d.error_class IS DISTINCT FROM 'CANCELLED'
       AND v.unavailable IS NULL
       AND NOT EXISTS (
             SELECT 1 FROM transcripts t

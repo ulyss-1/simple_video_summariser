@@ -48,7 +48,7 @@ from structlog.testing import capture_logs
 
 from common.config import Settings, get_settings
 from common.errors import Cancelled
-from common.queue import Job, PostgresQueue
+from common.queue import HeartbeatResult, Job, PostgresQueue
 from common.worker import (
     _MAX_PLAUSIBLE_DURATION_SEC,
     EXIT_HUNG_HANDLER,
@@ -102,7 +102,9 @@ class FakeQueue:
         self.claim_calls: list[tuple[tuple[str, ...], str]] = []
         self.outcomes: list[tuple[Job, str]] = []
         self.heartbeat_calls: list[tuple[int, str]] = []
-        self.heartbeat_result: bool | Callable[[], bool] | Exception = True
+        self.heartbeat_result: HeartbeatResult | Callable[[], HeartbeatResult] | Exception = (
+            HeartbeatResult.HELD
+        )
         self.close_calls = 0
         self.close_raises: Exception | None = None
 
@@ -131,7 +133,7 @@ class FakeQueue:
         else:
             self.outcomes.append((job, "done"))
 
-    def heartbeat(self, job_id: int, worker: str) -> bool:
+    def heartbeat(self, job_id: int, worker: str) -> HeartbeatResult:
         self.heartbeat_calls.append((job_id, worker))
         result = self.heartbeat_result
         if isinstance(result, Exception):
@@ -497,7 +499,7 @@ def test_heartbeat_returning_false_cancels_the_job_and_stops_ticking(tmp_path: P
     seen_cancelled: list[bool] = []
 
     def handler(job: Job, ctx: JobContext) -> None:
-        queue.heartbeat_result = False
+        queue.heartbeat_result = HeartbeatResult.LOST
         timer_factory.last.fire()
         seen_cancelled.append(ctx.cancelled)
 
@@ -523,7 +525,7 @@ def test_heartbeat_failure_is_logged_and_retried_next_tick(tmp_path: Path) -> No
         assert len(timer_factory.scheduled) == scheduled_before + 1
         assert timer_factory.scheduled[-1][0] == 60
         tick_count += 1
-        queue.heartbeat_result = True
+        queue.heartbeat_result = HeartbeatResult.HELD
         timer_factory.last.fire()  # tick 2: succeeds, rescheduled by tick 1
         tick_count += 1
         assert not ctx.cancelled
@@ -557,7 +559,7 @@ def test_heartbeat_failure_discards_the_queue_and_reconnects_via_the_factory(tmp
         scheduled_before = len(timer_factory.scheduled)
         timer_factory.last.fire()  # tick 1: on A, fails
         assert len(timer_factory.scheduled) == scheduled_before + 1
-        queue_b.heartbeat_result = True
+        queue_b.heartbeat_result = HeartbeatResult.HELD
         timer_factory.last.fire()  # tick 2: gets B fresh from the factory, succeeds
         assert not ctx.cancelled
 
@@ -620,7 +622,7 @@ def test_heartbeat_reconnect_failure_is_logged_and_next_tick_retries_the_factory
         assert reconnect_failed[0]["job_id"] == 21
         assert "error" in reconnect_failed[0]
 
-        queue_c.heartbeat_result = True
+        queue_c.heartbeat_result = HeartbeatResult.HELD
         timer_factory.last.fire()  # tick 3: factory call 3 succeeds, uses C
         assert not ctx.cancelled
 
@@ -654,7 +656,7 @@ def test_heartbeat_reaped_does_not_call_the_factory_again(tmp_path: Path) -> Non
     timer_factory = FakeTimerFactory()
 
     def handler(job: Job, ctx: JobContext) -> None:
-        queue.heartbeat_result = False
+        queue.heartbeat_result = HeartbeatResult.LOST
         timer_factory.last.fire()
         assert ctx.cancelled
 
@@ -693,7 +695,7 @@ def test_heartbeat_queue_close_raising_still_discards_it_and_reconnects(tmp_path
     def handler(job: Job, ctx: JobContext) -> None:
         queue_a.heartbeat_result = ConnectionError("dead")
         timer_factory.last.fire()  # tick 1: fails, close() raises too
-        queue_b.heartbeat_result = True
+        queue_b.heartbeat_result = HeartbeatResult.HELD
         timer_factory.last.fire()  # tick 2: still reconnects fine
         assert not ctx.cancelled
 
@@ -769,7 +771,7 @@ def test_queue_recreated_during_job_a_carries_over_to_job_b_without_an_extra_fac
         if job.id == 32:
             queue_a.heartbeat_result = ConnectionError("dead")
             timer_factory.last.fire()  # fails, discards A
-            queue_b.heartbeat_result = True
+            queue_b.heartbeat_result = HeartbeatResult.HELD
             timer_factory.last.fire()  # reconnects to B (factory call 2)
         else:
             timer_factory.last.fire()  # job B's tick: must reuse B, no factory call
@@ -813,7 +815,7 @@ def test_stop_after_a_failed_tick_leaves_no_queue_and_next_job_reconnects_on_fir
             queue_a.heartbeat_result = ConnectionError("dead")
             timer_factory.last.fire()  # tick fails, queue discarded; job ends here
         else:
-            queue_b.heartbeat_result = True
+            queue_b.heartbeat_result = HeartbeatResult.HELD
             timer_factory.last.fire()  # job B's first tick: reconnects via factory
 
     worker = make_worker(
@@ -967,7 +969,7 @@ def test_liveness_file_touched_when_the_heartbeat_reports_the_job_reaped(tmp_pat
 
     def handler(job: Job, ctx: JobContext) -> None:
         liveness.unlink()
-        queue.heartbeat_result = False
+        queue.heartbeat_result = HeartbeatResult.LOST
         timer_factory.last.fire()
         exists_after_tick.append(liveness.exists())
 
@@ -1102,7 +1104,8 @@ def test_real_sigterm_stops_an_idle_worker(tmp_path: Path) -> None:
 
             class IdleQueue:
                 def heartbeat(self, job_id, worker):
-                    return True
+                    from common.queue import HeartbeatResult
+                    return HeartbeatResult.HELD
 
                 @contextmanager
                 def claim(self, kinds, *, worker):
