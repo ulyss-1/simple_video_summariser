@@ -1,8 +1,21 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { JobProgress } from '../components/JobProgress'
-import { OpsError, useOpsChannels, useOpsJobs, useQueueDepth, useRetryJob, type JobOut, type OpsChannelOut } from '../hooks/useOps'
 import {
+  OpsError,
+  useBulkRetry,
+  useOpsChannels,
+  useOpsJobs,
+  useQueueDepth,
+  useRetryJob,
+  type JobOut,
+  type OpsChannelOut,
+} from '../hooks/useOps'
+import {
+  bulkIncludesTranscribe,
+  bulkRetryErrorMessage,
+  bulkRetryMessage,
+  bulkScopeLabel,
   collapseError,
   depthTable,
   ERROR_CLASSES,
@@ -52,10 +65,11 @@ export function Ops() {
   const table = depth.data === undefined ? null : depthTable(depth.data.queue)
 
   return (
-    <section>
+    <section className="page ops">
       <h1>Ops</h1>
       <p>
         <button
+          className="btn"
           type="button"
           onClick={() => {
             setResult(null)
@@ -68,23 +82,24 @@ export function Ops() {
         </button>
       </p>
 
-      <section aria-labelledby={depthId}>
+      <section className="ops__section" aria-labelledby={depthId}>
         <h2 id={depthId}>Queue depth</h2>
-        {depth.isPending && <p>Loading queue depth…</p>}
+        {depth.isPending && <p className="muted">Loading queue depth…</p>}
         {depth.isError && (
-          <p role="alert">
+          <p className="alert alert--danger" role="alert">
             {depth.error instanceof OpsError && depth.error.status === 503
               ? 'Queue depth unavailable: the database is down'
               : 'Could not load queue depth'}{' '}
-            <button type="button" onClick={() => void depth.refetch()}>
+            <button className="btn" type="button" onClick={() => void depth.refetch()}>
               Retry
             </button>
           </p>
         )}
         {table !== null && (
           <>
-            <p>{table.deadTotal === 0 ? 'No dead jobs' : `${table.deadTotal} dead ${table.deadTotal === 1 ? 'job' : 'jobs'}`}</p>
-            <table>
+            <p className="muted">{table.deadTotal === 0 ? 'No dead jobs' : `${table.deadTotal} dead ${table.deadTotal === 1 ? 'job' : 'jobs'}`}</p>
+            <div className="card card--flush table-scroll" role="region" aria-label="Queue depth by kind" tabIndex={0}>
+            <table className="table ops__depth">
               <thead>
                 <tr>
                   <th scope="col">Kind</th>
@@ -106,15 +121,16 @@ export function Ops() {
                 ))}
               </tbody>
             </table>
+            </div>
           </>
         )}
       </section>
 
-      <section aria-labelledby={channelsId}>
+      <section className="ops__section" aria-labelledby={channelsId}>
         <h2 id={channelsId}>Channels needing attention</h2>
-        {channels.isPending && <p role="status">Loading channels…</p>}
+        {channels.isPending && <p className="muted" role="status">Loading channels…</p>}
         {channels.isError && (
-          <p role="alert">
+          <p className="alert alert--danger" role="alert">
             {channels.error instanceof OpsError && channels.error.status === 503
               ? 'The database is unavailable. Try again shortly.'
               : 'Could not load channels'}{' '}
@@ -123,7 +139,7 @@ export function Ops() {
             </button>
           </p>
         )}
-        {channels.data !== undefined && channels.data.items.length === 0 && <p>No channels need attention</p>}
+        {channels.data !== undefined && channels.data.items.length === 0 && <p className="muted">No channels need attention</p>}
         {channels.data !== undefined && channels.data.items.length > 0 && (
           <div role="region" aria-label="Channels needing attention table" tabIndex={0}>
             <table>
@@ -141,17 +157,20 @@ export function Ops() {
         )}
       </section>
 
-      <section aria-labelledby={jobsId}>
+      <section className="ops__section" aria-labelledby={jobsId}>
         <h2 id={jobsId}>Jobs</h2>
         <Filters filters={filters} onChange={(f) => go(f, null)} />
-        <p aria-live="polite">{rowVanished ? result.message : ''}</p>
-        {loadingJobs && <p>Loading jobs…</p>}
+        {filters.state === 'dead' && (
+          <BulkRetry key={`${filters.kind}|${filters.errorClass}`} filters={filters} onAction={() => setResult(null)} />
+        )}
+        <p className="muted" aria-live="polite">{rowVanished ? result.message : ''}</p>
+        {loadingJobs && <p className="muted">Loading jobs…</p>}
         {jobs.isError && (
-          <p role="alert">
+          <p className="alert alert--danger" role="alert">
             {jobs.error instanceof OpsError && jobs.error.status === 503
               ? 'The database is unavailable. Try again shortly.'
               : 'Could not load jobs'}{' '}
-            <button type="button" onClick={() => void jobs.refetch()}>
+            <button className="btn" type="button" onClick={() => void jobs.refetch()}>
               Retry
             </button>
           </p>
@@ -159,10 +178,11 @@ export function Ops() {
         {data !== undefined && (
           <>
             {data.items.length === 0 && !placeholder && (
-              <p>
+              <p className="muted">
                 {isDefaultFilters(filters) ? 'No dead jobs' : 'No jobs match these filters'}{' '}
                 {!isDefaultFilters(filters) && (
                   <button
+                    className="btn"
                     type="button"
                     onClick={() => go({ state: 'dead', kind: null, errorClass: null }, null)}
                   >
@@ -172,7 +192,8 @@ export function Ops() {
               </p>
             )}
             {data.items.length > 0 && (
-              <table>
+              <div className="card card--flush table-scroll" role="region" aria-label="Jobs list" tabIndex={0}>
+              <table className="table ops__jobs">
                 <thead>
                   <tr>
                     <th scope="col">Job</th>
@@ -199,16 +220,18 @@ export function Ops() {
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
-            <nav aria-label="Pagination">
+            <nav className="pagination" aria-label="Pagination">
               <button
+                className="btn"
                 type="button"
                 disabled={data.next_before_id === null || placeholder}
                 onClick={() => data.next_before_id !== null && go(filters, data.next_before_id)}
               >
                 Older
               </button>{' '}
-              <button type="button" disabled={before === null || placeholder} onClick={() => go(filters, null)}>
+              <button className="btn" type="button" disabled={before === null || placeholder} onClick={() => go(filters, null)}>
                 Newest
               </button>
             </nav>
@@ -256,9 +279,11 @@ function Filters({ filters, onChange }: { filters: OpsFilters; onChange: (f: Ops
   const kindId = useId()
   const classId = useId()
   return (
-    <form onSubmit={(e) => e.preventDefault()}>
-      <label htmlFor={stateId}>State</label>{' '}
+    <form className="card filters" onSubmit={(e) => e.preventDefault()}>
+      <div className="field">
+      <label htmlFor={stateId}>State</label>
       <select
+        className="input"
         id={stateId}
         value={filters.state}
         onChange={(e) => {
@@ -271,9 +296,12 @@ function Filters({ filters, onChange }: { filters: OpsFilters; onChange: (f: Ops
             {s}
           </option>
         ))}
-      </select>{' '}
-      <label htmlFor={kindId}>Kind</label>{' '}
+      </select>
+      </div>
+      <div className="field">
+      <label htmlFor={kindId}>Kind</label>
       <select
+        className="input"
         id={kindId}
         value={filters.kind ?? ''}
         onChange={(e) => onChange({ ...filters, kind: JOB_KINDS.find((k) => k === e.target.value) ?? null })}
@@ -284,9 +312,12 @@ function Filters({ filters, onChange }: { filters: OpsFilters; onChange: (f: Ops
             {k}
           </option>
         ))}
-      </select>{' '}
-      <label htmlFor={classId}>Error class</label>{' '}
+      </select>
+      </div>
+      <div className="field">
+      <label htmlFor={classId}>Error class</label>
       <select
+        className="input"
         id={classId}
         value={filters.errorClass ?? ''}
         onChange={(e) => {
@@ -305,8 +336,112 @@ function Filters({ filters, onChange }: { filters: OpsFilters; onChange: (f: Ops
         ))}
         <option value={NO_CLASS}>No class</option>
       </select>
+      </div>
     </form>
   )
+}
+
+/** "Retry all matching" (#161): a dry run counts the jobs, an inline confirmation names the scope, Confirm retries. */
+function BulkRetry({ filters, onAction }: { filters: OpsFilters; onAction: () => void }) {
+  const { preview, run } = useBulkRetry()
+  const [count, setCount] = useState<number | null>(null)
+  const [note, setNote] = useState<{ text: string; error: boolean } | null>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const confirmRef = useRef<HTMLButtonElement>(null)
+  const restoreFocus = useRef(false)
+  // Set synchronously on click: isPending only turns true on a later tick.
+  const sent = useRef(false)
+  const confirming = count !== null
+  const busy = preview.isPending || run.isPending
+
+  // Focus follows the confirmation: into it when it opens, back out on Cancel.
+  useEffect(() => {
+    if (confirming) confirmRef.current?.focus()
+    else if (restoreFocus.current) {
+      restoreFocus.current = false
+      triggerRef.current?.focus()
+    }
+  }, [confirming])
+
+  const fail = (error: unknown) =>
+    setNote({ text: bulkRetryErrorMessage(error instanceof OpsError ? error.status : null), error: true })
+
+  const open = () => {
+    if (sent.current) return
+    sent.current = true
+    onAction()
+    setNote(null)
+    preview.mutate(filters, {
+      onSuccess: (out) => {
+        if (out.retried === 0) setNote({ text: 'No dead jobs match these filters.', error: false })
+        else setCount(out.retried)
+      },
+      onError: fail,
+      onSettled: () => {
+        sent.current = false
+      },
+    })
+  }
+
+  const confirm = () => {
+    if (sent.current) return
+    sent.current = true
+    run.mutate(filters, {
+      onSuccess: (out) => setNote({ text: bulkRetryMessage(out), error: false }),
+      onError: fail,
+      onSettled: () => {
+        sent.current = false
+        setCount(null)
+      },
+    })
+  }
+
+  return (
+    <div>
+      {confirming ? (
+        <div className="ops__confirm">
+          <p>
+            Retry {count} {count === 1 ? 'job' : 'jobs'} ({bulkScopeLabel(filters)})?
+            {bulkIncludesTranscribe(filters) && ' A transcription can take hours of CPU.'}
+          </p>
+          <button className="btn btn--primary" type="button" ref={confirmRef} disabled={busy} onClick={confirm}>
+            Confirm retry
+          </button>{' '}
+          <button
+            className="btn"
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              restoreFocus.current = true
+              setCount(null)
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <button className="btn" type="button" ref={triggerRef} disabled={busy} onClick={open}>
+          Retry all matching
+        </button>
+      )}
+      <p className={note?.error ? 'alert alert--danger' : 'muted'} aria-live="polite">
+        {note?.text ?? ''}
+      </p>
+    </div>
+  )
+}
+
+function stateBadge(state: JobOut['state']): string {
+  switch (state) {
+    case 'done':
+      return 'badge badge--success'
+    case 'dead':
+      return 'badge badge--danger'
+    case 'running':
+      return 'badge badge--warning'
+    default:
+      return 'badge'
+  }
 }
 
 function JobRow({
@@ -363,7 +498,9 @@ function JobRow({
         <Link to={`/videos/${encodeURIComponent(j.video_id)}`}>{videoName}</Link>
       </td>
       <td>{j.kind}</td>
-      <td>{j.state}</td>
+      <td>
+        <span className={stateBadge(j.state)}>{j.state}</span>
+      </td>
       <td>
         <JobProgress kind={j.kind} state={j.state} progress={j.progress ?? null} />
       </td>
@@ -373,12 +510,12 @@ function JobRow({
         {cls.hint !== null && (
           <>
             {' '}
-            <small>{cls.hint}</small>
+            <small className="muted">{cls.hint}</small>
           </>
         )}
       </td>
       <td>
-        <span>{formatUtc(finished ? j.finished_at : j.created_at)}</span> <small>{finished ? 'finished' : 'created'}</small>
+        <span>{formatUtc(finished ? j.finished_at : j.created_at)}</span> <small className="muted">{finished ? 'finished' : 'created'}</small>
       </td>
       <td>
         {collapsed === null ? (
@@ -392,7 +529,7 @@ function JobRow({
             ) : (
               <span>{collapsed}</span>
             )}{' '}
-            <button type="button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+            <button className="btn" type="button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
               {expanded ? 'Hide' : 'Show full error'}
             </button>
           </>
@@ -401,15 +538,16 @@ function JobRow({
       <td>
         {j.state === 'dead' &&
           (confirming ? (
-            <div>
+            <div className="ops__confirm">
               <p>
                 Retry job #{j.id} ({j.kind}) for {videoName}?
                 {j.kind === 'transcribe' && ' A transcription can take hours of CPU.'}
               </p>
-              <button type="button" ref={confirmRef} disabled={busy} onClick={confirm}>
+              <button className="btn btn--primary" type="button" ref={confirmRef} disabled={busy} onClick={confirm}>
                 Confirm retry
               </button>{' '}
               <button
+                className="btn"
                 type="button"
                 disabled={busy}
                 onClick={() => {
@@ -422,6 +560,7 @@ function JobRow({
             </div>
           ) : (
             <button
+              className="btn"
               type="button"
               ref={retryRef}
               onClick={() => {

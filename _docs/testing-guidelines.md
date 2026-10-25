@@ -79,6 +79,19 @@ boundaries, no network, deterministic, no repeat-run loops) apply unchanged to
   cleanup guard verifies this in either shuffled test order. Leave `process.env`
   and module singletons as you found them.
 
+### Browser-level checks
+
+- Specs live in `web/e2e/` and are named `*.spec.ts`. Playwright collects
+  them (`npm run test:e2e`); Vitest must not (it only includes `src/**`).
+- The harness serves `vite preview` of the production build on a non-default
+  port and starts and stops its own server. Install the browser once with
+  `npx playwright install --with-deps chromium`.
+- No third-party network, ever: the `e2e/fixtures/offline.ts` guard aborts
+  and fails on any unstubbed request. Stub `/api/**` with `page.route`.
+- No sleeps, no retries, no repeat-run loops: web-first assertions only.
+- `vite preview` sends no CSP or `Referrer-Policy`, so CSP-dependent checks
+  belong where the real nginx headers are available (#178/#57).
+
 ## Test at the scale the system actually runs at
 
 This is a single-operator system (architecture.md, "Expected scale"): tens of
@@ -137,6 +150,17 @@ When a test fails intermittently, or a criterion is about a race:
 4. **Test the logic deterministically.** Inject the clock, sleep and probe so
    wait/retry logic runs in microseconds with fakes (see
    `tests/test_postgres_readiness.py`).
+
+**Containers and Ryuk.** The shared Postgres container waits for a real
+connection on the mapped port before yielding, because Docker Desktop (WSL)
+publishes the port a moment after the container reports ready (#74,
+`tests/conftest.py`). Testcontainers' Ryuk reaper is **disabled**
+(`testcontainers_config.ryuk_disabled = True` in `tests/conftest.py`, #194):
+every container the suite starts is wrapped in a `with` block, so cleanup is
+deterministic without it, and under concurrent Docker load Ryuk's connect is
+refused — which otherwise turns a green run into hundreds of
+`ConnectionRefusedError` setup errors. If pytest is hard-killed (SIGKILL) a
+container can leak; clear it with `docker ps` / `docker rm`.
 
 One run of the suite is the bar. If a test needs repetition to be trusted,
 the test is wrong: rewrite it to force the condition. Do not write "passes N

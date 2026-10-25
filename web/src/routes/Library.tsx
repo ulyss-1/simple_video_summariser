@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router'
 import { AddVideoForm } from '../components/AddVideoForm'
+import { BackfillChannelForm } from '../components/BackfillChannelForm'
+import { useChannels } from '../hooks/useChannels'
 import { ApiError, useVideos } from '../hooks/useVideos'
 import {
   hasFilters,
@@ -53,6 +55,7 @@ export function Library() {
 
   const reversed = isReversedRange(state)
   const q = useVideos(state, !reversed)
+  const channels = useChannels()
 
   const go = (patch: Partial<LibraryState>) => {
     setParams(toSearchParams({ ...state, page: 1, ...patch }))
@@ -90,12 +93,16 @@ export function Library() {
       : (data?.items.find((v) => v.channel_id === state.channel && v.channel_title !== null)
           ?.channel_title ?? null)
 
+  const channelItems = channels.data?.items ?? []
+  const selectedListed = channelItems.some((c) => c.channel_id === state.channel)
+
   return (
     <section className="page">
       <h1>Library</h1>
       <p aria-live="polite">{notice}</p>
 
       <AddVideoForm />
+      <BackfillChannelForm />
 
       <form className="card filters" onSubmit={(e) => e.preventDefault()}>
         <label className="field">
@@ -127,6 +134,25 @@ export function Library() {
             {STATUSES.map((s) => (
               <option key={s} value={s}>
                 {statusFilterLabel(s)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          Channel{' '}
+          <select
+            className="input"
+            value={state.channel ?? ''}
+            disabled={channels.isPending}
+            onChange={(e) => go({ channel: e.target.value || null })}
+          >
+            <option value="">All channels</option>
+            {state.channel !== null && !selectedListed && (
+              <option value={state.channel}>{channelTitle ?? state.channel}</option>
+            )}
+            {channelItems.map((c) => (
+              <option key={c.channel_id} value={c.channel_id}>
+                {c.title ?? c.channel_id}
               </option>
             ))}
           </select>
@@ -262,7 +288,7 @@ export function Library() {
                     return (
                       <tr key={v.video_id}>
                         <td>
-                          <Link to={`/videos/${v.video_id}`}>{v.title ?? v.video_id}</Link>
+                          <Link to={`/videos/${v.video_id}`} viewTransition>{v.title ?? v.video_id}</Link>
                         </td>
                         <td>
                           {id !== null ? (

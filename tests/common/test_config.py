@@ -788,6 +788,19 @@ def test_repr_and_str_hide_the_api_key_and_database_password(
         assert DB_PASSWORD not in rendered
 
 
+def test_sanitised_error_keeps_input_value_out_of_str_and_repr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The re-raised error is built with ``hide_input=True``. No secret could
+    # leak either way (every input is already the fixed placeholder), but
+    # dropping that flag would render ``input_value='<redacted>'`` and leave
+    # the input-hiding layer unpinned. #189.
+    exc = _fail(monkeypatch, DATABASE_URL=SECRET_DSN, CHUNK_SEC="900", OVERLAP_SEC="900")
+
+    assert "input_value" not in str(exc)
+    assert "input_value" not in repr(exc)
+
+
 # Letters and digits only, so JSON escaping cannot hide a match.
 SECRET_PASSWORD = "Pw9xQ2mLk7TzR4vB"
 SECRET_DSN = f"postgresql://u:{SECRET_PASSWORD}@h/db"
@@ -1038,6 +1051,11 @@ def test_ruff_allows_environment_reads_in_config(source: str) -> None:
 
 # The project's own config (no --select), so dropping TID251 from extend-select,
 # deleting a banned-api entry or widening the per-file ignore fails here.
+#
+# Every probe passes --force-exclude. Without it, ruff ignores `exclude` /
+# `extend-exclude` for a --stdin-filename run, so adding e.g. "services" or
+# "adapters" to extend-exclude would silently disable the rule for those trees
+# and no test would notice (#189, weakening 2).
 
 _OUTSIDE_CONFIG_PATHS = [
     "tests/common/test_probe.py",
@@ -1046,21 +1064,73 @@ _OUTSIDE_CONFIG_PATHS = [
     "common/y.py",
 ]
 
+_EXCLUDED_DIR_NAMES = {
+    ".git", ".venv", "node_modules", "__pycache__",
+    ".ruff_cache", ".mypy_cache", ".pytest_cache",
+    "web", "_docs",  # the real extend-exclude; not first-party Python we lint
+}  # fmt: skip
+
+
+def _first_party_py_dirs() -> list[str]:
+    """Every repo-relative directory that holds a first-party ``*.py`` file.
+
+    Derived from the layout on disk, not a hardcoded list, so a new top-level
+    package is probed automatically. This is what closes #189's weakening (1):
+    a per-file ignore for any unprobed path (``scripts/*``, ``migrations/*``,
+    ``services/transcriber/*``, ...) now silences the rule for a directory a
+    test probes, so the test fails.
+    """
+    dirs: set[str] = set()
+    for path in REPO_ROOT.rglob("*.py"):
+        rel = path.relative_to(REPO_ROOT)
+        if any(
+            part in _EXCLUDED_DIR_NAMES or part.startswith(".")
+            for part in rel.parent.parts
+        ):
+            continue
+        parent = rel.parent
+        dirs.add("." if parent == Path() else parent.as_posix())
+    return sorted(dirs)
+
 
 @pytest.mark.parametrize("source", ENV_READS)
 @pytest.mark.parametrize("as_path", _OUTSIDE_CONFIG_PATHS)
 def test_project_config_flags_environment_reads_outside_config(
     source: str, as_path: str
 ) -> None:
-    result = _ruff(source, as_path)
+    result = _ruff(source, as_path, "--force-exclude")
 
     assert result.returncode == 1, result.stdout + result.stderr
     assert "TID251" in result.stdout
 
 
+@pytest.mark.parametrize("py_dir", _first_party_py_dirs())
+def test_project_config_flags_environment_reads_in_every_source_dir(py_dir: str) -> None:
+    # A single env-read probed at every first-party directory. common/config.py
+    # is the only ignored path, so every directory (common included, via a file
+    # that is not config.py) must flag TID251.
+    as_path = "_tid251_probe.py" if py_dir == "." else f"{py_dir}/_tid251_probe.py"
+    result = _ruff("import os\n\nprint(os.environ['X'])\n", as_path, "--force-exclude")
+
+    assert result.returncode == 1, f"{as_path}: {result.stdout + result.stderr}"
+    assert "TID251" in result.stdout
+
+
+def test_project_config_banned_api_message_names_the_remedy() -> None:
+    # The guidance text is part of the rule's contract; replacing it must fail
+    # a test (#189, weakening 3).
+    result = _ruff(
+        "import os\n\nprint(os.environ['X'])\n", "services/api/main.py", "--select", "TID251"
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "`os.environ` is banned" in result.stdout
+    assert "Read settings via common.config.get_settings()" in result.stdout
+
+
 @pytest.mark.parametrize("source", ENV_READS)
 def test_project_config_allows_environment_reads_in_config(source: str) -> None:
-    result = _ruff(source, "common/config.py")
+    result = _ruff(source, "common/config.py", "--force-exclude")
 
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -1104,3 +1174,46 @@ def test_audio_min_free_values_are_read_from_the_environment(
     settings = get_settings()
 
     assert (settings.AUDIO_MIN_FREE_GB, settings.AUDIO_MIN_FREE_PCT) == (0, 12.5)
+
+
+# --- AUDIO_MAX_GB / AUDIO_MIN_FREE_GB must be finite (#197) -------------------
+
+NON_FINITE_OR_NEGATIVE = ["inf", "+inf", "-inf", "nan", "-1", "-0.5"]
+
+
+@pytest.mark.parametrize("field", ["AUDIO_MAX_GB", "AUDIO_MIN_FREE_GB"])
+@pytest.mark.parametrize("value", NON_FINITE_OR_NEGATIVE)
+def test_audio_gb_settings_reject_non_finite_and_negative_values(
+    monkeypatch: pytest.MonkeyPatch, field: str, value: str
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", DB_URL)
+    monkeypatch.setenv(field, value)
+    with pytest.raises(ValidationError) as excinfo:
+        get_settings()
+    assert _errors_for(excinfo.value, field)
+
+
+@pytest.mark.parametrize("value", ["0", "0.0"])
+def test_audio_max_gb_rejects_zero(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    monkeypatch.setenv("DATABASE_URL", DB_URL)
+    monkeypatch.setenv("AUDIO_MAX_GB", value)
+    with pytest.raises(ValidationError) as excinfo:
+        get_settings()
+    assert _errors_for(excinfo.value, "AUDIO_MAX_GB")
+
+
+def test_audio_gb_settings_accept_normal_finite_values() -> None:
+    s = build_settings(DATABASE_URL=DB_URL, AUDIO_MAX_GB=20, AUDIO_MIN_FREE_GB=2)
+    assert (s.AUDIO_MAX_GB, s.AUDIO_MIN_FREE_GB) == (20, 2)
+    assert build_settings(DATABASE_URL=DB_URL, AUDIO_MIN_FREE_GB=0).AUDIO_MIN_FREE_GB == 0
+
+
+@pytest.mark.parametrize("value", ["inf", "-inf", "nan", "-1", "100", "101"])
+def test_audio_min_free_pct_rejects_non_finite_negative_and_out_of_range(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", DB_URL)
+    monkeypatch.setenv("AUDIO_MIN_FREE_PCT", value)
+    with pytest.raises(ValidationError) as excinfo:
+        get_settings()
+    assert _errors_for(excinfo.value, "AUDIO_MIN_FREE_PCT")

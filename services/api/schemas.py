@@ -25,6 +25,7 @@ from common.models import (
 from common.progress import estimate_effort
 from common.repo.backfill_requests import BackfillRequestRow
 from common.repo.jobs import JobRow
+from common.repo.planner_runs import PlannerTaskRun
 from common.repo.search import SearchPage as RepoSearchPage
 from common.youtube_refs import is_video_id
 
@@ -146,6 +147,41 @@ class ChannelList(BaseModel):
     total: int
     offset: int
     limit: int
+
+
+class PlannerTaskRunItem(BaseModel):
+    task_name: str
+    interval_sec: float
+    last_started_at: UtcDatetime | None
+    last_finished_at: UtcDatetime | None
+    last_outcome: Literal["ok", "failed"] | None
+    last_error: str | None
+    last_count: int | None
+    last_ok_at: UtcDatetime | None
+    last_skipped_locked_at: UtcDatetime | None
+
+
+class PlannerRunsOut(BaseModel):
+    items: list[PlannerTaskRunItem]
+
+
+def ops_planner_runs(runs: list[PlannerTaskRun]) -> PlannerRunsOut:
+    return PlannerRunsOut(
+        items=[
+            PlannerTaskRunItem(
+                task_name=r.task_name,
+                interval_sec=r.interval_sec,
+                last_started_at=r.last_started_at,
+                last_finished_at=r.last_finished_at,
+                last_outcome=r.last_outcome,
+                last_error=r.last_error,
+                last_count=r.last_count,
+                last_ok_at=r.last_ok_at,
+                last_skipped_locked_at=r.last_skipped_locked_at,
+            )
+            for r in runs
+        ]
+    )
 
 
 def channel_list(page: ChannelPage, *, offset: int, limit: int) -> ChannelList:

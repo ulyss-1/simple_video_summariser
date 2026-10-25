@@ -30,7 +30,7 @@ import logging
 import random
 from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Literal, Protocol
 
@@ -39,8 +39,17 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from common.config import Settings, get_settings
-from common.errors import Cancelled, Defer, ErrorClass, classify, format_error, policy
+from common.errors import (
+    Cancelled,
+    Defer,
+    ErrorClass,
+    classify,
+    format_error,
+    log_dead_letter,
+    policy,
+)
 from common.repo.jobs import UNSET
+from common.safe_url import redact
 
 _logger = logging.getLogger(__name__)
 
@@ -81,6 +90,11 @@ _MAX_BACKOFF_SEC = 6 * 60 * 60  # 6 h
 _JITTER_FRACTION = 0.10
 
 _REAP_LAST_ERROR = "worker lost: heartbeat stale"
+# last_error of a malformed-key analyze job dead-lettered by resolve_stale_analyze (#200).
+MALFORMED_ANALYZE_ERROR = (
+    "BUG: analyze dedupe_key is malformed (not <version>:<summarizer>); "
+    "unclaimable and unresolvable, dead-lettered by stale-analyze resolution"
+)
 
 _CLAIM_SQL_TEMPLATE = """
     UPDATE jobs SET state='running', locked_at=now(), started_at=now(),
@@ -104,7 +118,10 @@ _CLAIM_SQL_KEYED = _CLAIM_SQL_TEMPLATE.format(key_filter=" AND dedupe_key = %(de
 #: Per (video, target key) the highest ``priority`` (then lowest ``id``) is
 #: re-keyed, unless the target already has a pending/running/dead job or the
 #: video already has an analysis at the version; everything else is superseded.
-#: One statement, so one transaction: the two UPDATEs touch disjoint rows.
+#: A pending ``analyze`` job whose key fails that shape is unclaimable (the
+#: keyed claim needs an exact well-formed key) and would be unresolvable, so the
+#: ``malformed`` CTE dead-letters it with ``error_class = 'BUG'`` (#200).
+#: One statement, so one transaction: the three UPDATEs touch disjoint rows.
 _STALE_ANALYZE_SQL = r"""
     WITH stale AS (
         SELECT id, video_id, priority,
@@ -141,7 +158,21 @@ _STALE_ANALYZE_SQL = r"""
         FROM ranked r WHERE j.id = r.id AND NOT r.rekey
         RETURNING j.id
     )
-    SELECT (SELECT count(*) FROM rekeyed), (SELECT count(*) FROM superseded)
+    ,
+    malformed AS (
+        SELECT id FROM jobs
+        WHERE kind = 'analyze' AND state = 'pending'
+          AND dedupe_key !~ '^[^:]+:[^:]+$'
+        FOR UPDATE SKIP LOCKED
+    ),
+    dead_lettered AS (
+        UPDATE jobs j SET state = 'dead', finished_at = now(), error_class = 'BUG',
+                          last_error = %(malformed_message)s
+        FROM malformed m WHERE j.id = m.id
+        RETURNING j.id
+    )
+    SELECT (SELECT count(*) FROM rekeyed), (SELECT count(*) FROM superseded),
+           (SELECT coalesce(array_agg(id ORDER BY id), '{}') FROM dead_lettered)
 """
 
 #: #44. ``NOT EXISTS`` only looks at active-index states, matching the
@@ -258,6 +289,9 @@ class StaleAnalyzeResult:
 
     rekeyed: int
     superseded: int
+    #: Malformed-key jobs dead-lettered as ``BUG`` (#200); ids are not compared.
+    dead: int = 0
+    dead_ids: tuple[int, ...] = field(default=(), compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -349,6 +383,12 @@ class JobQueue(Protocol):
     def heartbeat(self, job_id: int, worker: str) -> bool: ...
 
     def reap_stale(self, older_than_sec: int | None = None) -> int: ...
+
+    def fail_job(self, job: Job, worker: str, exc: BaseException) -> None: ...
+
+    def force_pending(self, job_id: int, priority: int) -> bool: ...
+
+    def raise_priority(self, video_id: str, priority: int) -> list[int]: ...
 
 
 class PostgresQueue:
@@ -567,7 +607,7 @@ class PostgresQueue:
             dead = job.attempts >= effective_max
 
         if dead:
-            self._resolve(
+            transitioned = self._resolve(
                 job,
                 worker,
                 """
@@ -578,6 +618,16 @@ class PostgresQueue:
                 """,
                 {"last_error": last_error, "error_class": error_class.value},
             )
+            # Only a row actually moved to 'dead' is a dead-letter; a zero-row
+            # outcome is the reaped-and-reclaimed race (#193).
+            if transitioned:
+                log_dead_letter(
+                    job_id=job.id,
+                    kind=job.kind,
+                    error_class=error_class,
+                    last_error=last_error,
+                    video_id=job.video_id,
+                )
             return
 
         retry_after_sec = getattr(exc, "retry_after_sec", None)
@@ -625,7 +675,8 @@ class PostgresQueue:
 
     def _resolve(
         self, job: Job, worker: str, sql: str, params: dict[str, Any]
-    ) -> None:
+    ) -> bool:
+        """Run an outcome UPDATE; True when it matched a row."""
         with self._conn.transaction(), self._conn.cursor() as cur:
             cur.execute(sql, {**params, "id": job.id, "worker": worker})
             if cur.rowcount == 0:
@@ -634,6 +685,8 @@ class PostgresQueue:
                     "reaped and reclaimed by another worker",
                     extra={"job_id": job.id, "worker": worker, "kind": job.kind},
                 )
+                return False
+            return True
 
     # -- retry_dead ------------------------------------------------------------
 
@@ -783,8 +836,7 @@ class PostgresQueue:
         Merges ``{"force": true}`` into its payload (other keys stay) and sets
         ``priority = GREATEST(priority, <priority>)``, so a job above it is
         never lowered. A job claimed or finished in the meantime matches no
-        row: ``False``, nothing written. PostgresQueue only, not on the
-        ``JobQueue`` Protocol.
+        row: ``False``, nothing written.
         """
         return bool(
             self._update_pending(
@@ -952,6 +1004,14 @@ class PostgresQueue:
             if row["outcome"] == "pending":
                 extra["run_after"] = row["run_after"]
             _logger.warning("queue.job_reaped", extra=extra)
+            if row["outcome"] == "dead":
+                log_dead_letter(
+                    job_id=row["id"],
+                    kind=row["kind"],
+                    error_class=None,
+                    last_error=_REAP_LAST_ERROR,
+                    video_id=row["video_id"],
+                )
         return len(reaped)
 
     # -- resolve_stale_analyze -------------------------------------------------
@@ -969,8 +1029,10 @@ class PostgresQueue:
         already has an analysis at ``prompt_version`` (whatever the model). The
         other matching jobs are marked ``dead`` with ``last_error`` "superseded:
         ..." and keep their old key for the ops view. A row being claimed right
-        now is skipped (``SKIP LOCKED``) and handled on the next call. One
-        statement. PostgresQueue only, not on the ``JobQueue`` Protocol.
+        now is skipped (``SKIP LOCKED``) and handled on the next call. A
+        pending ``analyze`` job whose key is malformed (fails
+        ``^[^:]+:[^:]+$``) is dead-lettered with ``error_class`` ``BUG`` and
+        counted in ``dead`` (#200). One statement. PostgresQueue only, not on the ``JobQueue`` Protocol.
         """
         if not prompt_version or ":" in prompt_version:
             raise ValueError(
@@ -982,8 +1044,12 @@ class PostgresQueue:
                 {
                     "prompt_version": prompt_version,
                     "message": f"superseded: PROMPT_VERSION is now {prompt_version}",
+                    "malformed_message": redact(MALFORMED_ANALYZE_ERROR),
                 },
             )
             row = cur.fetchone()
         assert row is not None
-        return StaleAnalyzeResult(rekeyed=int(row[0]), superseded=int(row[1]))
+        dead_ids = tuple(int(i) for i in row[2])
+        return StaleAnalyzeResult(
+            rekeyed=int(row[0]), superseded=int(row[1]), dead=len(dead_ids), dead_ids=dead_ids
+        )

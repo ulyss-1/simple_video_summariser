@@ -39,6 +39,7 @@ from common.errors import (
     TransientNetworkError,
 )
 from common.queue import Job, PostgresQueue, RetryOutcome
+from tests.common.test_redact import SENTINELS
 
 pytestmark = pytest.mark.integration
 
@@ -1935,6 +1936,28 @@ def test_raise_priority_changes_nothing_but_priority_and_inserts_nothing(
     assert _count(conn) == count
 
 
+def test_raise_priority_leaves_a_non_null_locked_by_and_state_untouched(
+    queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    # A pending job can carry a lock owner (e.g. a row a reap left pending).
+    # raise_priority writes only priority; adding `state = 'pending'` or
+    # `locked_by = NULL` to its SET clause is invisible unless locked_by starts
+    # non-NULL, which the other raise_priority tests never set (#203).
+    job_id = queue.enqueue("ingest", "v1", priority=-10)
+    assert job_id is not None
+    _set(conn, job_id, locked_by="worker-x")
+    before = _row(conn, job_id)
+    assert before["locked_by"] == "worker-x"
+    assert before["state"] == "pending"
+
+    assert queue.raise_priority("v1", 10) == [job_id]
+
+    after = _row(conn, job_id)
+    assert after["priority"] == 10
+    assert after["locked_by"] == "worker-x"
+    assert after["state"] == "pending"
+
+
 @pytest.mark.parametrize(
     ("kind", "state"),
     [
@@ -2176,3 +2199,140 @@ def test_reap_stale_warning_carries_run_after_only_for_requeued_jobs(
     }
     assert by_id[requeued]["run_after"] == _row(conn, requeued)["run_after"]
     assert "run_after" not in by_id[dead]
+
+
+@pytest.mark.parametrize("kind", sorted(SENTINELS))
+def test_failed_job_never_stores_a_secret_in_last_error(
+    kind: str, queue: PostgresQueue, conn: psycopg.Connection[Any]
+) -> None:
+    text, secret = SENTINELS[kind]
+    job_id = queue.enqueue("ingest", "v1")
+    assert job_id is not None
+
+    with queue.claim(["ingest"], worker="w1") as job:
+        assert job is not None
+        raise RuntimeError(text)
+
+    assert secret not in _row(conn, job_id)["last_error"]
+
+
+# ---------------------------------------------------------------------------
+# #193: the dead-letter line at every production dead-letter site
+# ---------------------------------------------------------------------------
+
+
+def _dead_letter_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.getMessage() == "job dead-lettered"]
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("exc", "level", "alert", "error_class"),
+    [
+        (ToolFailureError("boom"), logging.CRITICAL, True, "TOOL_FAILURE"),
+        (PermanentSourceError("removed"), logging.ERROR, False, "PERMANENT_SOURCE"),
+    ],
+)
+def test_claim_safety_net_dead_letter_logs_exactly_one_line(
+    queue: PostgresQueue,
+    conn: psycopg.Connection[Any],
+    caplog: pytest.LogCaptureFixture,
+    exc: Exception,
+    level: int,
+    alert: bool,
+    error_class: str,
+) -> None:
+    job_id = queue.enqueue("ingest", "v1")
+    assert job_id is not None
+    _set(conn, job_id, attempts=3)  # exhaust the retry budget of a retrying class
+
+    with caplog.at_level(logging.DEBUG), queue.claim(["ingest"], worker="w1") as job:
+        assert job is not None
+        raise exc
+
+    [record] = _dead_letter_records(caplog)
+    fields = record.__dict__
+    assert record.levelno == level
+    assert fields["alert"] is alert
+    assert fields["error_class"] == error_class
+    assert (fields["job_id"], fields["kind"], fields["video_id"]) == (job_id, "ingest", "v1")
+    assert fields["last_error"] == _row(conn, job_id)["last_error"]
+
+
+@pytest.mark.integration
+def test_fail_job_dead_letter_logs_exactly_one_line(
+    queue: PostgresQueue, conn: psycopg.Connection[Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    job_id = queue.enqueue("ingest", "v1")
+    assert job_id is not None
+    _set(conn, job_id, attempts=3)
+    with queue.claim(["ingest"], worker="w1") as job:
+        assert job is not None
+        with caplog.at_level(logging.DEBUG):
+            queue.fail_job(job, "w1", ToolFailureError("wedged"))
+
+    [record] = _dead_letter_records(caplog)
+    assert record.levelno == logging.CRITICAL
+    assert record.__dict__["job_id"] == job_id
+
+
+@pytest.mark.integration
+def test_fail_dead_letter_logs_nothing_when_the_row_was_already_taken(
+    queue: PostgresQueue, conn: psycopg.Connection[Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    queue.enqueue("ingest", "v1")
+    with queue.claim(["ingest"], worker="w1") as job:
+        assert job is not None
+        _set(conn, job.id, locked_by="w2")  # reaped and reclaimed by another worker
+        with caplog.at_level(logging.DEBUG):
+            queue.fail_job(job, "w1", ToolFailureError("late"))
+        _set(conn, job.id, locked_by="w1")
+
+    assert _dead_letter_records(caplog) == []
+
+
+@pytest.mark.integration
+def test_a_retryable_failure_logs_no_dead_letter_line(
+    queue: PostgresQueue, caplog: pytest.LogCaptureFixture
+) -> None:
+    queue.enqueue("ingest", "v1")
+    with caplog.at_level(logging.DEBUG), queue.claim(["ingest"], worker="w1") as job:
+        assert job is not None
+        raise TransientNetworkError("dns")
+
+    assert _dead_letter_records(caplog) == []
+
+
+@pytest.mark.integration
+def test_dead_letter_line_never_carries_a_secret(
+    queue: PostgresQueue, caplog: pytest.LogCaptureFixture
+) -> None:
+    secret = "hunter2hunter2"
+    queue.enqueue("ingest", "v1")
+    with caplog.at_level(logging.DEBUG), queue.claim(["ingest"], worker="w1") as job:
+        assert job is not None
+        raise RuntimeError(f"fetch https://user:{secret}@example.com/x failed")
+
+    [record] = _dead_letter_records(caplog)
+    assert secret not in record.getMessage()
+    assert all(secret not in str(v) for v in record.__dict__.values())
+
+
+@pytest.mark.integration
+def test_reap_stale_logs_one_dead_letter_line_only_for_the_dead_job(
+    queue: PostgresQueue, conn: psycopg.Connection[Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    _make_running(queue, conn, video_id="a", attempts=1)
+    dead = _make_running(queue, conn, video_id="b", kind="analyze", attempts=4)
+
+    with caplog.at_level(logging.DEBUG):
+        queue.reap_stale(older_than_sec=300)
+
+    [record] = _dead_letter_records(caplog)
+    fields = record.__dict__
+    assert record.levelno == logging.ERROR
+    assert fields["alert"] is False
+    assert fields["error_class"] is None
+    assert fields["job_id"] == dead
+    assert (fields["kind"], fields["video_id"]) == ("analyze", "b")
+    assert fields["last_error"] == "worker lost: heartbeat stale"

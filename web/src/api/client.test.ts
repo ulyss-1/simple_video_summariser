@@ -73,7 +73,7 @@ describe('URL building', () => {
 
   it('stringifies a numeric path param', async () => {
     const calls = stubFetch(() => json({}))
-    await api.post('/ops/jobs/{id}/retry', { params: { path: { id: 12 } } })
+    await api.post('/ops/jobs/{id}/retry', { params: { path: { id: 12 } }, body: {} })
     expect(calls[0]?.url).toBe('/api/ops/jobs/12/retry')
   })
 
@@ -154,7 +154,7 @@ describe('request options', () => {
 
   it('a request without a body sends no Content-Type', async () => {
     const calls = stubFetch(() => json({}))
-    await api.post('/ops/jobs/{id}/retry', { params: { path: { id: 1 } } })
+    await api.post('/videos/{video_id}/reanalyze', { params: { path: { video_id: 'abc' } } })
     const init = calls[0]?.init as RequestInit
     expect(init.body).toBeUndefined()
     expect(init.headers).toEqual({ Accept: 'application/json' })
@@ -220,7 +220,7 @@ describe('errors', () => {
   it('a 409 keeps its extra fields in body', async () => {
     const body = { detail: 'job is not dead', state: 'running', job_id: 9 }
     stubFetch(() => json(body, 409))
-    const error = await apiError(api.post('/ops/jobs/{id}/retry', { params: { path: { id: 9 } } }))
+    const error = await apiError(api.post('/ops/jobs/{id}/retry', { params: { path: { id: 9 } }, body: {} }))
     expect(error.status).toBe(409)
     expect(error.detail).toBe('job is not dead')
     expect(error.body).toEqual(body)

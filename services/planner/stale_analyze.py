@@ -17,13 +17,14 @@ from __future__ import annotations
 import logging
 
 from common.config import Settings
-from common.queue import PostgresQueue
+from common.errors import ErrorClass, log_dead_letter
+from common.queue import MALFORMED_ANALYZE_ERROR, PostgresQueue
 
 _logger = logging.getLogger(__name__)
 
 
 def resolve_stale_analyze_jobs(queue: PostgresQueue, settings: Settings) -> int:
-    """Run one pass and return how many jobs it re-keyed plus superseded."""
+    """Run one pass and return how many jobs it re-keyed, superseded plus dead-lettered."""
     result = queue.resolve_stale_analyze(settings.PROMPT_VERSION)
     _logger.info(
         "planner.stale_analyze_resolved",
@@ -31,6 +32,16 @@ def resolve_stale_analyze_jobs(queue: PostgresQueue, settings: Settings) -> int:
             "prompt_version": settings.PROMPT_VERSION,
             "rekeyed": result.rekeyed,
             "superseded": result.superseded,
+            "dead": result.dead,
+            "dead_ids": list(result.dead_ids),
         },
     )
-    return result.rekeyed + result.superseded
+    # The dead-letter happens in one SQL statement, which cannot log: one line per id (#193).
+    for job_id in result.dead_ids:
+        log_dead_letter(
+            job_id=job_id,
+            kind="analyze",
+            error_class=ErrorClass.BUG,
+            last_error=MALFORMED_ANALYZE_ERROR,
+        )
+    return result.rekeyed + result.superseded + result.dead

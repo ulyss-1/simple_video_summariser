@@ -34,6 +34,7 @@ import uuid
 from collections import deque
 from collections.abc import Callable, Sequence
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -82,6 +83,15 @@ BACKFILL_PROBE_CONCURRENCY = 4
 SUBTITLES_MANUAL = "manual"
 SUBTITLES_TRANSCRIBE = "transcribe"
 SUBTITLES_UNCHECKED = "unchecked"
+
+
+#: Yields a connection for one short DB phase and releases it on exit (#204).
+#: The API's borrows from the pool, so none is checked out while the listing
+#: and the probes run; the planner's yields its single connection and
+#: releases nothing.
+ConnectionProvider = Callable[[], AbstractContextManager[psycopg.Connection[Any]]]
+#: Builds the queue over the connection a provider yielded.
+QueueFactory = Callable[[psycopg.Connection[Any]], JobQueue]
 
 
 class ChannelNotRegistered(Exception):
@@ -163,8 +173,8 @@ class BackfillResult:
 
 
 def backfill(
-    conn: psycopg.Connection[Any],
-    queue: JobQueue,
+    conn: psycopg.Connection[Any] | ConnectionProvider,
+    queue: JobQueue | QueueFactory,
     catalog: CatalogSource,
     channel_id: str,
     *,
@@ -177,10 +187,16 @@ def backfill(
     clock: Callable[[], float] = time.monotonic,
     backfill_id: str | None = None,
     max_enqueue: int | None = None,
+    still_active: Callable[[], bool] | None = None,
 ) -> BackfillResult:
     """Select the channel's unknown uploads and, unless ``dry_run``, enqueue them.
 
     ``conn`` must have no open transaction; ``queue`` must write through it.
+    Instead, ``conn`` may be a ``ConnectionProvider`` and ``queue`` a
+    ``QueueFactory`` (#204): each short DB phase then runs on a connection the
+    provider yields, released before the listing and the probes start, so a
+    pooled connection is never held across them. A plain connection and queue
+    behave as before (the planner's path).
     Raises ``ChannelNotRegistered`` before listing if the channel has no row.
     Catalog errors other than ``PermanentSourceError`` propagate unchanged.
 
@@ -194,23 +210,33 @@ def backfill(
     ``max_enqueue`` bounds how many of the new videos a real run writes (the
     planner's per-run slice); ``new_videos`` and ``video_ids`` still describe
     the whole listing, ``enqueued`` what was written. ``None`` writes them all.
+
+    ``still_active`` (the planner's live request-state read, #209) is called
+    once after the listing, with no transaction open, before the first write;
+    ``False`` skips the enqueue loop (``enqueued == 0``). A cancel that lands
+    during the listing therefore writes nothing; one that lands mid-loop
+    still writes up to the rest of the slice (the per-slice check point).
+    ``None`` (the synchronous route) never checks.
     """
     started = clock()
-    if conn.info.transaction_status != TransactionStatus.IDLE:
-        raise RuntimeError("backfill expects a connection with no open transaction")
-    with conn.transaction():
-        registered = channel_exists(conn, channel_id)
+    provide: ConnectionProvider = conn if callable(conn) else (lambda: nullcontext(conn))
+    make_queue: QueueFactory = queue if callable(queue) else (lambda _c: queue) 
+
+    with provide() as c:
+        _require_idle(c)
+        with c.transaction():
+            registered = channel_exists(c, channel_id)
     if not registered:
         raise ChannelNotRegistered(channel_id)
 
     listing = _list(catalog, channel_id, limit)
 
-    with conn.transaction():
-        known = known_video_ids(conn, [e.video_id for e in listing.entries])
-        rtf, rtf_samples = median_whisper_rtf(conn)
-        chars_per_sec, chars_samples = median_chars_per_audio_sec(conn)
+    with provide() as c, c.transaction():
+        known = known_video_ids(c, [e.video_id for e in listing.entries])
+        rtf, rtf_samples = median_whisper_rtf(c)
+        chars_per_sec, chars_samples = median_chars_per_audio_sec(c)
         cost_per_char, cost_samples = (
-            median_cost_per_char(conn, model) if summarizer == "anthropic" else (None, 0)
+            median_cost_per_char(c, model) if summarizer == "anthropic" else (None, 0)
         )
     new = [e for e in listing.entries if e.video_id not in known]
 
@@ -239,20 +265,22 @@ def backfill(
     elif backfill_id is None:
         backfill_id = str(uuid.uuid4())
     enqueued = 0
-    if backfill_id is not None:
+    if backfill_id is not None and new and (still_active is None or still_active()):
         payload = {"origin": "backfill", "backfill_id": backfill_id}
-        for entry in new if max_enqueue is None else new[: max(max_enqueue, 0)]:
-            with conn.transaction():
-                if insert_backfill_video(conn, entry, channel_id=channel_id):
-                    job = queue.enqueue(
-                        "ingest", entry.video_id, payload=payload, priority=PRIORITY_BACKFILL
-                    )
-                    if job is not None:
-                        enqueued += 1
+        with provide() as c:
+            job_queue = make_queue(c)
+            for entry in new if max_enqueue is None else new[: max(max_enqueue, 0)]:
+                with c.transaction():
+                    if insert_backfill_video(c, entry, channel_id=channel_id):
+                        job = job_queue.enqueue(
+                            "ingest", entry.video_id, payload=payload, priority=PRIORITY_BACKFILL
+                        )
+                        if job is not None:
+                            enqueued += 1
 
     if not dry_run and max_enqueue is None:
-        with conn.transaction():
-            clear_feed_gap(conn, channel_id, source="backfill")
+        with provide() as c, c.transaction():
+            clear_feed_gap(c, channel_id, source="backfill")
 
     return BackfillResult(
         channel_id=channel_id,
@@ -268,6 +296,11 @@ def backfill(
         backfill_id=backfill_id,
         videos=videos,
     )
+
+
+def _require_idle(conn: psycopg.Connection[Any]) -> None:
+    if conn.info.transaction_status != TransactionStatus.IDLE:
+        raise RuntimeError("backfill expects a connection with no open transaction")
 
 
 def _list(catalog: CatalogSource, channel_id: str, limit: int) -> ChannelCatalog:

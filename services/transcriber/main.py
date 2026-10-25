@@ -77,7 +77,11 @@ from adapters.transcription.faster_whisper import FasterWhisperTranscriber
 from adapters.youtube.audio import YouTubeAudio
 from adapters.youtube.metadata import YouTubeMetadata
 from adapters.youtube.subtitles import YouTubeSubtitles
-from adapters.youtube.ytdlp import CookieFileError, check_cookie_file
+from adapters.youtube.ytdlp import (
+    CookieFileError,
+    check_cookie_file,
+    sweep_stale_cookie_dirs,
+)
 from common.chunking import chunk_segments
 from common.config import Settings, get_settings
 from common.db import connect as default_connect
@@ -91,6 +95,7 @@ from common.models import (
     TranscriptResult,
 )
 from common.queue import Job, JobQueue, PostgresQueue
+from common.safe_url import make_redactor
 from common.shutdown import SignalLatch
 from common.worker import JobContext, Worker
 from services.transcriber.ingest import SubtitleSource, make_ingest_handler
@@ -368,14 +373,7 @@ def _redactor(settings: Settings) -> Callable[[str], str]:
         secrets.append(password)
     if settings.ANTHROPIC_API_KEY is not None:
         secrets.append(settings.ANTHROPIC_API_KEY.get_secret_value())
-    ordered = sorted((s for s in secrets if s), key=len, reverse=True)
-
-    def redact(text: str) -> str:
-        for secret in ordered:
-            text = text.replace(secret, "***")
-        return text
-
-    return redact
+    return make_redactor(secrets, "***")
 
 
 # -- main -------------------------------------------------------------------------------
@@ -437,6 +435,7 @@ def _run(
             error=str(exc),
         )
         return _EXIT_BAD_CONFIG
+    sweep_stale_cookie_dirs()
     if latch.requested:
         return 0
 

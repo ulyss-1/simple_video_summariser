@@ -68,6 +68,15 @@ class FakeQueue:
             raise self._error
         return self._reaped
 
+    def fail_job(self, job: Job, worker: str, exc: BaseException) -> None:
+        raise AssertionError("the reaper must not fail a job")
+
+    def force_pending(self, job_id: int, priority: int) -> bool:
+        raise AssertionError("the reaper must not force a job")
+
+    def raise_priority(self, video_id: str, priority: int) -> list[int]:
+        raise AssertionError("the reaper must not raise priority")
+
 
 def _reap_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
     return [r for r in caplog.records if r.getMessage() == "planner.reap"]

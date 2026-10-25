@@ -57,6 +57,13 @@ def _docker(
     )
 
 
+# A container that has just been started gets up to a minute to answer, checked
+# every 5 s (the first check is immediate), so a fast start passes at once and a
+# slow one on a loaded runner still has time. 20 s was too short under load.
+STARTUP_DEADLINE = 60.0
+STARTUP_POLL = 5.0
+
+
 def _wait(
     condition: Callable[[], bool], *, deadline: float, interval: float = 0.2
 ) -> bool:
@@ -221,7 +228,9 @@ def test_serves_root_on_a_read_only_root_with_only_tmp_writable(image: str) -> N
             except OSError:
                 return False
 
-        assert _wait(serves, deadline=20), _docker("logs", name).stderr
+        assert (
+            _wait(serves, deadline=STARTUP_DEADLINE, interval=STARTUP_POLL)
+        ), _docker("logs", name).stderr
     finally:
         _docker("rm", "-f", name)
 
@@ -251,7 +260,7 @@ def test_docker_stop_exits_zero_within_the_default_grace_period(image: str) -> N
             logs = _docker("logs", name)
             return "start worker processes" in logs.stdout + logs.stderr
 
-        assert _wait(up, deadline=15)
+        assert _wait(up, deadline=STARTUP_DEADLINE, interval=STARTUP_POLL)
         t0 = time.monotonic()
         assert _docker("stop", name, timeout=30).returncode == 0
         assert time.monotonic() - t0 < 10
@@ -442,7 +451,9 @@ def make_stack(image: str) -> Iterator[Callable[[], Stack]]:
         assert run.returncode == 0, run.stderr
         port_out = _docker("port", web, "8080/tcp").stdout.split()[0]
         stack = Stack(network, image, web, int(port_out.rsplit(":", 1)[1]))
-        started = _wait(lambda: _serves(stack), deadline=20)
+        started = _wait(
+            lambda: _serves(stack), deadline=STARTUP_DEADLINE, interval=STARTUP_POLL
+        )
         assert started, stack.logs()
         return stack
 
@@ -661,16 +672,17 @@ def test_metrics_is_not_published_but_the_rest_of_the_api_is(stack: Stack) -> No
     assert echoed["path"] == "/healthz"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#186 (follow-up to #57): the prefix-strip map reads the raw $request_uri "
-    "while location matching uses the normalized URI",
-)
 @pytest.mark.parametrize("client", ["/%61pi/healthz", "/x/../api/healthz"])
-def test_non_canonical_api_prefixes_reach_the_same_upstream_path(
+def test_non_canonical_api_prefixes_fail_closed_with_404(
     stack: Stack, client: str
 ) -> None:
-    _, echoed = stack.echo(client)
+    # #186: routed into /api/ on the normalized URI, but not a raw /api/ prefix.
+    resp = stack.get(client + "?x=1")
+    assert resp.status == 404
+    assert b'<div id="root">' not in resp.body
+    assert b"stub" not in resp.body and b'"method"' not in resp.body  # not echoed
+    ok, echoed = stack.echo("/api/healthz")
+    assert ok.status == 200
     assert echoed["path"] == "/healthz"
 
 
@@ -784,3 +796,33 @@ def test_nginx_follows_the_api_to_a_new_address(
         assert stack.wait_for_api(deadline=30), stack.logs()
     finally:
         _docker("rm", "-f", first)
+
+
+API_BODY_LIMIT = 64 * 1024  # client_max_body_size in the /api/ location
+
+
+def test_body_over_the_cap_is_rejected_at_nginx_and_never_forwarded(
+    stack: Stack,
+) -> None:
+    resp = stack.get(
+        "/api/videos",
+        method="POST",
+        headers={"Content-Type": "application/json"},
+        body=b"x" * (API_BODY_LIMIT + 1),
+    )
+    assert resp.status == 413
+    assert b"stub" not in resp.body and b'"method"' not in resp.body  # not echoed
+    assert b'<div id="root">' not in resp.body
+
+
+def test_body_at_the_cap_is_still_proxied_unchanged(stack: Stack) -> None:
+    payload = b"x" * API_BODY_LIMIT
+    resp, echoed = stack.echo(
+        "/api/videos",
+        method="POST",
+        headers={"Content-Type": "application/json"},
+        body=payload,
+    )
+    assert resp.status == 200
+    assert echoed["method"] == "POST"
+    assert echoed["body"].encode("latin-1") == payload  # type: ignore[attr-defined]

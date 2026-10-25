@@ -14,6 +14,33 @@ import psycopg
 from psycopg_pool import ConnectionPool
 
 from common.config import get_settings
+from common.safe_url import safe_dsn
+
+
+class _SafeConnection(psycopg.Connection[Any]):
+    """A connection whose connect failures never carry the DSN (#207).
+
+    libpq echoes the whole DSN, password included, in the error for a
+    malformed URI, and ``psycopg_pool``'s reconnect worker logs that text on
+    every retry. The failure is replaced here, at the source, by one built from
+    ``safe_dsn``, with no chained original, so neither the pool's logger nor a
+    traceback can reach the secret.
+    """
+
+    @classmethod
+    def connect(cls, conninfo: str = "", *args: Any, **kwargs: Any) -> Any:
+        failure: psycopg.Error | None = None
+        try:
+            return super().connect(conninfo, *args, **kwargs)
+        except psycopg.Error as exc:
+            failure = exc
+        # Raised outside the ``except`` block so the original is not chained.
+        # Without the scheme: the target is useful, a URI-shaped string is not.
+        shown = safe_dsn(conninfo)
+        target = shown.partition("://")[2] or shown
+        message = f"could not connect to {target} ({type(failure).__name__})"
+        del failure
+        raise psycopg.OperationalError(message)
 
 
 def connect(**kwargs: Any) -> psycopg.Connection[Any]:
@@ -27,7 +54,10 @@ def connect(**kwargs: Any) -> psycopg.Connection[Any]:
     a keyword overrides the same parameter in the DSN, so ``options=``
     replaces any ``options`` set in ``DATABASE_URL``.
     """
-    return psycopg.connect(get_settings().DATABASE_URL.get_secret_value(), **kwargs)
+    conn: psycopg.Connection[Any] = _SafeConnection.connect(
+        get_settings().DATABASE_URL.get_secret_value(), **kwargs
+    )
+    return conn
 
 
 def _reset_connection(conn: psycopg.Connection[Any]) -> None:
@@ -64,6 +94,7 @@ def create_pool(*, connect_timeout: int, statement_timeout_ms: int) -> Connectio
         min_size=settings.DB_POOL_MIN_SIZE,
         max_size=settings.DB_POOL_MAX_SIZE,
         timeout=settings.DB_POOL_TIMEOUT_SEC,
+        connection_class=_SafeConnection,
         check=ConnectionPool.check_connection,
         reset=_reset_connection,
         name="api",

@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { formatTimestamp } from '../components/Timestamp'
+import { buildMomentHref } from '../lib/moment'
 import { SearchError, useSearch, type SearchPage } from '../hooks/useSearch'
 import { publishedDate } from '../lib/library'
 import {
@@ -9,14 +10,19 @@ import {
   nextEnabled,
   parseSearchParams,
   searchHref,
-  timestampHref,
   validateQuery,
 } from '../lib/search'
 
 type Result = SearchPage['results'][number]
 
-// Plain semantic HTML on purpose: styling is #131. The query and page live in
-// the URL only; TanStack Query owns the server state (architecture §9).
+// "Summary" covers TL;DR, topics, claims and the description (one tsvector weight, #168).
+const MATCHED_LABELS: Record<Result['matched_in'][number], string> = {
+  title: 'Title',
+  analysis: 'Summary',
+  transcript: 'Transcript',
+}
+
+// The query and page live in the URL only; TanStack Query owns the server state (architecture §9).
 // Everything shown is a React text node: stored text is never parsed as HTML.
 export function Search() {
   const [params, setParams] = useSearchParams()
@@ -59,24 +65,24 @@ export function Search() {
     liveText = `Results ${data.offset + 1}–${data.offset + data.results.length}`
 
   return (
-    <section>
+    <section className="page search">
       <h1>Search</h1>
 
       <SearchForm key={q ?? ''} initial={q ?? ''} onSubmit={submit} />
 
       {q === null ? (
-        <p>Search what was said in processed videos</p>
+        <p className="muted">Search what was said in processed videos</p>
       ) : (
         <>
           <h2 ref={headingRef} tabIndex={-1}>
             Results
           </h2>
-          <p role="status" aria-live="polite">
+          <p role="status" aria-live="polite" className="muted">
             {liveText}
           </p>
           {loading && <p>Searching…</p>}
           {failed && !(query.error instanceof SearchError && query.error.status === 422) && (
-            <button type="button" onClick={() => void query.refetch()}>
+            <button type="button" className="btn" onClick={() => void query.refetch()}>
               Retry
             </button>
           )}
@@ -95,21 +101,23 @@ export function Search() {
           )}
           {data !== undefined && data.results.length > 0 && (
             <>
-              <ol>
+              <ol className="search__results">
                 {data.results.map((r) => (
                   <ResultItem key={r.video_id} result={r} />
                 ))}
               </ol>
-              <nav aria-label="Pagination">
+              <nav aria-label="Pagination" className="pagination">
                 <button
                   type="button"
+                  className="btn"
                   disabled={page <= 1 || placeholder || query.isFetching}
                   onClick={() => goToPage(page - 1)}
                 >
                   Previous
-                </button>{' '}
+                </button>
                 <button
                   type="button"
+                  className="btn"
                   disabled={!nextEnabled(page, data.has_more) || placeholder || query.isFetching}
                   onClick={() => goToPage(page + 1)}
                 >
@@ -143,6 +151,7 @@ function SearchForm({ initial, onSubmit }: { initial: string; onSubmit: (q: stri
   return (
     <form
       role="search"
+      className="search__form"
       onSubmit={(e) => {
         e.preventDefault()
         const check = validateQuery(draft)
@@ -163,19 +172,26 @@ function SearchForm({ initial, onSubmit }: { initial: string; onSubmit: (q: stri
         }
       }}
     >
-      <label htmlFor={inputId}>Search transcripts</label>{' '}
-      <input
-        id={inputId}
-        type="search"
-        name="q"
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        aria-invalid={problem !== null}
-        aria-describedby={problem === null ? undefined : problemId}
-      />{' '}
-      <button type="submit">Search</button>
+      <div className="filters">
+        <div className="field search__field">
+          <label htmlFor={inputId}>Search transcripts</label>
+          <input
+            id={inputId}
+            type="search"
+            name="q"
+            className="input"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            aria-invalid={problem !== null}
+            aria-describedby={problem === null ? undefined : problemId}
+          />
+        </div>
+        <button type="submit" className="btn btn--primary">
+          Search
+        </button>
+      </div>
       {problem !== null && (
-        <p id={problemId} role="alert">
+        <p id={problemId} role="alert" className="alert alert--danger">
           {problem}
         </p>
       )}
@@ -191,11 +207,11 @@ function ResultItem({ result: r }: { result: Result }) {
   const fragments = excerptFragments(r.excerpts)
   const channel = nonEmpty(r.channel_title) ?? nonEmpty(r.channel_id) ?? 'Unknown channel'
   return (
-    <li>
-      <h3>
+    <li className="search__result card">
+      <h3 className="search__title">
         <Link to={`/videos/${encodeURIComponent(r.video_id)}`}>{nonEmpty(r.title) ?? r.video_id}</Link>
       </h3>
-      <div>
+      <div className="muted">
         <span>{channel}</span> · <span>{publishedDate(r.published_at) ?? 'Date unknown'}</span>
         {r.unavailable !== null && (
           <>
@@ -204,6 +220,17 @@ function ResultItem({ result: r }: { result: Result }) {
           </>
         )}
       </div>
+      {r.matched_in.length > 0 && (
+        <div className="muted search__matched">
+          Matched in:{' '}
+          {r.matched_in.map((field, i) => (
+            <Fragment key={field}>
+              {i > 0 && ' · '}
+              <span>{MATCHED_LABELS[field]}</span>
+            </Fragment>
+          ))}
+        </div>
+      )}
       {fragments.length > 0 && (
         <p>
           {fragments.map((fragment, i) => (
@@ -222,15 +249,15 @@ function ResultItem({ result: r }: { result: Result }) {
 }
 
 // The link form of a timestamp: opens the detail view at that moment (#110).
-// #129 owns the `?t=` route and should take this over with its own helper.
+// The href comes from #129's single `buildMomentHref`.
 function TimestampLink({ videoId, startSec }: { videoId: string; startSec: number | null }) {
-  const href = timestampHref(videoId, startSec)
+  const href = buildMomentHref(videoId, startSec)
   if (href === null || startSec === null) return null
   const label = formatTimestamp(startSec)
   return (
     <>
       {' '}
-      <Link to={href} aria-label={`Open at ${label}`}>
+      <Link to={href} className="timestamp" aria-label={`Open at ${label}`}>
         <time>{label}</time>
       </Link>
     </>

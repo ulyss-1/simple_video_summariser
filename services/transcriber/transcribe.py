@@ -23,8 +23,10 @@ The attempt cap is the queue's business (#11), not the handler's.
 from __future__ import annotations
 
 import math
+import shutil
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +35,7 @@ import psycopg
 from adapters.youtube.metadata import watch_url
 from common.chunking import chunk_strategy
 from common.config import Settings
-from common.errors import BugError, PermanentSourceError
+from common.errors import BugError, Defer, PermanentSourceError
 from common.models import AudioRef, AudioSource, Transcriber
 from common.progress import HISTORY_SIZE, estimate_effort
 from common.queue import Job, JobQueue
@@ -41,6 +43,7 @@ from common.repo.media import delete_media, register_media
 from common.repo.transcripts import get_chunks, get_transcript, rtf_history, save_chunks
 from common.repo.videos import mark_unavailable, video_exists
 from common.worker import JobContext
+from services.planner.retention import min_free_bytes
 from services.transcriber.persist import (
     Chunker,
     enqueue_analyze,
@@ -51,6 +54,9 @@ from services.transcriber.progress import JobProgressWriter, ProgressTicker, tic
 _PROGRESS_STEPS = 10
 #: Wall seconds after which a quiet transcription prints another line (issue #96).
 HEARTBEAT_SEC = 30.0
+#: How long to defer a transcribe job when AUDIO_DIR is below the free-space
+#: floor (#152), so the planner's eviction (#105) and other jobs can free room.
+LOW_DISK_DEFER = timedelta(minutes=10)
 
 
 def _validate(job: Job) -> str:
@@ -151,9 +157,45 @@ def make_transcribe_handler(
     chunker: Chunker,
     settings: Settings,
     clock: Callable[[], float] = time.monotonic,
+    disk_usage: Callable[[Path], Any] = shutil.disk_usage,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> Callable[[Job, JobContext], None]:
     """Build the handler. ``connect`` opens one connection per job, closed when it ends."""
     strategy = chunk_strategy(settings.CHUNK_SEC, settings.OVERLAP_SEC)
+
+    def defer_if_audio_dir_below_floor(ctx: JobContext) -> None:
+        """Defer (no attempt spent) when AUDIO_DIR free space is below the floor.
+
+        #105 evicts audio only every POLL_INTERVAL_SEC; between passes a burst of
+        transcribe jobs can fill the volume, and the fetch would then fail with
+        ResourceError and burn an attempt (#152). The floor is #105's own:
+        ``min_free_bytes(total, AUDIO_MIN_FREE_GB, AUDIO_MIN_FREE_PCT)``. When the
+        guard is off (both floors zero) or the measurement fails, fetch as before.
+        """
+        if settings.AUDIO_MIN_FREE_GB == 0 and settings.AUDIO_MIN_FREE_PCT == 0:
+            return
+        try:
+            usage = disk_usage(settings.AUDIO_DIR)
+        except OSError as exc:
+            ctx.logger.warning(
+                "could not read AUDIO_DIR free space; fetching anyway", error=str(exc)
+            )
+            return
+        floor = min_free_bytes(
+            usage.total,
+            min_free_gb=settings.AUDIO_MIN_FREE_GB,
+            min_free_pct=settings.AUDIO_MIN_FREE_PCT,
+        )
+        if usage.free >= floor:
+            return
+        until = now() + LOW_DISK_DEFER
+        ctx.logger.warning(
+            "AUDIO_DIR free space below the floor; deferring without fetching audio",
+            free_bytes=usage.free,
+            floor_bytes=floor,
+            until=until.isoformat(),
+        )
+        raise Defer(until)
 
     def ensure_chunks_and_hand_off(
         conn: psycopg.Connection[Any], job: Job, ctx: JobContext
@@ -238,6 +280,8 @@ def make_transcribe_handler(
                 raise BugError(f"no videos row for {video_id!r}; ingest must run first")
             if ensure_chunks_and_hand_off(conn, job, ctx):
                 return
+
+            defer_if_audio_dir_below_floor(ctx)
 
             history = rtf_history(conn, settings.WHISPER_MODEL, settings.WHISPER_COMPUTE, HISTORY_SIZE)
             conn.commit()

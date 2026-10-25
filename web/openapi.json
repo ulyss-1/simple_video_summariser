@@ -1696,6 +1696,132 @@
         "title": "OpsChannelOut",
         "type": "object"
       },
+      "PlannerRunsOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PlannerTaskRunItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "PlannerRunsOut",
+        "type": "object"
+      },
+      "PlannerTaskRunItem": {
+        "properties": {
+          "interval_sec": {
+            "title": "Interval Sec",
+            "type": "number"
+          },
+          "last_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Count"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "last_finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Finished At"
+          },
+          "last_ok_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Ok At"
+          },
+          "last_outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ok",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Outcome"
+          },
+          "last_skipped_locked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Skipped Locked At"
+          },
+          "last_started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Started At"
+          },
+          "task_name": {
+            "title": "Task Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_name",
+          "interval_sec",
+          "last_started_at",
+          "last_finished_at",
+          "last_outcome",
+          "last_error",
+          "last_count",
+          "last_ok_at",
+          "last_skipped_locked_at"
+        ],
+        "title": "PlannerTaskRunItem",
+        "type": "object"
+      },
       "ProgressOut": {
         "description": "Progress of a transcribe job (#245).\n\nA running job carries every figure. A pending one carries only the estimate\n(``estimated_sec``, ``eta_sec``, ``duration_sec``, ``estimate_source``); the\nrest are ``None``. ``estimate_source`` is ``\"default\"`` when there was no RTF\nhistory, so the UI can call the figure rough.",
         "properties": {
@@ -1846,6 +1972,12 @@
           "source_chunk_seq"
         ],
         "title": "QuoteOut",
+        "type": "object"
+      },
+      "RetryBody": {
+        "description": "``POST /ops/jobs/{id}/retry`` body: an empty object ``{}`` (#54/#44, #202).",
+        "properties": {},
+        "title": "RetryBody",
         "type": "object"
       },
       "SearchPage": {
@@ -2746,7 +2878,7 @@
     },
     "/channels/{channel_id}/backfill": {
       "post": {
-        "description": "Backfill a registered channel's newest ``limit`` uploads (#41, D9b).\n\nThis is the one API route that runs a subprocess: the catalog is a\nyt-dlp flat listing, bounded by ``deps.BACKFILL_LIST_TIMEOUT_SEC`` and\n``MAX_BACKFILL_LIMIT``. It departs from \"the API performs no processing\"\nbecause architecture.md 8.3 wants a synchronous dry-run answer, and a\nflat listing is network-bound, not CPU work (owner decision; moving it\nto a worker is #115). A dry run (the default) writes nothing; a real run\nanswers 202 when it enqueued at least one job, else 200.\n\nA dry run also checks each new video's subtitles, newest first, within a\n100 s budget (#117); the rest are reported as ``unchecked``. It writes\nnothing.",
+        "description": "Backfill a registered channel's newest ``limit`` uploads (#41, D9b).\n\nThis is the one API route that runs a subprocess: the catalog is a\nyt-dlp flat listing, bounded by ``deps.BACKFILL_LIST_TIMEOUT_SEC`` and\n``MAX_BACKFILL_LIMIT``. It departs from \"the API performs no processing\"\nbecause architecture.md 8.3 wants a synchronous dry-run answer, and a\nflat listing is network-bound, not CPU work (owner decision; moving it\nto a worker is #115). A dry run (the default) writes nothing; a real run\nanswers 202 when it enqueued at least one job, else 200.\n\nA dry run also checks each new video's subtitles, newest first, within a\n100 s budget (#117); the rest are reported as ``unchecked``. It writes\nnothing.\n\nThe pooled connection is borrowed per short DB phase and returned across\nthe listing and the probes (#204), so a slow dry run cannot exhaust the\npool.",
         "operationId": "post_channel_backfill_channels__channel_id__backfill_post",
         "parameters": [
           {
@@ -3434,6 +3566,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetryBody"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
@@ -3457,6 +3599,25 @@
           }
         },
         "summary": "Post Ops Job Retry"
+      }
+    },
+    "/ops/planner": {
+      "get": {
+        "description": "Each planner task's last run, ordered by task name (#98/#154). Read-only.\n\nThe api never writes ``planner_task_runs``; ``/metrics`` exposes a matching\nper-task last-success gauge for alerting on a stalled planner.",
+        "operationId": "get_ops_planner_ops_planner_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlannerRunsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Ops Planner"
       }
     },
     "/search": {

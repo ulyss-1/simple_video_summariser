@@ -50,6 +50,10 @@ export interface paths {
          *     A dry run also checks each new video's subtitles, newest first, within a
          *     100 s budget (#117); the rest are reported as ``unchecked``. It writes
          *     nothing.
+         *
+         *     The pooled connection is borrowed per short DB phase and returned across
+         *     the listing and the probes (#204), so a slow dry run cannot exhaust the
+         *     pool.
          */
         post: operations["post_channel_backfill_channels__channel_id__backfill_post"];
         delete?: never;
@@ -337,6 +341,29 @@ export interface paths {
          *     response.
          */
         post: operations["post_ops_job_retry_ops_jobs__id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ops/planner": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Ops Planner
+         * @description Each planner task's last run, ordered by task name (#98/#154). Read-only.
+         *
+         *     The api never writes ``planner_task_runs``; ``/metrics`` exposes a matching
+         *     per-task last-success gauge for alerting on a stalled planner.
+         */
+        get: operations["get_ops_planner_ops_planner_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1055,6 +1082,32 @@ export interface components {
             /** Title */
             title: string | null;
         };
+        /** PlannerRunsOut */
+        PlannerRunsOut: {
+            /** Items */
+            items: components["schemas"]["PlannerTaskRunItem"][];
+        };
+        /** PlannerTaskRunItem */
+        PlannerTaskRunItem: {
+            /** Interval Sec */
+            interval_sec: number;
+            /** Last Count */
+            last_count: number | null;
+            /** Last Error */
+            last_error: string | null;
+            /** Last Finished At */
+            last_finished_at: string | null;
+            /** Last Ok At */
+            last_ok_at: string | null;
+            /** Last Outcome */
+            last_outcome: ("ok" | "failed") | null;
+            /** Last Skipped Locked At */
+            last_skipped_locked_at: string | null;
+            /** Last Started At */
+            last_started_at: string | null;
+            /** Task Name */
+            task_name: string;
+        };
         /**
          * ProgressOut
          * @description Progress of a transcribe job (#245).
@@ -1093,6 +1146,11 @@ export interface components {
             /** Text */
             text: string;
         };
+        /**
+         * RetryBody
+         * @description ``POST /ops/jobs/{id}/retry`` body: an empty object ``{}`` (#54/#44, #202).
+         */
+        RetryBody: Record<string, never>;
         /** SearchPage */
         SearchPage: {
             /** Has More */
@@ -1845,7 +1903,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetryBody"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -1863,6 +1925,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_ops_planner_ops_planner_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlannerRunsOut"];
                 };
             };
         };

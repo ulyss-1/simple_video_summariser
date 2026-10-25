@@ -1,27 +1,26 @@
 # Design System
 
-**Status:** the visual direction is still open. The SPA ships deliberately
-unstyled, and the owner has not chosen a look yet (#124: options A editorial,
-B dense tool, C hybrid, D media-first). This document records what the code
-does today (audited 2026-10-11), the conventions every view already follows,
-and the constraints that whoever styles the app must respect. It does **not**
-define colour, type or spacing tokens for the SPA, because none exist yet and
-inventing them is #124's job.
+**Status:** design direction chosen (#124). The visual direction is **C: Hybrid**
+(modern, purple accents, soft rounded corners, balanced spacing). This document
+records what the code does today (audited 2026-10-11), the conventions every
+view already follows, the design tokens decided in #124 (§11), and the
+constraints that whoever styles the app must respect.
 
-Read this before touching anything in `web/src/`. If you are styling a view
-(#120 Library, #130 Transcript, #131 Search, #132 Ops) and #124 is not done
-yet, stop: those issues are blocked on it.
+**Styling is unblocked.** Views may now use the tokens in §11. Styling work on
+#120 Library, #130 Transcript, #131 Search, #132 Ops can proceed. Use the
+tokens as-is; do not invent new colours, spacing or typography without asking.
 
 ---
 
-## 1. Ground rules for UI work right now
+## 1. Ground rules for UI work
 
-1. **Do not add visual styling to a view.** No stylesheet, no `className`
-   with rules, no `style={{…}}` beyond the layout-safety cases listed in §3.
-   Each view's header comment says this ("Plain semantic HTML on purpose:
-   styling is #1xx").
-2. **Do not invent tokens.** No colour, font, spacing or radius value enters
-   `web/src/` until #124 fills in §11 of this document.
+1. **Style views through the shared stylesheet.** Visual styling lives in
+   `web/index.css` (imported by `main.tsx`) and is applied with class names.
+   No per-view stylesheet, and `style={{...}}` only for the layout-safety
+   cases listed in §3.
+2. **Use the §11 tokens, do not invent values.** Colour, font, spacing and
+   radius come from the CSS custom properties in `index.css` (`var(--...)`).
+   A genuinely missing token is added to both `index.css` and §11.
 3. **Do not add a CSS framework, component library, icon set or font
    package** without asking the owner (AGENTS.md -> Rules). Tailwind,
    shadcn, MUI and so on are all new npm dependencies. Vite can import plain
@@ -58,10 +57,10 @@ paragraphs and lists, and no table borders.
 
 ## 3. Inline styles and class hooks in the SPA
 
-### Inline styles (the only allowed kind, until #124)
+### Inline styles (layout-safety only)
 
-Each one stops content from breaking the layout, not decoration. Keep them
-when styling arrives, or move them into the stylesheet unchanged.
+Each one stops content from breaking the layout, not decoration. Keep them,
+or move them into the stylesheet unchanged.
 
 | File | Element | Style | Why |
 |---|---|---|---|
@@ -83,8 +82,8 @@ Inline styles are allowed by the production CSP (`style-src 'self' 'unsafe-inlin
 | `speaker` | speaker label `<span>` in a transcript segment | `routes/Transcript.tsx` |
 
 The `player--error` modifier shows a BEM-style naming habit
-(`block--modifier`). It is the only precedent, not a decided convention: #124
-picks the CSS approach.
+(`block--modifier`). It is the only precedent; the CSS approach was decided in #124 (§11: one
+global stylesheet).
 
 ---
 
@@ -95,7 +94,7 @@ picks the CSS approach.
 inline `<style>`, no script and no external resources. The SPA links to it as
 "Printable version" from the video detail view. It is the only place in the
 repo with chosen colours and type. It is **not** the SPA design system, but
-it is the one existing precedent #124 can adopt or reject.
+it seeded nothing: #124 chose its own tokens (§11).
 
 ### Colours
 
@@ -142,8 +141,7 @@ In print (`@media print`), links take the text colour and lose their underline.
   (100% wide, 16:9). There is no max width, so lines run the full window width.
 - **Responsive:** no media queries. Wide tables (Ops jobs: 10 columns; Compare:
   3 columns) can overflow on a phone. The styling issues own this.
-- **Dark mode:** none. There is no `color-scheme` meta or CSS property, so the
-  page renders light even when the OS is dark. The printable page hard-codes
+- **Dark mode:** none at the time of this audit; since #211 the SPA is light + dark (§11). The printable page hard-codes
   `background: #fff`.
 
 ---
@@ -359,12 +357,11 @@ The stripes use the existing `--color-bg` and `--color-th-bg` tokens (light them
 | Nothing relies on colour; status, matches and errors are all text | everywhere (trivially, since there is no colour) |
 
 Contrast, focus indicators and target sizes are the browser defaults today, so
-they cannot be judged until styling exists. The bar the styling issues already
-set (from #120's acceptance criteria): body and status text 4.5:1 (WCAG AA),
+the bar for styled views is the one the styling issues set (from #120's acceptance criteria): body and status text 4.5:1 (WCAG AA),
 meaningful borders and fills 3:1, visible focus at 3:1, touch targets at least
 44×44px, no horizontal page scroll at 360px wide or at 200% zoom on 1280px,
 any animation stopped under `prefers-reduced-motion: reduce`, and no state
-told apart by colour alone. Check in both themes if #124 defines two.
+told apart by colour alone. Light + dark (§11).
 
 ---
 
@@ -376,7 +373,7 @@ told apart by colour alone. Check in both themes if #124 defines two.
   font or CSS CDN (fonts fall under `default-src 'self'` and must be
   self-hosted and bundled); images only from our origin, YouTube thumbnails or
   `data:` URIs; inline `style` attributes are fine.
-- **Thumbnails**, if #124 wants them: built only from a `video_id` matching
+- **Thumbnails**, if a view wants them: built only from a `video_id` matching
   `^[A-Za-z0-9_-]{11}$`, as `https://i.ytimg.com/vi/<id>/mqdefault.jpg`, with
   `alt=""`, `loading="lazy"` and a fixed size (detail in #120).
 - **No new npm dependency without asking** (AGENTS.md -> Rules).
@@ -419,23 +416,174 @@ Not design decisions, just drift to fix or settle when styling lands:
 
 ---
 
-## 11. Decisions owed by #124
+## 11. Design tokens: Hybrid direction (#124)
 
-These are open. Until the owner decides, a view must not pick its own answer.
+Owner decision: **Option C — Hybrid**, a modern, balanced direction.
 
-- Visual direction: A editorial, B dense tool, C hybrid, D media-first
-- Colour tokens (text, muted, background, surface, border, link, focus,
-  success, warning, danger, highlight), and whether the printable page's
-  `#1a1a1a` / `#555` / `#0b57d0` / `#ccc` seed them
-- Light only, or light and dark (and whether to set `color-scheme`)
-- Font stack (system stack like the printable page, or a self-hosted face) and
-  the type scale
-- Spacing scale, radius, content max width (the printable page uses `48rem`)
-- CSS approach: global stylesheet, CSS modules, or a framework (a framework
-  needs owner approval as a new dependency)
-- Button variants, status badge or label treatment, row density, thumbnails
-- Phone layout for wide tables; where the player sits on the Transcript page
-- Focus ring style and minimum touch-target size
+### Colour tokens
 
-When #124 is done, replace this section with the tokens, and update §1 so
-styling is allowed.
+| Use | Value | Notes |
+|---|---|---|
+| Text (primary) | `#1f2937` | 14.7:1 on white |
+| Text (secondary/muted) | `#6b7280` | 4.8:1 on white |
+| Background (main) | `#ffffff` | |
+| Background (surface, cards) | `#f9fafb` | Soft lift from main |
+| Border | `#e5e7eb` | Divides regions and table cells (decorative, exempt from 1.4.11) |
+| Control border | `#6b7280` | `.input`/`.btn` outline; 4.8:1 on bg and card (`#ffffff`), 4.6:1 on surface (`#f9fafb`) |
+| Link | `#7c3aed` | Purple, 5.7:1 on white |
+| Link (visited) | `#a855f7` | Lighter purple, 4.0:1 on white (below AA for body text; visited state only) |
+| Link (hover/focus) | `#6d28d9` | Darker purple |
+| Focus ring | `#7c3aed` | 3px solid, 2px offset (5.7:1 on white) |
+| Success | `#10b981` | Green, 2.5:1 on white: border/fill only, never text |
+| Warning | `#f59e0b` | Amber, 2.2:1 on white: border/fill only, never text |
+| Danger | `#ef4444` | Red, 3.8:1 on white: border/fill only, never text |
+| Highlight | `#fef3c7` | Yellow, a background fill under dark text |
+
+### Typography
+
+| Element | Font | Size | Weight | Line-height |
+|---|---|---|---|---|
+| `body` | system-ui, sans-serif | 16px | 400 | 1.5 |
+| `h1` | system-ui, sans-serif | 1.875rem (30px) | 600 | 1.2 |
+| `h2` | system-ui, sans-serif | 1.5rem (24px) | 600 | 1.3 |
+| `h3` | system-ui, sans-serif | 1.25rem (20px) | 600 | 1.4 |
+| `label` | system-ui, sans-serif | 14px | 500 | 1.4 |
+| `small`, `.muted` | system-ui, sans-serif | 14px | 400 | 1.4 |
+| code, pre | monospace | 14px | 400 | 1.5 |
+
+### Spacing scale
+
+All values in rem (16px base).
+
+| Name | Value | Uses |
+|---|---|---|
+| xs | 0.25rem | Gaps in tight layouts |
+| sm | 0.5rem | Input padding, close items |
+| md | 1rem | Standard padding, gaps |
+| lg | 1.5rem | Section spacing, major gaps |
+| xl | 2rem | Page-level breaks |
+| 2xl | 3rem | Full-page breaks |
+
+Applied: body padding `1rem`; section margin `1.5rem 0 0.5rem`; input padding `0.5rem 0.75rem`; card padding `1rem`; list item margin `0.5rem 0`.
+
+### Layout
+
+- **Max width:** `48rem` (768px) for text-heavy pages (Library, Transcript, Search results)
+- **Content padding:** `1rem` on sides; `1.5rem` vertical between sections
+- **Card styling:** white background, `1rem` padding, `6px` border-radius, `0 2px 8px rgba(0,0,0,0.08)` shadow
+- **Table styling:** `th` background `#f3f4f6`, `border-bottom 2px solid #e5e7eb`; `td` padding `0.75rem`, `border-bottom 1px solid #e5e7eb`
+- **Form inputs:** `1rem` width, `0.5rem 0.75rem` padding, `1px solid` control-border (`--color-control-border`), `4px` border-radius, focus ring on focus
+
+### App shell
+
+`Shell.tsx` uses `.shell-header`, `.shell-nav`, `.shell-nav__link` (active state
+via react-router `NavLink`, class `active` plus `aria-current="page"`) and
+`.shell-main` (max width `--content-width`, centred). Only existing tokens are
+used; no new token was added.
+
+### Dark mode (#211)
+
+The SPA is light + dark. Light values live once on bare `:root`; the dark
+blocks only redefine tokens (`color-scheme: dark` included), so no component
+rule hard-codes a colour.
+
+Behaviour:
+
+- **Default from the OS.** With no stored choice, `@media (prefers-color-scheme: dark)`
+  applies `:root:not([data-theme="light"])`. Light remains the default when the
+  OS has no dark preference.
+- **Toggle.** A button in the shell header ("Switch to dark theme" / "Switch to
+  light theme", so its name reflects the state) sets `data-theme` on `<html>`
+  to `light` or `dark`. `:root[data-theme="dark"]` and the `:not([data-theme="light"])`
+  guard make the explicit choice win both ways (OS light + dark chosen, OS dark
+  + light chosen). `color-scheme` follows, so native controls, scrollbars and
+  date pickers match.
+- **Persistence, no flash.** The choice is kept in `localStorage` under `theme`
+  (reads/writes are try/catch guarded). `public/theme-init.js` is a classic
+  script in `<head>` that sets `data-theme` before first paint. It is a file,
+  not an inline script, because the production CSP is `script-src 'self'`.
+  `src/theme.ts` (`useTheme`) owns the toggle state and follows live OS changes
+  while no choice is stored.
+- **Motion.** Only route changes animate (#163): an opted-in navigation gets the UA
+  root cross-fade via the View Transitions API, disabled by its own
+  `::view-transition-*` reduced-motion rule. A `prefers-reduced-motion: reduce` rule
+  disables transitions and animations in case one is added.
+
+Dark token table (contrast on `#111827` bg unless noted; text on tints measured
+with primary text):
+
+| Use | Light | Dark | Notes (dark) |
+|---|---|---|---|
+| Text | `#1f2937` | `#f3f4f6` | 16.1:1 on bg, 13.3:1 on surface |
+| Muted | `#6b7280` | `#9ca3af` | 7.0:1 on bg, 5.8:1 on surface |
+| Background | `#ffffff` | `#111827` | |
+| Surface | `#f9fafb` | `#1f2937` | |
+| Border | `#e5e7eb` | `#4b5563` | 2.3:1 on bg, divider only (decorative; never used for control outlines) |
+| Control border | `#6b7280` | `#7c8596` | `.input`/`.btn` outline, WCAG 1.4.11 (3:1). Dark: 4.8:1 on bg `#111827`, 3.95:1 on surface/card `#1f2937` (worst case). Light: 4.8:1 / 4.6:1 (see above). Distinct from Border so dividers stay light |
+| Link | `#7c3aed` | `#a78bfa` | 6.5:1 on bg, 5.4:1 on surface |
+| Link (visited) | `#a855f7` | `#c4b5fd` | 9.6:1 |
+| Link (hover/focus) | `#6d28d9` | `#ddd6fe` | 12.8:1 |
+| Focus ring | `#7c3aed` | `#a78bfa` | 3px solid, 6.5:1 on bg |
+| Success | `#10b981` | `#34d399` | 9.2:1, border only |
+| Warning | `#f59e0b` | `#fbbf24` | 10.6:1, border only |
+| Danger | `#ef4444` | `#f87171` | 6.4:1, border only |
+| Highlight | `#fef3c7` | `#713f12` | 7.9:1 with text |
+| Success tint | `#ecfdf5` | `#0f2e26` | text 13.3:1 |
+| Warning tint | `#fffbeb` | `#33270a` | text 13.3:1 |
+| Danger tint | `#fef2f2` | `#3a1517` | text 14.7:1 |
+| Table header | `#f3f4f6` | `#273449` | text 11.4:1 |
+| Card | `#ffffff` | `#1f2937` | new token; the shadow is invisible on dark, so the card lifts via surface |
+| Hover fill | `#f9fafb` | `#374151` | new token; button hover |
+| Text on link fill | `#ffffff` | `#111827` | new token; primary button text, 6.5:1 on the dark link |
+
+Status badges and alerts keep the left border as the non-colour cue. The
+printable page (`services/api/render.py`) keeps its own light print styles.
+
+### CSS approach
+
+**Global stylesheet** (`web/index.css`). Rules:
+
+1. Base styles on `body`, headings, links
+2. Component classes for `.card`, `.btn`, `.input`, `.badge`, `.alert`
+3. Layout helpers: `.page`, `.row`, `.filters`, `.field`, `.table-scroll`, `.pagination` (no `.mt-*` style utilities exist)
+4. **No CSS-in-JS, no Tailwind, no new dependency** (unless owner approves)
+5. Keep semantic HTML intact; styling must not replace role, aria-* or label conventions
+
+### Button variants
+
+- **Primary:** purple background (`#7c3aed`), white text, `0.5rem 1rem` padding, `4px` radius, hover darker
+- **Secondary:** white background, `#1f2937` text, `1px solid` control-border (`--color-control-border`), `4px` radius, hover `#f9fafb`
+- **Disabled:** `opacity: 0.5`, `cursor: not-allowed` (native `disabled` attribute)
+- **No icon buttons:** every button has visible text
+
+### Badge & label treatment
+
+Coloured text on the tints fails WCAG AA (amber on its tint is about 2:1, green about 2.4:1), so badges keep the primary text colour and carry status in a 4px left border:
+- Success: `#10b981` left border on `#ecfdf5` background
+- Warning: `#f59e0b` left border on `#fffbeb` background
+- Danger: `#ef4444` left border on `#fef2f2` background
+- Default: `#6b7280` left border on `#f9fafb`
+- All: `4px` border-radius, `0.25rem 0.5rem` padding, font-size `14px`
+
+### Responsive behavior
+
+- **Tables on mobile:** stack columns vertically at `<640px`, or scroll horizontally with `overflow-x: auto`
+- **Player on Transcript:** full-width at top, `16:9` aspect ratio (inline style already set)
+- **No horizontal scroll** at 360px or at 200% zoom on 1280px
+
+### Focus and touch targets
+
+- **Focus ring:** `3px solid #7c3aed`, `2px` offset
+- **Touch targets:** minimum `44×44px` for all interactive elements (buttons, links, inputs)
+- **Visible focus:** maintained at all zoom levels
+
+### Fonts
+
+System stack only (no new dependency):
+```
+font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+```
+
+This is cross-platform, built-in, and complies with CSP (`default-src 'self'`).
+
+---

@@ -264,6 +264,7 @@ describe('client-side query validation', () => {
     await mount()
     await submit('a\u0000b')
     expect(requests).toHaveLength(0)
+    expect(screen.getByRole('alert').textContent).toBe('Search terms cannot contain a NUL character')
     expect(input().value).toBe('a\u0000b')
     expect(document.body.textContent).not.toContain('\u0000')
   })
@@ -404,6 +405,18 @@ describe('a result', () => {
     expect(two.textContent).toContain('Unknown channel')
   })
 
+  it('treats a whitespace-only title and channel title as missing', async () => {
+    stubFetch(() =>
+      page([
+        hit(1, { title: '   ', channel_title: '   ', channel_id: 'UCchan' }),
+      ]),
+    )
+    await mount('/search?q=a')
+    const [one] = screen.getAllByRole('listitem') as [HTMLElement]
+    expect(within(one).getByRole('link', { name: 'v0000000001' })).toBeTruthy()
+    expect(one.textContent).toContain('UCchan')
+  })
+
   it('shows dates in UTC whatever the local zone', async () => {
     expect(new Date('2026-09-01T00:30:00Z').getDate()).toBe(31) // local zone is Los Angeles
     stubFetch(() =>
@@ -427,6 +440,44 @@ describe('a result', () => {
     expect(one.textContent).toContain('Unavailable on YouTube')
     expect(within(one).getByRole('link', { name: 'Title 1' })).toBeTruthy()
     expect(two.textContent).not.toContain('Unavailable on YouTube')
+  })
+
+  describe('matched_in indicator', () => {
+    async function matched(matched_in: SearchResult['matched_in']) {
+      stubFetch(() => page([hit(1, { matched_in })]))
+      await mount('/search?q=a')
+      return screen.getByRole('listitem').querySelector('.search__matched')
+    }
+
+    it('title only shows Title and not Summary/Transcript', async () => {
+      const el = await matched(['title'])
+      expect(el?.textContent).toBe('Matched in: Title')
+    })
+
+    it('analysis shows the Summary label (no Description label)', async () => {
+      const el = await matched(['analysis'])
+      expect(el?.textContent).toBe('Matched in: Summary')
+    })
+
+    it('transcript only shows Transcript and not Title/Summary', async () => {
+      const el = await matched(['transcript'])
+      expect(el?.textContent).toBe('Matched in: Transcript')
+    })
+
+    it('shows every label in the backend order, separated by a middle dot', async () => {
+      const el = await matched(['title', 'analysis', 'transcript'])
+      expect(el?.textContent).toBe('Matched in: Title · Summary · Transcript')
+    })
+
+    it('shows two labels for a two-field result', async () => {
+      const el = await matched(['title', 'analysis'])
+      expect(el?.textContent).toBe('Matched in: Title · Summary')
+    })
+
+    it('shows no indicator for an empty matched_in', async () => {
+      expect(await matched([])).toBeNull()
+      expect(screen.getByRole('link', { name: 'Title 1' })).toBeTruthy()
+    })
   })
 
   it('renders no excerpt block for excerpts: []', async () => {
@@ -737,6 +788,8 @@ describe('states', () => {
   it.each([
     ['not json', new Response('<html>SECRET</html>', { status: 200 })],
     ['wrong shape', json({ results: 'nope' })],
+    ['bad matched_in value', json({ results: [{ ...hit(1), matched_in: ['description'] }], limit: 20, offset: 0, has_more: false })],
+    ['missing matched_in', json({ results: [{ ...hit(1), matched_in: undefined }], limit: 20, offset: 0, has_more: false })],
     ['bad span', json({ results: [{ ...hit(1), excerpts: [{ spans: [{ text: 1 }], start_sec: null }] }], limit: 20, offset: 0, has_more: false })],
   ])('malformed 200 body (%s): generic error, nothing rendered', async (_n, res) => {
     stubFetch(() => res)

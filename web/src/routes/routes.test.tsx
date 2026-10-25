@@ -56,6 +56,12 @@ describe('route table', () => {
     expect(render(`/videos/${ID}`).html).toContain('Loading video')
   })
 
+  it('keeps the query string on the video route', () => {
+    const { html, router } = render(`/videos/${ID}?t=3723`)
+    expect(html).toContain('Loading video')
+    expect(router.state.location.search).toBe('?t=3723')
+  })
+
   it.each(['/videos/short', '/videos/abcdefghijkl', '/videos/abc%2Fdefghi', '/videos/..', '/videos/%20%20%20%20%20%20%20%20%20%20%20'])(
     'shows "Video not found" for the invalid id in %s',
     (path) => {

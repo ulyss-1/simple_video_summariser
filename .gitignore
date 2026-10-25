@@ -23,3 +23,7 @@ web/coverage/
 
 # Bake-off reports, transcripts and references (issue #76)
 data/bakeoff/
+
+# Playwright output (#177)
+web/test-results/
+web/playwright-report/

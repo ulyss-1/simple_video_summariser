@@ -173,6 +173,15 @@ class FakeQueue:
     def reap_stale(self, older_than_sec: int | None = None) -> int:
         raise NotImplementedError("unused by worker tests")
 
+    def force_pending(self, job_id: int, priority: int) -> bool:
+        raise NotImplementedError("unused by worker tests")
+
+    def fail_job(self, job: Job, worker: str, exc: BaseException) -> None:
+        raise NotImplementedError("unused by worker tests")
+
+    def raise_priority(self, video_id: str, priority: int) -> list[int]:
+        raise NotImplementedError("unused by worker tests")
+
 
 class FakeTimerHandle:
     def __init__(self, function: Callable[[], None]) -> None:
@@ -1440,7 +1449,7 @@ def test_the_worker_still_exits_when_recording_the_failure_raises(tmp_path: Path
     assert any(e["event"] == "worker.runtime_limit_record_failed" for e in logs)
 
 
-def test_a_queue_without_fail_job_still_exits(tmp_path: Path) -> None:
+def test_a_queue_whose_fail_job_raises_still_exits(tmp_path: Path) -> None:
     queue = FakeQueue([make_job()])
     timers = FakeTimerFactory()
     codes: list[int] = []

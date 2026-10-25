@@ -38,6 +38,7 @@ from psycopg.pq import TransactionStatus
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.convertors import Convertor, register_url_convertor
 
+from common.backfill import ConnectionProvider
 from common.channel_catalog import (
     MAX_SELECTED,
     discover_catalog,
@@ -53,6 +54,7 @@ from common.errors import (
 from common.models import CatalogSource
 from common.queue import (
     PRIORITY_INTERACTIVE,
+    JobQueue,
     PostgresQueue,
     analyze_dedupe_key,
 )
@@ -87,6 +89,7 @@ from services.api.deps import (
     get_catalog,
     get_channel_resolver,
     get_conn,
+    get_conn_provider,
     rate_limit,
 )
 from services.api.schemas import CatalogLimit, CatalogPageOut, catalog_page_out
@@ -285,7 +288,7 @@ def _require_idle(conn: psycopg.Connection[Any]) -> None:
 
 
 def submit_video(
-    conn: psycopg.Connection[Any], video_id: str, *, queue: PostgresQueue
+    conn: psycopg.Connection[Any], video_id: str, *, queue: JobQueue
 ) -> SubmitResult:
     """Record ``video_id`` and give it one ``ingest`` job, unless it already has one.
 
@@ -313,9 +316,22 @@ def submit_video(
         return SubmitResult(video_id, job_id, state, created=False)
 
 
+def _require_json_content_type(request: Request) -> None:
+    """Refuse a non-JSON body (415) so a cross-site form post cannot trigger a cancel.
+
+    Same rule as ``routes_ops``' check (#44), which is private to that module.
+    """
+    media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if media_type != "application/json":
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Content-Type must be application/json"
+        )
+
+
 @router.post(
     "/videos",
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(_require_json_content_type)],
     responses={200: {"model": VideoSubmission, "description": "Already submitted"}},
 )
 def post_videos(
@@ -374,7 +390,7 @@ def request_reanalysis(
     conn: psycopg.Connection[Any],
     video_id: str,
     *,
-    queue: PostgresQueue,
+    queue: JobQueue,
     dedupe_key: str,
     after_lookup: Callable[[], None] | None = None,
 ) -> Reanalysis:
@@ -470,6 +486,7 @@ def post_video_reanalyze(
     "/channels",
     status_code=status.HTTP_201_CREATED,
     response_model_exclude_none=True,
+    dependencies=[Depends(_require_json_content_type)],
     responses={
         200: {"model": ChannelRegistration, "description": "Already registered"}
     },
@@ -477,9 +494,11 @@ def post_video_reanalyze(
 def post_channels(
     body: SubmitRef,
     response: Response,
-    conn: Annotated[psycopg.Connection[Any], Depends(get_conn)],
+    provider: Annotated[ConnectionProvider, Depends(get_conn_provider)],
     resolve: Annotated[ChannelResolver, Depends(get_channel_resolver)],
 ) -> ChannelRegistration:
+    # The yt-dlp resolve can take ~20 s and touches no database, so it runs
+    # with nothing checked out; the pool is borrowed only for the write (#219).
     try:
         ref = parse_channel_input(body.url)
     except ValueError:
@@ -493,11 +512,12 @@ def post_channels(
         resolved_title = resolved.title
     else:
         channel_id = ref
-    _require_idle(conn)
-    with conn.transaction():
-        registered = register_channel(conn, channel_id)
-        if isinstance(ref, NameRef):
-            fill_channel_title(conn, channel_id, resolved_title)
+    with provider() as conn:
+        _require_idle(conn)
+        with conn.transaction():
+            registered = register_channel(conn, channel_id)
+            if isinstance(ref, NameRef):
+                fill_channel_title(conn, channel_id, resolved_title)
     if not registered.created:
         response.status_code = status.HTTP_200_OK
     channel = registered.channel
@@ -611,7 +631,7 @@ def post_channel_backfill(
     channel_id: Annotated[str, Depends(_backfill_channel_id)],
     body: BackfillRequest,
     response: Response,
-    conn: Annotated[psycopg.Connection[Any], Depends(get_conn)],
+    provider: Annotated[ConnectionProvider, Depends(get_conn_provider)],
     catalog: Annotated[CatalogSource, Depends(get_catalog)],
     probe: Annotated[SubtitleProbe, Depends(get_subtitle_probe)],
 ) -> BackfillResponse:
@@ -628,14 +648,17 @@ def post_channel_backfill(
     A dry run also checks each new video's subtitles, newest first, within a
     100 s budget (#117); the rest are reported as ``unchecked``. It writes
     nothing.
+
+    The pooled connection is borrowed per short DB phase and returned across
+    the listing and the probes (#204), so a slow dry run cannot exhaust the
+    pool.
     """
-    _require_idle(conn)
     settings = get_settings()
     started = time.perf_counter()
     try:
         result = backfill(
-            conn,
-            PostgresQueue(conn),
+            provider,
+            PostgresQueue,
             catalog,
             channel_id,
             limit=body.limit,
@@ -773,18 +796,6 @@ def post_channel_backfill_request(
         dry_run=body.dry_run,
         state="pending",
     )
-
-
-def _require_json_content_type(request: Request) -> None:
-    """Refuse a non-JSON body (415) so a cross-site form post cannot trigger a cancel.
-
-    Same rule as ``routes_ops``' check (#44), which is private to that module.
-    """
-    media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-    if media_type != "application/json":
-        raise HTTPException(
-            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Content-Type must be application/json"
-        )
 
 
 @router.post(

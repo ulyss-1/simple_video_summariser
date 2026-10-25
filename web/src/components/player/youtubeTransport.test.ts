@@ -101,6 +101,10 @@ describe('parseEmbedMessage', () => {
     ['JSON array', '[{"event":"onReady"}]'],
     ['JSON number', '5'],
     ['JSON string', '"onReady"'],
+    // A non-string whose String() is valid JSON: the guard is typeof, not
+    // String(data), so this must stay null. Pins the String()-coercion
+    // mutation (#176).
+    ['array whose String() is valid JSON', ['{"event":"onError"}']],
     ['no event field', '{"info":1}'],
     ['non-string event', '{"event":1}'],
     ['unknown event', msg('onStateChange', { info: 1 })],
@@ -222,6 +226,30 @@ describe('incoming messages (untrusted)', () => {
     t.seek(5)
     expect(commands()).toEqual([])
     t.dispose()
+  })
+
+  it('drops a non-string whose String() is valid JSON, silently', () => {
+    // event.data = ['{"event":"onError"}']. String(data) would be the valid
+    // JSON '{"event":"onError"}', so a transport that coerced with String(data)
+    // instead of requiring typeof === 'string' would fire onError. The real
+    // code requires a string, so the message is dropped: no callback, nothing
+    // logged, no throw, still waiting. Pins the String()-coercion mutation (#176).
+    const logs = [
+      vi.spyOn(console, 'error').mockImplementation(() => {}),
+      vi.spyOn(console, 'warn').mockImplementation(() => {}),
+      vi.spyOn(console, 'log').mockImplementation(() => {}),
+    ]
+    const t = make()
+    t.start()
+    expect(() => win.deliver(['{"event":"onError"}'])).not.toThrow()
+    expect(onReady).not.toHaveBeenCalled()
+    expect(onError).not.toHaveBeenCalled()
+    for (const spy of logs) expect(spy).not.toHaveBeenCalled()
+    // Still waiting: a queued seek is not flushed by the dropped message.
+    t.seek(5)
+    expect(commands()).toEqual([])
+    t.dispose()
+    for (const spy of logs) spy.mockRestore()
   })
 
   it('does not trust a null source even when contentWindow is null too', () => {

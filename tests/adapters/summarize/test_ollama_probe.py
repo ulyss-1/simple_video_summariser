@@ -184,6 +184,19 @@ def test_the_quoted_body_is_cut_to_200_characters() -> None:
     assert result.error == "HTTP 502: " + "x" * 200
 
 
+@pytest.mark.parametrize("status", [202, 204])
+def test_only_200_is_ready_not_any_2xx(status: int) -> None:
+    # /api/tags answers 200 on success; the probe accepts only 200. A 2xx-range
+    # check would treat a 202/204 carrying a valid models body as ready, so the
+    # body is valid here to make that difference visible. #192/#84.
+    response = HttpResponse(status, tags(MODEL).body)
+
+    result = probe_ollama(HOST, MODEL, transport=FakeGet(response))
+
+    assert result.outcome == "unreachable"
+    assert result.error is not None and f"HTTP {status}" in result.error
+
+
 def test_a_response_larger_than_max_response_bytes_is_not_trusted() -> None:
     big = HttpResponse(200, b" " * (MAX_RESPONSE_BYTES + 1))
 
@@ -233,6 +246,21 @@ def test_a_response_body_that_echoes_the_credentials_is_scrubbed() -> None:
     result = probe_ollama(host, MODEL, transport=FakeGet(HttpResponse(500, b"bad s3cr3t-PW here")))
 
     assert result.error is not None and "s3cr3t-PW" not in result.error
+
+
+def test_a_password_containing_an_at_sign_is_fully_scrubbed() -> None:
+    # The userinfo runs to the LAST '@', so a password may itself contain '@'.
+    # Neither the shown host, the error, nor repr may leak it. #192/#84.
+    secret = "p@ss-S3CR3T-word"
+    host = f"http://bob:{secret}@h:11434"
+
+    result = probe_ollama(host, MODEL, transport=FakeGet(HttpResponse(500, f"fail {secret} end".encode())))
+
+    assert result.host == "http://h:11434"
+    assert result.error is not None
+    for needle in (secret, "S3CR3T-word", "bob:"):
+        assert needle not in result.error
+    assert secret not in repr(result)
 
 
 SECRET = "S3CR3T-tok"

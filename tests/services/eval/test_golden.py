@@ -84,6 +84,15 @@ def test_an_invalid_line_is_an_error_naming_its_line_number(line: str) -> None:
     assert err.value.messages[0].startswith("line 3: ")
 
 
+def test_a_note_requires_whitespace_before_the_hash() -> None:
+    # The note stripper is ``\s+#.*$``: a note must be preceded by whitespace.
+    # Without that requirement ("#.*$"), "dQw4w9WgXcQ#x" would be truncated to a
+    # valid id and silently accepted. Glued to the id with no space, "#x" is
+    # part of the line, so the line is not a valid ref and must be rejected. #195.
+    with pytest.raises(GoldenError, match="not a YouTube video ID or URL"):
+        parse_golden(f"{A}#x\n")
+
+
 def test_every_invalid_line_is_listed_up_to_a_cap() -> None:
     with pytest.raises(GoldenError) as err:
         parse_golden("bad1\n" + A + "\nbad3\n")

@@ -133,12 +133,29 @@ _ANALYSIS_COLUMNS = """
     created_at, speakers_coerced, cache_read_tokens, cache_write_tokens, calls
 """
 
+# "Prefer the analysis made with the configured model+prompt, else newest"
+# ordering (#146). Takes two bound params (model, prompt_version); both NULL
+# makes COALESCE false for every row, i.e. plain newest-wins. ``_A`` is the
+# same for queries that alias the analyses table as ``a``.
+_PREFERRED_FIRST = "COALESCE(model = %s AND prompt_version = %s, FALSE) DESC"
+_PREFERRED_FIRST_A = "COALESCE(a.model = %s AND a.prompt_version = %s, FALSE) DESC"
 
-def latest_analysis(conn: psycopg.Connection[Any], video_id: str) -> Analysis | None:
-    """The newest analysis for ``video_id``, with its children populated.
 
-    Topics ordered by ``seq``, claims and quotes by ``start_sec`` (nulls
-    last, then ``id``); ties on ``created_at`` broken by ``id DESC``. ``None`` when the video has no
+def latest_analysis(
+    conn: psycopg.Connection[Any],
+    video_id: str,
+    *,
+    prefer_model: str | None = None,
+    prefer_prompt_version: str | None = None,
+) -> Analysis | None:
+    """The analysis ``video_id`` should display, with its children populated.
+
+    With ``prefer_model`` / ``prefer_prompt_version`` set (the configured
+    summarizer, #146), the newest analysis matching *both* wins; otherwise, or
+    when none match, the newest of any kind. So an eval or re-analysis run with
+    another model does not replace the production one. Both ``None`` (the
+    default) is plain newest-wins. Topics ordered by ``seq``, claims and quotes
+    by ``start_sec`` (nulls last, then ``id``). ``None`` when the video has no
     analysis.
     """
     row = conn.execute(
@@ -146,10 +163,10 @@ def latest_analysis(conn: psycopg.Connection[Any], video_id: str) -> Analysis | 
         SELECT {_ANALYSIS_COLUMNS}
         FROM analyses
         WHERE video_id = %s
-        ORDER BY created_at DESC, id DESC
+        ORDER BY {_PREFERRED_FIRST}, created_at DESC, id DESC
         LIMIT 1
         """,
-        (video_id,),
+        (video_id, prefer_model, prefer_prompt_version),
     ).fetchone()
     return None if row is None else _with_children(conn, row)
 
@@ -287,9 +304,27 @@ _RUN_COLUMNS = """
 _RUN_ANALYSIS_WIDTH = 17
 
 
-def latest_analysis_run(conn: psycopg.Connection[Any], video_id: str) -> AnalysisRun | None:
-    """The newest analysis of ``video_id`` with its children and transcript source (#42)."""
-    runs = _runs(conn, video_id, offset=0, limit=1)
+def latest_analysis_run(
+    conn: psycopg.Connection[Any],
+    video_id: str,
+    *,
+    prefer_model: str | None = None,
+    prefer_prompt_version: str | None = None,
+) -> AnalysisRun | None:
+    """The analysis ``video_id`` should display, with children and transcript source (#42).
+
+    ``prefer_model`` / ``prefer_prompt_version`` (the configured summarizer, #146)
+    make the matching analysis win over a newer eval/re-analysis run; both
+    ``None`` is plain newest-wins.
+    """
+    runs = _runs(
+        conn,
+        video_id,
+        offset=0,
+        limit=1,
+        prefer_model=prefer_model,
+        prefer_prompt_version=prefer_prompt_version,
+    )
     return runs[0] if runs else None
 
 
@@ -330,8 +365,11 @@ def _runs(
     limit: int,
     model: str | None = None,
     prompt_version: str | None = None,
+    prefer_model: str | None = None,
+    prefer_prompt_version: str | None = None,
 ) -> tuple[AnalysisRun, ...]:
-    # ``model`` and ``prompt_version`` are optional filters; ``NULL`` means "any".
+    # ``model`` / ``prompt_version`` are optional hard filters (``NULL`` = any);
+    # ``prefer_*`` is a soft preference that only reorders (#146).
     rows = conn.execute(
         f"""
         SELECT {_RUN_COLUMNS}
@@ -339,10 +377,13 @@ def _runs(
         WHERE a.video_id = %s
           AND (%s::text IS NULL OR a.model = %s)
           AND (%s::text IS NULL OR a.prompt_version = %s)
-        ORDER BY a.created_at DESC, a.id DESC
+        ORDER BY {_PREFERRED_FIRST_A}, a.created_at DESC, a.id DESC
         OFFSET %s LIMIT %s
         """,
-        (video_id, model, model, prompt_version, prompt_version, offset, limit),
+        (
+            video_id, model, model, prompt_version, prompt_version,
+            prefer_model, prefer_prompt_version, offset, limit,
+        ),
     ).fetchall()
     ids = [int(row[0]) for row in rows]
     topics: dict[int, list[Topic]] = {i: [] for i in ids}

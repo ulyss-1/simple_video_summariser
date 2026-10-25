@@ -288,6 +288,55 @@ def test_get_analysis_matches_latest_analysis_for_the_latest_run(
     assert get_analysis(conn, "videoAAAAAA", newer) == latest_analysis(conn, "videoAAAAAA")
 
 
+# --- display preference: configured model+prompt wins, else newest (#146) ----
+
+
+def _prod_then_newer_eval(conn: psycopg.Connection, video_id: str) -> int:
+    """Seed a 'prod' analysis then a newer 'eval' one; return the transcript id."""
+    tid = save_transcript(conn, video_id, "whisper", "en", "none", (), None)
+    save_analysis(
+        conn, make_analysis(video_id, tid, model="prod-model", prompt_version="v1", tldr="prod")
+    )
+    save_analysis(  # newer, so newest-wins would pick this one
+        conn, make_analysis(video_id, tid, model="eval-model", prompt_version="v2", tldr="eval")
+    )
+    return tid
+
+
+def test_latest_analysis_prefers_the_configured_model_and_prompt(
+    conn: psycopg.Connection, video_id: str
+) -> None:
+    from common.repo.analyses import latest_analysis
+
+    _prod_then_newer_eval(conn, video_id)
+
+    def tldr(**kw: str | None) -> str | None:
+        got = latest_analysis(conn, video_id, **kw)
+        return got.tldr if got else None
+
+    assert tldr() == "eval"  # default: newest wins
+    assert tldr(prefer_model="prod-model", prefer_prompt_version="v1") == "prod"
+    # No match -> newest overall
+    assert tldr(prefer_model="missing", prefer_prompt_version="v9") == "eval"
+    # Both must match: the right model with the wrong prompt does not count
+    assert tldr(prefer_model="prod-model", prefer_prompt_version="v2") == "eval"
+
+
+def test_latest_analysis_run_prefers_the_configured_model_and_prompt(
+    conn: psycopg.Connection, video_id: str
+) -> None:
+    from common.repo.analyses import latest_analysis_run
+
+    _prod_then_newer_eval(conn, video_id)
+
+    newest = latest_analysis_run(conn, video_id)
+    assert newest is not None and newest.analysis.tldr == "eval"  # default: newest wins
+    preferred = latest_analysis_run(
+        conn, video_id, prefer_model="prod-model", prefer_prompt_version="v1"
+    )
+    assert preferred is not None and preferred.analysis.tldr == "prod"
+
+
 def test_get_analysis_does_not_commit(head_dsn: str) -> None:
     from common.repo.analyses import get_analysis
 
@@ -298,6 +347,68 @@ def test_get_analysis_does_not_commit(head_dsn: str) -> None:
         assert get_analysis(conn, "vidrollbk01", aid) is not None
         conn.rollback()
         assert get_analysis(conn, "vidrollbk01", aid) is None
+
+
+# --- start_sec ties are broken by id ASC (issue #203) -----------------------
+#
+# These seed two tied rows with EXPLICIT ids written in reverse order: the
+# higher id is inserted first, so the physical/insertion order is the opposite
+# of id order. Only the `id ASC` tiebreak recovers id order; without it the scan
+# returns the rows the other way round, and `id DESC` reverses them too. This
+# does not depend on HOT/VACUUM behaviour the way a double-UPDATE does (#203
+# item 1): claims.start_sec is indexed and quotes.start_sec is not, so a
+# double-UPDATE is non-HOT for one and HOT for the other, which is exactly the
+# fragility QA flagged.
+
+
+def _empty_analysis(conn: psycopg.Connection, video_id: str) -> int:
+    tid = save_transcript(conn, video_id, "whisper", "en", "none", (), None)
+    return save_analysis(conn, make_analysis(video_id, tid, topics=(), claims=(), quotes=()))
+
+
+def test_claims_tied_on_start_sec_come_back_in_id_order(
+    conn: psycopg.Connection, video_id: str
+) -> None:
+    from common.repo.analyses import get_analysis
+
+    aid = _empty_analysis(conn, video_id)
+    # Higher id ("second") inserted first, lower id ("first") second.
+    conn.execute(
+        "INSERT INTO claims (id, analysis_id, text, start_sec) VALUES (%s, %s, %s, %s)",
+        (9_000_002, aid, "second", 10),
+    )
+    conn.execute(
+        "INSERT INTO claims (id, analysis_id, text, start_sec) VALUES (%s, %s, %s, %s)",
+        (9_000_001, aid, "first", 10),
+    )
+
+    result = get_analysis(conn, video_id, aid)
+
+    assert result is not None
+    # id ASC: lower id first. Removing the tiebreak returns ["second","first"]
+    # (insertion order); id DESC returns ["second","first"] too.
+    assert [c.text for c in result.claims] == ["first", "second"]
+
+
+def test_quotes_tied_on_start_sec_come_back_in_id_order(
+    conn: psycopg.Connection, video_id: str
+) -> None:
+    from common.repo.analyses import get_analysis
+
+    aid = _empty_analysis(conn, video_id)
+    conn.execute(
+        "INSERT INTO quotes (id, analysis_id, text, start_sec) VALUES (%s, %s, %s, %s)",
+        (9_000_002, aid, "second", 10),
+    )
+    conn.execute(
+        "INSERT INTO quotes (id, analysis_id, text, start_sec) VALUES (%s, %s, %s, %s)",
+        (9_000_001, aid, "first", 10),
+    )
+
+    result = get_analysis(conn, video_id, aid)
+
+    assert result is not None
+    assert [q.text for q in result.quotes] == ["first", "second"]
 
 
 # -- cache tokens and call count (issue #139) ---------------------------------------------------

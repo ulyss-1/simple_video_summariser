@@ -198,6 +198,15 @@ class _LazyQueue:
     def reap_stale(self, older_than_sec: int | None = None) -> int:
         raise NotImplementedError
 
+    def fail_job(self, job: Job, worker: str, exc: BaseException) -> None:
+        raise NotImplementedError
+
+    def force_pending(self, job_id: int, priority: int) -> bool:
+        raise NotImplementedError
+
+    def raise_priority(self, video_id: str, priority: int) -> list[int]:
+        raise NotImplementedError
+
 
 def _model_name(settings: Settings) -> str:
     return settings.OLLAMA_MODEL if settings.SUMMARIZER == "ollama" else settings.ANTHROPIC_MODEL

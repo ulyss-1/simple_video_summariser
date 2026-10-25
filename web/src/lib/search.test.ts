@@ -8,7 +8,6 @@ import {
   offsetForPage,
   parseSearchParams,
   searchHref,
-  timestampHref,
   validateQuery,
 } from './search'
 
@@ -127,6 +126,10 @@ describe('parseSearchParams', () => {
   it('uses the first q when several are given', () => {
     expect(parse('q=one&q=two').q).toBe('one')
   })
+
+  it('rewrites a duplicated q to a single q in the corrected URL', () => {
+    expect(parse('q=one&q=two').corrected?.getAll('q')).toEqual(['one'])
+  })
 })
 
 describe('request and URL construction', () => {
@@ -184,29 +187,6 @@ describe('excerptFragments', () => {
   })
 })
 
-describe('timestampHref', () => {
-  it.each([
-    [12.5, '/videos/abc?t=12'],
-    [0, '/videos/abc?t=0'],
-    [3723, '/videos/abc?t=3723'],
-    [0.999, '/videos/abc?t=0'],
-    [1_000_000_000, '/videos/abc?t=1000000000'],
-  ])('%s -> %s', (sec, href) => {
-    expect(timestampHref('abc', sec)).toBe(href)
-  })
-
-  it.each([null, -0.5, Number.NaN, Number.POSITIVE_INFINITY, 1_000_000_001, 1e21])(
-    '%s -> no link',
-    (sec) => {
-      expect(timestampHref('abc', sec)).toBeNull()
-    },
-  )
-
-  it('encodes the video id', () => {
-    expect(timestampHref('a/b c', 1)).toBe('/videos/a%2Fb%20c?t=1')
-  })
-})
-
 describe('isSearchPage', () => {
   const ok = {
     results: [
@@ -219,6 +199,7 @@ describe('isSearchPage', () => {
         duration_sec: null,
         unavailable: null,
         transcript_source: 'whisper',
+        matched_in: ['title', 'transcript'],
         excerpts: [{ spans: [{ text: 'a', match: true }], start_sec: 3 }],
       },
     ],
@@ -243,6 +224,8 @@ describe('isSearchPage', () => {
     ['result null', { ...ok, results: [null] }],
     ['video_id number', { ...ok, results: [{ ...ok.results[0], video_id: 5 }] }],
     ['title number', { ...ok, results: [{ ...ok.results[0], title: 5 }] }],
+    ['matched_in missing', { ...ok, results: [{ ...ok.results[0], matched_in: undefined }] }],
+    ['matched_in unknown value', { ...ok, results: [{ ...ok.results[0], matched_in: ['description'] }] }],
     ['excerpts missing', { ...ok, results: [{ ...ok.results[0], excerpts: undefined }] }],
     ['excerpt not an object', { ...ok, results: [{ ...ok.results[0], excerpts: ['x'] }] }],
     ['start_sec a string', { ...ok, results: [{ ...ok.results[0], excerpts: [{ spans: [], start_sec: '1' }] }] }],

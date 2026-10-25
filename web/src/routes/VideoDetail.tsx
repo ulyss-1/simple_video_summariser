@@ -1,14 +1,16 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import type { components } from '../api'
 import { AnalysisView } from '../components/AnalysisView'
 import { JobProgress } from '../components/JobProgress'
 import { Player } from '../components/Player'
 import { buildWatchUrl } from '../components/player/youtubeTransport'
-import { formatTimestamp } from '../components/Timestamp'
+import { formatTimestamp, useMomentSeek } from '../components/Timestamp'
 import { useAnalysisTotal } from '../hooks/useAnalyses'
 import { deleteErrorMessage, useDeleteVideo } from '../hooks/useDeleteVideo'
+import { reanalyzeErrorMessage, useReanalyze } from '../hooks/useReanalyze'
 import { useVideo, VideoApiError } from '../hooks/useVideo'
+import { parseStartTime } from '../lib/moment'
 import { parseVideoId } from '../lib/videoId'
 
 type Video = components['schemas']['VideoDetail']
@@ -51,10 +53,12 @@ function NotFound() {
     document.title = 'Video not found'
   }, [])
   return (
-    <section>
+    <section className="page">
       <h1>Video not found</h1>
       <p>
-        <Link to="/">Back to Library</Link>
+        <Link className="btn" to="/" viewTransition>
+          Back to Library
+        </Link>
       </p>
     </section>
   )
@@ -138,10 +142,14 @@ function VideoPage({ videoId }: { videoId: string }) {
   // removing their cache entries cannot make them fetch the video again.
   const [gone, setGone] = useState(false)
   const query = useVideo(gone ? null : videoId)
+  const reanalyze = useReanalyze(videoId)
   // Only the count is needed for the Compare link; a failure just hides it.
   const analysisTotal = useAnalysisTotal(gone ? null : videoId).data
   const video = query.data
   const heading = video ? video.title || videoId : null
+  const [params] = useSearchParams()
+  // The Player mounts with the loaded video, so the deep-link seek waits for it.
+  useMomentSeek(video === undefined ? null : parseStartTime(params))
 
   useEffect(() => {
     if (heading !== null) document.title = heading
@@ -151,10 +159,11 @@ function VideoPage({ videoId }: { videoId: string }) {
     if (query.isError) {
       if (query.error instanceof VideoApiError && query.error.status === 404) return <NotFound />
       return (
-        <section>
+        <section className="page">
           <h1>Could not load this video</h1>
-          <p>Something went wrong. Try again.</p>
+          <p className="alert alert--danger">Something went wrong. Try again.</p>
           <button
+            className="btn btn--primary"
             type="button"
             onClick={() => {
               void query.refetch()
@@ -165,7 +174,7 @@ function VideoPage({ videoId }: { videoId: string }) {
         </section>
       )
     }
-    return <p role="status">Loading video…</p>
+    return <p className="muted" role="status">Loading video…</p>
   }
 
   const channel = video.channel_title || video.channel_id
@@ -178,10 +187,10 @@ function VideoPage({ videoId }: { videoId: string }) {
   ].filter((x): x is string => x !== null && x !== '')
 
   return (
-    <article>
+    <article className="page video-detail">
       <h1>{heading}</h1>
       {meta.length > 0 && (
-        <p>
+        <p className="muted">
           {meta.map((m, i) => (
             <Fragment key={i}>
               {i > 0 && ' · '}
@@ -190,20 +199,20 @@ function VideoPage({ videoId }: { videoId: string }) {
           ))}
         </p>
       )}
-      <p>
+      <p className="row video-detail__links">
         <a href={buildWatchUrl(videoId)} target="_blank" rel="noopener noreferrer">
           Open on YouTube
         </a>
         {video.transcript !== null && (
           <>
             {' · '}
-            <Link to={`/videos/${videoId}/transcript`}>Transcript</Link>
+            <Link to={`/videos/${videoId}/transcript`} viewTransition>Transcript</Link>
           </>
         )}
         {analysisTotal !== undefined && analysisTotal >= 2 && (
           <>
             {' · '}
-            <Link to={`/videos/${videoId}/compare`}>Compare analyses</Link>
+            <Link to={`/videos/${videoId}/compare`} viewTransition>Compare analyses</Link>
           </>
         )}
         {analysis !== null && (
@@ -215,10 +224,28 @@ function VideoPage({ videoId }: { videoId: string }) {
           </>
         )}
       </p>
+      {video.transcript !== null && (
+        <p>
+          <button
+            className="btn btn--primary"
+            type="button"
+            disabled={reanalyze.isPending || video.active_job !== null}
+            onClick={() => reanalyze.mutate()}
+          >
+            Re-analyse
+          </button>
+        </p>
+      )}
+      {reanalyze.isError && (
+        <p className="alert alert--danger" role="alert">
+          {reanalyzeErrorMessage(reanalyze.error)}
+        </p>
+      )}
       <Player videoId={videoId} title={heading ?? undefined} />
-      {video.unavailable !== null && analysis !== null && <p>{UNAVAILABLE_NOTE}</p>}
-      {analysis !== null && video.active_job !== null && <p>Re-analysis in progress</p>}
-      {analysis === null ? <p role="status">{pipelineStatus(video)}</p> : <AnalysisView analysis={analysis} />}
+      {/* Any non-null `unavailable`, including '', means unavailable. */}
+      {video.unavailable !== null && analysis !== null && <p className="alert">{UNAVAILABLE_NOTE}</p>}
+      {analysis !== null && video.active_job !== null && <p className="alert">Re-analysis in progress</p>}
+      {analysis === null ? <p className="alert" role="status">{pipelineStatus(video)}</p> : <AnalysisView analysis={analysis} />}
       {video.active_job !== null && video.progress != null && (
         <div>
           <JobProgress kind={video.active_job.kind} state={video.active_job.state} progress={video.progress} />

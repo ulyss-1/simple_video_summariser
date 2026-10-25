@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { setupUser } from '../test/user'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -218,6 +218,19 @@ describe('page states', () => {
     expect(document.querySelector('iframe')).toBeNull()
   })
 
+  it.each([
+    ['status is not a string', { status: 5, analysis: null }],
+    ['analysis.tldr is not a string', { status: 'done', analysis: { tldr: 1, topics: [], claims: [], quotes: [] } }],
+    ['analysis.topics is not an array', { status: 'done', analysis: { tldr: 'x', claims: [], quotes: [] } }],
+    ['analysis.claims is not an array', { status: 'done', analysis: { tldr: 'x', topics: [], quotes: [] } }],
+    ['analysis.quotes is not an array', { status: 'done', analysis: { tldr: 'x', topics: [], claims: [] } }],
+  ])('a 200 where %s shows Could not load, not the error boundary', async (_n, bad) => {
+    stubFetch(() => json(bad))
+    await mount()
+    expect(screen.getByText('Could not load this video')).toBeTruthy()
+    expect(screen.queryByText('Something went wrong')).toBeNull()
+  })
+
   it('Retry refetches and then shows the video', async () => {
     stubFetch((_u, n) => (n === 1 ? json({}, 503) : json(video())))
     await mount()
@@ -284,6 +297,17 @@ describe('page states', () => {
   it('unavailable with no analysis', async () => {
     await mountWith(video({ analysis: null, status: 'unavailable', unavailable: 'private' }))
     expect(screen.getByRole('status').textContent).toBe('This video is no longer available on YouTube')
+  })
+
+  it('unavailable with no analysis shows the note once, only as the status line', async () => {
+    await mountWith(video({ analysis: null, status: 'unavailable', unavailable: 'private' }))
+    expect(screen.getAllByText('This video is no longer available on YouTube')).toHaveLength(1)
+  })
+
+  it('an empty-string unavailable still counts as unavailable', async () => {
+    await mountWith(video({ unavailable: '', status: 'unavailable' }))
+    expect(screen.getByText('This video is no longer available on YouTube')).toBeTruthy()
+    expect(screen.getByText('A short summary.')).toBeTruthy()
   })
 
   it('idle with no analysis', async () => {
@@ -363,6 +387,11 @@ describe('header and player', () => {
     expect(screen.getByText('UCfallbackfallbackfallba')).toBeTruthy()
   })
 
+  it('falls back to the channel_id when the channel title is an empty string', async () => {
+    await mountWith(video({ channel_title: '', channel_id: 'UCfallbackfallbackfallba' }))
+    expect(screen.getByText('UCfallbackfallbackfallba')).toBeTruthy()
+  })
+
   it('omits the channel when both are null', async () => {
     await mountWith(video({ channel_title: null, channel_id: null }))
     expect(screen.queryByText('My Channel')).toBeNull()
@@ -421,6 +450,16 @@ describe('header and player', () => {
     expect(document.querySelectorAll('iframe')).toHaveLength(1)
     const tldr = section('TL;DR')
     expect(iframe.compareDocumentPosition(tldr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('uses the route id, not the API video_id, for the player and the YouTube link', async () => {
+    stubFetch(() => json(video({ video_id: DASH_ID })))
+    await mount(`/videos/${ID}`)
+    const iframe = document.querySelector('iframe') as HTMLIFrameElement
+    expect(new URL(iframe.src).pathname).toBe(`/embed/${ID}`)
+    expect(screen.getByRole('link', { name: 'Open on YouTube' }).getAttribute('href')).toBe(
+      `https://www.youtube.com/watch?v=${ID}`,
+    )
   })
 
   it('embeds the player when there is no analysis', async () => {
@@ -756,5 +795,93 @@ describe('transcription progress (#245)', () => {
   it('shows no figures without progress', async () => {
     await mountWith(transcribing({ progress: null }))
     expect(document.querySelector('progress')).toBeNull()
+  })
+})
+
+describe('Re-analyse button (#126)', () => {
+  const summary = { id: 3, source: 'whisper', language: 'en', segment_count: 10, speaker_source: 'none' }
+  const button = () => screen.getByRole('button', { name: 'Re-analyse' }) as HTMLButtonElement
+  const posts = () => requests.filter((u) => u.pathname.endsWith('/reanalyze'))
+  const submission = (created: boolean) => ({ video_id: ID, job_id: 9, state: 'pending', created })
+
+  /** Serves the video, and `post` for the reanalyze POST. */
+  async function mountPosting(v: VideoDetailOut, post: () => Response | Promise<Response>) {
+    const fn = stubFetch((url) => (url.pathname.endsWith('/reanalyze') ? post() : json(v)))
+    await mount()
+    return fn
+  }
+
+  it('is absent without a transcript', async () => {
+    await mountWith(video({ transcript: null }))
+    expect(screen.queryByRole('button', { name: 'Re-analyse' })).toBeNull()
+  })
+
+  it('is an enabled button with a transcript and no active job', async () => {
+    await mountWith(video({ transcript: summary }))
+    expect(button().type).toBe('button')
+    expect(button().disabled).toBe(false)
+  })
+
+  it('POSTs to the video reanalyze endpoint without a body and refetches the video', async () => {
+    const fn = await mountPosting(video({ transcript: summary }), () => json(submission(true), 202))
+    const before = requests.length
+    fireEvent.click(button())
+    await settle()
+    expect(posts().map((u) => u.pathname)).toEqual([`/api/videos/${ID}/reanalyze`])
+    const init = fn.mock.calls.map((c) => c as unknown[]).find((c) => String(c[0]).endsWith('/reanalyze'))
+    expect(((init?.[1] ?? {}) as RequestInit).method).toBe('POST')
+    expect(requests.length).toBeGreaterThan(before + 1) // the POST and a video refetch
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('also treats 200 (reused job) as success', async () => {
+    await mountPosting(video({ transcript: summary }), () => json(submission(false), 200))
+    fireEvent.click(button())
+    await settle()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('is disabled while the request is in flight, so a double click sends one request', async () => {
+    let release: (r: Response) => void = () => {}
+    await mountPosting(
+      video({ transcript: summary }),
+      () => new Promise<Response>((r) => { release = r }),
+    )
+    fireEvent.click(button())
+    await settle()
+    expect(button().disabled).toBe(true)
+    fireEvent.click(button())
+    await settle()
+    expect(posts()).toHaveLength(1)
+    release(json(submission(true), 202))
+    await settle()
+  })
+
+  it('is disabled while a job is active, next to the in-progress line', async () => {
+    await mountWith(video({ transcript: summary, active_job: { id: 2, kind: 'analyze', state: 'running' } }))
+    expect(button().disabled).toBe(true)
+    expect(body()).toContain('Re-analysis in progress')
+  })
+
+  it.each([
+    [409, 'An analysis is already running for this video.'],
+    [429, 'Too many requests. Try again in a moment.'],
+    [500, 'Could not start the re-analysis. Try again.'],
+  ])('shows a fixed alert for %i and never echoes the body', async (status, message) => {
+    await mountPosting(video({ transcript: summary }), () => json({ detail: 'SECRET server text' }, status))
+    fireEvent.click(button())
+    await settle()
+    expect(screen.getByRole('alert').textContent).toBe(message)
+    expect(body()).not.toContain('SECRET')
+    expect(button().disabled).toBe(false)
+    expect(posts()).toHaveLength(1) // no automatic retry
+  })
+
+  it('shows a fixed alert on a network failure', async () => {
+    await mountPosting(video({ transcript: summary }), () => Promise.reject(new TypeError('boom')))
+    fireEvent.click(button())
+    await settle()
+    expect(screen.getByRole('alert').textContent).toBe('Could not start the re-analysis. Try again.')
+    expect(posts()).toHaveLength(1)
   })
 })

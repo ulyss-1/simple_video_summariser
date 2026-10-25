@@ -8,6 +8,7 @@ mapping and the response shape are tested without a database.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import nullcontext
 from typing import Any
 
 import pytest
@@ -15,6 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from psycopg.pq import TransactionStatus
 
+from common.backfill import ConnectionProvider
 from common.errors import (
     RateLimitedError,
     ToolFailureError,
@@ -127,10 +129,7 @@ def conn() -> _Conn:
 def api(
     app: FastAPI, recorder: Recorder, catalog: _Catalog, conn: _Conn
 ) -> Iterator[TestClient]:
-    def fake_conn() -> Iterator[_Conn]:
-        yield conn
-
-    app.dependency_overrides[deps.get_conn] = fake_conn
+    app.dependency_overrides[deps.get_conn_provider] = lambda: (lambda: nullcontext(conn))
     app.dependency_overrides[deps.get_catalog] = lambda: catalog
     app.dependency_overrides[routes_write.get_subtitle_probe] = lambda: _PROBE
     with TestClient(app) as client:
@@ -265,10 +264,11 @@ def test_the_route_passes_the_injected_connection_catalog_and_a_queue_on_it(
     api.post(_url(), json={"limit": 9})
 
     [call] = recorder.calls
-    assert call["conn"] is conn
+    with call["conn"]() as yielded:
+        assert yielded is conn
     assert call["catalog"] is catalog
     assert call["channel_id"] == CHANNEL
-    assert call["queue"]._conn is conn
+    assert call["queue"](conn)._conn is conn
 
 
 # --- response -----------------------------------------------------------------
@@ -441,15 +441,15 @@ def test_a_malformed_channel_id_is_rejected_before_any_connection_or_catalog(
 ) -> None:
     opened: list[str] = []
 
-    def tracking_conn() -> Iterator[_Conn]:
+    def tracking_conn() -> ConnectionProvider:
         opened.append("conn")
-        yield _Conn()
+        return lambda: nullcontext(_Conn())  # type: ignore[arg-type]
 
     def tracking_catalog() -> _Catalog:
         opened.append("catalog")
         return _Catalog()
 
-    app.dependency_overrides[deps.get_conn] = tracking_conn
+    app.dependency_overrides[deps.get_conn_provider] = tracking_conn
     app.dependency_overrides[deps.get_catalog] = tracking_catalog
     app.dependency_overrides[routes_write.get_subtitle_probe] = lambda: _PROBE
     with TestClient(app) as client:

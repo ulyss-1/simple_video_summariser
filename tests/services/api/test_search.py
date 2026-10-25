@@ -262,6 +262,32 @@ def test_a_title_only_match_has_no_transcript_and_no_excerpts(
     assert result["excerpts"] == []
 
 
+def test_title_and_analysis_excerpts_serialise_as_plain_spans_without_a_timestamp(
+    api: TestClient, recorder: Recorder
+) -> None:
+    hostile = "<script>alert(1)</script> & <mark>"
+    recorder.page = SearchPage(
+        (
+            _hit(
+                matched_in=("title", "analysis"),
+                excerpts=(
+                    Excerpt((Span("The ", False), Span("zebra", True)), None),
+                    Excerpt((Span(hostile, False), Span("zebra", True)), None),
+                ),
+            ),
+        ),
+        False,
+    )
+
+    response = api.get("/search", params={"q": "zebra " + MARKER})
+
+    [result] = response.json()["results"]
+    assert [e["start_sec"] for e in result["excerpts"]] == [None, None]
+    assert result["excerpts"][1]["spans"][0] == {"text": hostile, "match": False}
+    assert set(result["excerpts"][0]) == {"spans", "start_sec"}
+    assert MARKER not in response.text
+
+
 def test_search_result_fields_share_names_and_types_with_the_library_item(
     app: FastAPI,
 ) -> None:

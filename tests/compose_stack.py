@@ -26,7 +26,9 @@ class Stack:
         file_args = [arg for f in files for arg in ("-f", f)]
         # An env file instead of process env, which ruff bans here: it also
         # keeps the developer's own .env (and its API key) out of the run.
-        values = {"POSTGRES_PASSWORD": PASSWORD, **(env or {})}
+        # WEB_HOST_PORT empty: Docker picks the host port, so a stack that already
+        # holds 8080 (a demo deploy) cannot make this one fail to start.
+        values = {"POSTGRES_PASSWORD": PASSWORD, "WEB_HOST_PORT": "", **(env or {})}
         env_file = self.tmp_path / f"{self.project}.env"
         env_file.write_text("".join(f"{k}={v}\n" for k, v in values.items()))
         return subprocess.run(

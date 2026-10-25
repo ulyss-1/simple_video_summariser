@@ -279,9 +279,16 @@ def test_dockerignore_keeps_what_the_build_needs(path: str) -> None:
 
 def test_dockerignore_frontend_artifacts_are_appended_after_the_55_entries() -> None:
     lines = _dockerignore_lines()
-    assert lines[-3:] == ["web/dist", "web/tsconfig.tsbuildinfo", "web/coverage"]
-    assert lines.index(".git") < lines.index("web/dist")
-    assert lines.index("*:Zone.Identifier") < lines.index("web/dist")
+    for entry in (
+        "web/dist",
+        "web/tsconfig.tsbuildinfo",
+        "web/coverage",
+        "web/test-results",
+        "web/playwright-report",
+    ):
+        assert entry in lines
+        assert lines.index(".git") < lines.index(entry)
+        assert lines.index("*:Zone.Identifier") < lines.index(entry)
 
 
 # ---- nginx.conf: serving and caching ----
@@ -517,8 +524,47 @@ def test_api_location_is_a_lazy_variable_upstream_with_prefix_stripped() -> None
 def test_api_path_is_the_raw_request_uri_without_the_prefix() -> None:
     text = _conf_text()
     map_body = _block(text, "map $request_uri $api_path")
-    assert "default" in map_body and "/;" in map_body
     assert r"~^/+api(?<rest>/.*)$ $rest;" in map_body
+
+
+# The strip regex, as written in the map (python spells the group (?P<rest>)).
+_STRIP = re.compile(r"^/+api(?P<rest>/.*)$")
+
+
+def test_strip_map_default_never_sends_a_non_matching_uri_to_the_api_as_root() -> None:
+    map_body = _block(_conf_text(), "map $request_uri $api_path")
+    default = re.search(r"^\s*default\s+(\S+);", map_body, re.MULTILINE)
+    assert default, "the strip map has no default"
+    assert default.group(1) == '""'  # empty, so the /api/ location can fail closed
+
+
+def test_api_location_fails_closed_with_404_before_proxying() -> None:
+    body = _location("/api/")
+    guard = re.search(r'if \(\$api_path = ""\)\s*\{\s*return 404;\s*\}', body)
+    assert guard, "no fail-closed guard in the /api/ location"
+    assert guard.start() < body.index("proxy_pass")
+    assert "return 400" not in body
+
+
+@pytest.mark.parametrize(
+    ("raw", "stripped"),
+    [
+        ("/api/healthz", "/healthz"),
+        ("//api/healthz", "/healthz"),
+        ("/api/", "/"),
+        ("/api/search?q=caf%C3%A9%20x&limit=5", "/search?q=caf%C3%A9%20x&limit=5"),
+    ],
+)
+def test_genuine_prefixes_match_the_strip_regex(raw: str, stripped: str) -> None:
+    match = _STRIP.match(raw)
+    assert match and match.group("rest") == stripped
+
+
+@pytest.mark.parametrize("raw", ["/%61pi/healthz", "/x/../api/healthz", "/%2Fapi/x"])
+def test_non_canonical_prefixes_miss_the_strip_regex_and_so_fail_closed(
+    raw: str,
+) -> None:
+    assert _STRIP.match(raw) is None
 
 
 def test_request_id_is_set_from_nginx_and_logged() -> None:
@@ -550,3 +596,18 @@ def test_dockerfile_and_conf_files_exist_where_the_dockerfile_copies_them() -> N
     assert Path(REPO_ROOT / "ops" / "nginx.conf").is_file()
     assert Path(REPO_ROOT / "web" / "package-lock.json").is_file()
     assert Path(REPO_ROOT / "web" / "openapi.json").is_file()
+
+
+def test_api_location_caps_the_request_body_at_64k() -> None:
+    assert "client_max_body_size 64k;" in _directives_with_semicolon(_location("/api/"))
+
+
+def test_body_cap_is_on_the_proxy_location_only() -> None:
+    # The SPA/static side is GET-only, so a server- or http-level cap is inert.
+    server_level = _server().replace(_location("/api/"), "")
+    assert "client_max_body_size" not in server_level
+    assert "client_max_body_size" not in _conf_text().replace(_server(), "")
+
+
+def _directives_with_semicolon(body: str) -> str:
+    return "\n".join(f"{d};" for d in _directives(body))

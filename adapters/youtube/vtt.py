@@ -69,7 +69,7 @@ def parse_vtt(text: str) -> list[Segment]:
 def _blocks(lines: list[str]) -> list[list[str]]:
     """Split lines into blank-line separated blocks, dropping the header.
 
-    A line containing `-->` also starts a new block when the current block
+    A timing line (matching `_TIMING`) also starts a new block when the current block
     already has a timing line, so cues missing their blank-line separator
     are still found.
     """
@@ -82,7 +82,7 @@ def _blocks(lines: list[str]) -> list[list[str]]:
             if line == "":
                 in_header = False
                 continue
-            if "-->" not in line:
+            if _TIMING.fullmatch(line) is None:
                 continue
             in_header = False
         if line == "":
@@ -90,7 +90,7 @@ def _blocks(lines: list[str]) -> list[list[str]]:
                 blocks.append(current)
             current, has_timing = [], False
             continue
-        if "-->" in line:
+        if _TIMING.fullmatch(line):
             if has_timing:
                 blocks.append(current)
                 current = []
@@ -107,9 +107,9 @@ def _parse_cue(block: list[str]) -> tuple[float, float, list[_Line]] | None:
     The timing line is the first line, or the second after an identifier.
     NOTE, STYLE and REGION blocks have neither, so they are skipped here.
     """
-    if "-->" in block[0]:
+    if _TIMING.fullmatch(block[0]):
         timing_index = 0
-    elif len(block) > 1 and "-->" in block[1]:
+    elif len(block) > 1 and _TIMING.fullmatch(block[1]):
         timing_index = 1
     else:
         return None

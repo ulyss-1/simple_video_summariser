@@ -395,11 +395,18 @@ def build_registry(settings: Settings, connect: Connect) -> list[Task]:
     ]
 
 
+#: How long the scheduler keeps the liveness file fresh for one running task
+#: (#208): the longest task timeout plus a margin, so a task wedged past its
+#: own timeout stops being covered and the health check can fail.
+TASK_LIVENESS_CEILING_SEC = BACKFILL_REQUEST_LIST_TIMEOUT_SEC + 60.0
+
+
 def build_scheduler(settings: Settings) -> Scheduler:
     return Scheduler(
         build_registry(settings, connect),
         PostgresAdvisoryLocks(connect),
         recorder=PostgresRunRecorder(connect),
+        task_liveness_ceiling_sec=TASK_LIVENESS_CEILING_SEC,
     )
 
 

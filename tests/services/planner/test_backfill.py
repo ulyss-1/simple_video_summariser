@@ -551,6 +551,36 @@ def test_a_request_cancelled_during_the_listing_stays_cancelled(
     ).fetchone() == ("suspected",)
 
 
+@pytest.mark.usefixtures("small_caps")
+def test_a_cancel_during_the_listing_enqueues_no_videos_or_jobs(
+    db: psycopg.Connection[Any], settings: Settings, head_dsn: str
+) -> None:
+    from services.api.backfill import cancel_backfill
+
+    rid = _request(db)
+    catalog = FakeCatalog(db, _entries(3))
+
+    def cancel() -> None:
+        with psycopg.connect(head_dsn) as other:
+            cancel_backfill(other, CHANNEL, request_backfill_id(rid))
+
+    catalog.during = cancel
+
+    assert _run(db, catalog, settings) == 0
+
+    row = _row(db, rid)
+    assert (row.state, row.error_class) == ("failed", CANCELLED)
+    with psycopg.connect(head_dsn) as fresh:
+        videos = fresh.execute(
+            "SELECT count(*) FROM videos WHERE video_id = ANY(%s)", ([_vid(i) for i in range(3)],)
+        ).fetchone()
+        jobs = fresh.execute(
+            "SELECT count(*) FROM jobs WHERE payload->>'backfill_id' = %s",
+            (request_backfill_id(rid),),
+        ).fetchone()
+    assert videos == (0,) and jobs == (0,)
+
+
 def test_one_info_line_per_run_without_titles(
     db: psycopg.Connection[Any], settings: Settings
 ) -> None:

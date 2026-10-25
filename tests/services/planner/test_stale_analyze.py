@@ -313,14 +313,57 @@ def test_only_pending_analyze_jobs_at_another_version_are_touched(
 
 
 @pytest.mark.parametrize("key", ["default", "fake", "v1:", ":ollama", "v1", "v1:fake:extra", "v1::x"])
-def test_a_malformed_key_is_left_alone(conn: psycopg.Connection[Any], key: str) -> None:
+def test_a_malformed_key_is_dead_lettered_as_bug(conn: psycopg.Connection[Any], key: str) -> None:
     _video(conn)
     job = _job(conn, key)
-    before = _row(conn, job)
+
+    result = _resolve(conn)
+
+    assert result == StaleAnalyzeResult(0, 0, 1)
+    assert result.dead_ids == (job,)
+    row = _row(conn, job)
+    assert row["state"] == "dead"
+    assert row["finished"]
+    assert row["error_class"] == "BUG"
+    assert "dedupe_key is malformed" in row["last_error"]
+    assert row["dedupe_key"] == key
+
+
+def test_a_malformed_key_does_not_leak_into_last_error(conn: psycopg.Connection[Any]) -> None:
+    _video(conn)
+    job = _job(conn, "Bearer sk-secret-token-1234567890abcdef")
+
+    _resolve(conn)
+
+    assert "sk-secret" not in _row(conn, job)["last_error"]
+
+
+def test_a_malformed_and_a_stale_job_are_both_resolved_in_one_pass(
+    conn: psycopg.Connection[Any],
+) -> None:
+    _video(conn)
+    _video(conn, W)
+    bad = _job(conn, "v1")
+    good = _job(conn, "v1:ollama", video_id=W)
+
+    assert _resolve(conn) == StaleAnalyzeResult(1, 0, 1)
+
+    assert _row(conn, bad)["state"] == "dead"
+    assert _row(conn, good)["dedupe_key"] == "v2:ollama"
+    assert _row(conn, good)["state"] == "pending"
+
+
+def test_a_malformed_key_of_another_kind_or_state_is_left_alone(
+    conn: psycopg.Connection[Any],
+) -> None:
+    _video(conn)
+    other_kind = _job(conn, "v1", kind="ingest")
+    running = _job(conn, "v1", state="running")
+    before = [_row(conn, other_kind), _row(conn, running)]
 
     assert _resolve(conn) == StaleAnalyzeResult(0, 0)
 
-    assert _row(conn, job) == before
+    assert [_row(conn, other_kind), _row(conn, running)] == before
 
 
 def test_a_reaped_job_is_handled_by_the_next_call(conn: psycopg.Connection[Any]) -> None:
@@ -439,3 +482,36 @@ def test_the_planner_task_persists_its_rekeys_and_supersedes_on_a_fresh_connecti
         assert _row(fresh, rekeyed)["dedupe_key"] == "v2:ollama"
         gone = _row(fresh, superseded)
         assert (gone["state"], gone["last_error"]) == ("dead", SUPERSEDED)
+
+
+def test_each_malformed_dead_letter_logs_one_error_line(
+    conn: psycopg.Connection[Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    _video(conn)
+    _video(conn, W)
+    first = _job(conn, "default")
+    second = _job(conn, "v1", video_id=W)
+
+    with caplog.at_level(logging.DEBUG):
+        resolve_stale_analyze_jobs(_queue(conn), _settings())
+
+    records = [r for r in caplog.records if r.getMessage() == "job dead-lettered"]
+    assert sorted(r.__dict__["job_id"] for r in records) == sorted([first, second])
+    for r in records:
+        assert r.levelno == logging.ERROR
+        assert r.__dict__["error_class"] == "BUG"
+        assert r.__dict__["kind"] == "analyze"
+        assert r.__dict__["alert"] is False
+        assert "dedupe_key is malformed" in r.__dict__["last_error"]
+
+
+def test_a_pass_with_nothing_dead_logs_no_dead_letter_line(
+    conn: psycopg.Connection[Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    _video(conn)
+    _job(conn, "v1:fake")
+
+    with caplog.at_level(logging.DEBUG):
+        resolve_stale_analyze_jobs(_queue(conn), _settings())
+
+    assert [r for r in caplog.records if r.getMessage() == "job dead-lettered"] == []

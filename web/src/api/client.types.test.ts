@@ -44,7 +44,7 @@ async function typeCases(): Promise<void> {
   await api.get('/videos/{video_id}', { params: { path: { video_id: 'a', extra: 'b' } } })
   // @ts-expect-error path params on a path without template segments
   await api.get('/healthz', { params: { path: { id: 1 } } })
-  await api.post('/ops/jobs/{id}/retry', { params: { path: { id: 7 } } })
+  await api.post('/ops/jobs/{id}/retry', { params: { path: { id: 7 } }, body: {} })
 
   // -- query ----------------------------------------------------------------------
   await api.get('/videos')
@@ -72,8 +72,6 @@ async function typeCases(): Promise<void> {
   await api.post('/channels', {})
   // @ts-expect-error a body of the wrong shape
   await api.post('/channels', { body: { nope: 1 } })
-  // @ts-expect-error a body on an operation with no request body
-  await api.post('/ops/jobs/{id}/retry', { params: { path: { id: 7 } }, body: {} })
   // @ts-expect-error a body on a GET
   await api.get('/healthz', { body: {} })
 
@@ -86,7 +84,7 @@ async function typeCases(): Promise<void> {
   const channel = await api.post('/channels', { body: { url: 'UCabc' } })
   expectTypeOf(channel).toEqualTypeOf<components['schemas']['ChannelRegistration']>()
   // @ts-expect-error a field the schema does not have
-  health.nope
+  void health.nope
 
   // -- channel catalog (#242) ----------------------------------------------------------
   const catalog = await api.get('/channels/{channel_id}/catalog', {

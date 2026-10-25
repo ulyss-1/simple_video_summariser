@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 import pytest
 
 from common.errors import Defer
-from common.queue import Job
+from common.queue import Job, JobQueue, PostgresQueue
 from services.cli.inprocess import InProcessQueue
 
 VID = "iG9CE55wbtY"
@@ -149,3 +149,59 @@ def test_a_dedupe_key_claims_only_a_job_with_exactly_that_key() -> None:
     with queue.claim(("analyze",), worker="cli", dedupe_key="v2:ollama") as job:
         assert job is not None and job.id == second
     assert claim_one(queue, ("analyze",)) is not None  # the v1 job was left pending
+
+
+# -- the fuller JobQueue port (issue #201) ------------------------------------
+
+# mypy checks that both implementations satisfy the port; no runtime assertion
+# is needed, the annotated bindings are the guard.
+_ports: list[JobQueue] = [InProcessQueue(), PostgresQueue.__new__(PostgresQueue)]
+
+
+def test_force_pending_merges_force_and_raises_priority_of_a_pending_job() -> None:
+    queue = InProcessQueue()
+    job_id = queue.enqueue("analyze", VID, dedupe_key="k", payload={"a": 1}, priority=0)
+    assert job_id is not None
+
+    assert queue.force_pending(job_id, 10) is True
+
+    job = claim_one(queue)
+    assert job is not None
+    assert job.payload == {"a": 1, "force": True}
+    assert job.priority == 10
+
+
+def test_force_pending_never_lowers_priority_and_misses_an_unknown_or_running_job() -> None:
+    queue = InProcessQueue()
+    job_id = queue.enqueue("analyze", VID, priority=20)
+    assert job_id is not None
+    assert queue.force_pending(job_id, 10) is True
+    assert queue.force_pending(job_id + 99, 10) is False
+
+    with queue.claim(("analyze",), worker="cli") as job:
+        assert job is not None
+        assert job.priority == 20
+        assert queue.force_pending(job_id, 30) is False
+
+
+def test_raise_priority_raises_only_the_videos_pending_jobs_below_the_priority() -> None:
+    queue = InProcessQueue()
+    low = queue.enqueue("ingest", VID, priority=0)
+    high = queue.enqueue("analyze", VID, dedupe_key="k", priority=15)
+    other = queue.enqueue("ingest", "OTHERVIDEO1", dedupe_key="o", priority=0)
+    assert low is not None and high is not None and other is not None
+
+    assert queue.raise_priority(VID, 10) == [low]
+
+    first = claim_one(queue, ("ingest",))
+    assert first is not None and first.id == low and first.priority == 10
+    assert queue.raise_priority(VID, 10) == []
+
+
+def test_fail_job_is_a_no_op_because_nothing_is_retried() -> None:
+    queue = InProcessQueue()
+    queue.enqueue("ingest", VID)
+    job = claim_one(queue)
+    assert job is not None
+    queue.fail_job(job, "cli", RuntimeError("x"))
+    assert queue.pending == 0

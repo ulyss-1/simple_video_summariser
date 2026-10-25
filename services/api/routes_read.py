@@ -39,6 +39,7 @@ from pydantic import (
 )
 from starlette.convertors import Convertor, register_url_convertor
 
+from common.config import get_settings, summarizer_model
 from common.models import VideoSummary
 from common.repo.analyses import (
     get_analysis,
@@ -61,6 +62,13 @@ from services.api.deps import (
     transcribe_rtf_history,
 )
 from services.api.render import render_analysis_html
+
+
+def _display_preference() -> tuple[str, str]:
+    """(model, prompt_version) of the configured summarizer, so the displayed
+    analysis prefers the production one over eval/re-analysis runs (#146)."""
+    settings = get_settings()
+    return summarizer_model(settings), settings.PROMPT_VERSION
 
 
 class _AnySegment(Convertor[str]):
@@ -359,6 +367,7 @@ def get_videos(
     conn: ReadConn,
 ) -> schemas.VideoList:
     """The filtered library in the requested multi-column order."""
+    prefer_model, prefer_prompt_version = _display_preference()
     page = list_videos(
         conn,
         channel_id=params.channel,
@@ -368,6 +377,8 @@ def get_videos(
         sorts=params.sort_sequence,
         offset=params.offset,
         limit=params.limit,
+        prefer_model=prefer_model,
+        prefer_prompt_version=prefer_prompt_version,
     )
     return schemas.VideoList(
         items=[schemas.video_item(v) for v in page.items],
@@ -441,13 +452,18 @@ def _transcribe_progress(
 @router.get("/videos/{video_id}", response_model=schemas.VideoDetail)
 def get_video_detail(video_id: VideoId, conn: ReadConn) -> schemas.VideoDetail:
     """One video, its status, best transcript (D2) and latest analysis."""
-    video = get_video(conn, video_id)
+    prefer_model, prefer_prompt_version = _display_preference()
+    video = get_video(
+        conn, video_id, prefer_model=prefer_model, prefer_prompt_version=prefer_prompt_version
+    )
     if video is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, VIDEO_NOT_FOUND)
     return schemas.video_detail(
         video,
         best_transcript_info(conn, video_id),
-        latest_analysis_run(conn, video_id),
+        latest_analysis_run(
+            conn, video_id, prefer_model=prefer_model, prefer_prompt_version=prefer_prompt_version
+        ),
         _transcribe_progress(conn, video),
     )
 
@@ -505,7 +521,10 @@ def get_video_render(
     if video is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, VIDEO_NOT_FOUND)
     if params.analysis_id is None:
-        analysis = latest_analysis(conn, video_id)
+        prefer_model, prefer_prompt_version = _display_preference()
+        analysis = latest_analysis(
+            conn, video_id, prefer_model=prefer_model, prefer_prompt_version=prefer_prompt_version
+        )
         if analysis is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, NO_ANALYSIS_YET)
     else:

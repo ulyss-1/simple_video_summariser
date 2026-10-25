@@ -13,12 +13,15 @@ therefore hands yt-dlp a private, writable, short-lived copy.
 
 from __future__ import annotations
 
+import ast
 import logging
 import os
+import shutil
 import stat
 import subprocess
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from urllib.parse import quote, quote_plus
 
 import pytest
 
@@ -26,7 +29,13 @@ from adapters.youtube.audio import YouTubeAudio
 from adapters.youtube.catalog import YouTubeCatalog
 from adapters.youtube.metadata import YouTubeMetadata
 from adapters.youtube.subtitles import YouTubeSubtitles
-from adapters.youtube.ytdlp import CookieFileError, check_cookie_file, run_ytdlp
+from adapters.youtube.ytdlp import (
+    COOKIE_TMP_PREFIX,
+    CookieFileError,
+    check_cookie_file,
+    run_ytdlp,
+    sweep_stale_cookie_dirs,
+)
 from common.errors import JobError, ToolFailureError, TransientNetworkError, classify
 from tests.adapters.youtube.fakes import completed
 
@@ -152,14 +161,109 @@ def test_the_metadata_upcoming_retry_also_passes_cookies(
     assert len(spy.seen) == 2
 
 
+SANCTIONED_BUILDER = "adapters/youtube/ytdlp.py"
+SCANNED_DIRS = ("adapters", "services", "common")
+
+
+def _runs(node: ast.expr) -> list[str]:
+    """String constants of ``node``, with adjacent ones of a ``+`` chain joined.
+
+    ``"--coo" + "kies" + p`` gives ``["--cookies"]``; ``"--cookies=" + p`` gives
+    ``["--cookies="]``. Anything that is not a string or a ``+`` chain gives [].
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [node.value]
+    if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add)):
+        return []
+    leaves: list[ast.expr] = []
+    stack: list[ast.expr] = [node]
+    while stack:
+        n = stack.pop()
+        if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Add):
+            stack.extend((n.right, n.left))
+        else:
+            leaves.append(n)
+    runs: list[str] = []
+    joined = False
+    for leaf in leaves:
+        if isinstance(leaf, ast.Constant) and isinstance(leaf.value, str):
+            if joined:
+                runs[-1] += leaf.value
+            else:
+                runs.append(leaf.value)
+            joined = True
+        else:
+            joined = False
+    return runs
+
+
+def cookie_flag_offenders(sources: Mapping[str, str]) -> list[str]:
+    """Paths (``dir/file.py`` keys) building ``--cookies`` outside the one builder.
+
+    Pure over ``{path: source}``. Parses each file and joins constant string
+    segments, so ``"--coo" "kies"``, ``"--coo" + "kies"``, ``"--cookies" + var``
+    and ``"--coo" + "kies" + p`` are all caught along with the plain literal.
+    Docstrings (bare string statements) are prose, not argv, and are skipped.
+    """
+    offenders = []
+    for path, source in sources.items():
+        if path == SANCTIONED_BUILDER:
+            continue
+        tree = ast.parse(source)
+        docstrings = {id(n.value) for n in ast.walk(tree) if isinstance(n, ast.Expr)}
+        inner = {
+            id(c)
+            for n in ast.walk(tree)
+            if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Add)
+            for c in (n.left, n.right)
+        }
+        for node in ast.walk(tree):
+            if id(node) in docstrings or id(node) in inner or not isinstance(node, ast.expr):
+                continue
+            if any("--cookies" in run for run in _runs(node)):
+                offenders.append(path)
+                break
+    return offenders
+
+
+def _repo_sources() -> dict[str, str]:
+    root = Path(__file__).resolve().parents[3]
+    return {
+        p.relative_to(root).as_posix(): p.read_text(encoding="utf-8")
+        for d in SCANNED_DIRS
+        for p in (root / d).rglob("*.py")
+    }
+
+
 def test_cookies_are_added_by_the_shared_helper_only() -> None:
-    adapters = Path(__file__).resolve().parents[3] / "adapters" / "youtube"
-    offenders = [
-        p.name
-        for p in adapters.glob("*.py")
-        if p.name != "ytdlp.py" and "--cookies" in p.read_text(encoding="utf-8")
-    ]
-    assert offenders == []
+    sources = _repo_sources()
+    assert SANCTIONED_BUILDER in sources
+    assert cookie_flag_offenders(sources) == []
+
+
+def test_the_scan_ignores_unrelated_mixed_concatenation() -> None:
+    assert cookie_flag_offenders({"adapters/a.py": 'X = ["--coo" + v + "kies", "--cook" + p]\n'}) == []
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        'ARGS = ["--cookies", path]\n',
+        'ARGS = ["--coo" "kies", path]\n',
+        'ARGS = ["--coo" + "kies", path]\n',
+        'ARGS = ["-" + "-" + "coo" "kies"]\n',
+        'ARGS = ["--cookies" + var]\n',
+        'ARGS = ["--cookies=" + p]\n',
+        'ARGS = ["--coo" + "kies" + p]\n',
+    ],
+)
+@pytest.mark.parametrize(
+    "fake_path",
+    ["adapters/other/x.py", "services/api/y.py", "common/z.py", "adapters/youtube/audio.py"],
+)
+def test_the_scan_flags_a_planted_second_call_site(snippet: str, fake_path: str) -> None:
+    sources = {SANCTIONED_BUILDER: snippet, fake_path: snippet, "adapters/ok.py": "X = 1\n"}
+    assert cookie_flag_offenders(sources) == [fake_path]
 
 
 def test_yt_dlp_gets_a_private_writable_copy_not_the_read_only_original(
@@ -318,3 +422,146 @@ def test_check_never_echoes_the_contents(tmp_path: Path) -> None:
     with pytest.raises(CookieFileError) as info:
         check_cookie_file(tmp_path / "SENTINEL-missing.txt")
     assert SECRET_VALUE not in str(info.value)
+
+
+# --- issue #188: redaction evasions ----------------------------------------
+
+
+def _leak(cookie_text: str, stderr: str, tmp_path: Path) -> str:
+    path = tmp_path / "jar.txt"
+    path.write_text(cookie_text, encoding="utf-8")
+
+    def runner(argv: Sequence[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
+        return completed(returncode=1, stderr=stderr)
+
+    with pytest.raises(JobError) as info:
+        run_ytdlp([], timeout=5, runner=runner, cookie_file=path)
+    return repr(info.value) + str(info.value)
+
+
+def _line(name: str, value: str, prefix: str = "") -> str:
+    return f"{prefix}.youtube.com\tTRUE\t/\tTRUE\t2000000000\t{name}\t{value}\n"
+
+
+@pytest.mark.parametrize("style", [quote, quote_plus])
+def test_a_percent_encoded_value_is_redacted(style: Callable[..., str], tmp_path: Path) -> None:
+    value = "SENTINEL/a=b:c d+e"
+    encoded = style(value, safe="")
+    assert encoded != value
+    text = _leak(_line("SENTINEL_n", value), f"ERROR: bad {encoded} here", tmp_path)
+    assert encoded not in text
+    assert "SENTINEL" not in text
+
+
+def test_a_short_value_on_a_token_boundary_is_redacted(tmp_path: Path) -> None:
+    text = _leak(_line("sn", "sv42"), "ERROR: bad cookie sv42 rejected (sn)", tmp_path)
+    assert "sv42" not in text
+    assert "(sn)" not in text
+
+
+def test_a_short_value_inside_a_larger_token_is_left_alone(tmp_path: Path) -> None:
+    text = _leak(_line("sn", "sv42"), "ERROR: sv4200 and xsv42 and a-sv42 kept", tmp_path)
+    assert "sv4200 and xsv42 and a-sv42 kept" in text
+
+
+def test_a_space_separated_echo_is_redacted_field_by_field(tmp_path: Path) -> None:
+    stderr = "ERROR: parsed SENTINEL_name SENTINEL-value-1 then SENTINEL-value-1 again"
+    text = _leak(_line("SENTINEL_name", "SENTINEL-value-1"), stderr, tmp_path)
+    assert "SENTINEL" not in text
+
+
+def test_a_space_separated_cookie_line_in_the_file_is_split_by_fields(tmp_path: Path) -> None:
+    jar = ".youtube.com TRUE / TRUE 2000000000 SENTINEL_name SENTINEL-value-2\n"
+    text = _leak(jar, "ERROR: bad SENTINEL-value-2 / SENTINEL_name", tmp_path)
+    assert "SENTINEL" not in text
+
+
+def test_every_cookie_of_several_is_redacted(tmp_path: Path) -> None:
+    jar = (
+        "# Netscape HTTP Cookie File\n"
+        + _line("n1", "sv99")
+        + _line("SENTINEL_n2", "SENTINEL/two=2")
+        + _line("SENTINEL_n3", "SENTINEL-three-3", prefix="#HttpOnly_")
+    )
+    stderr = (
+        f"ERROR: sv99 {quote('SENTINEL/two=2', safe='')} "
+        f"{quote_plus('SENTINEL/two=2')} SENTINEL-three-3 SENTINEL_n3"
+    )
+    text = _leak(jar, stderr, tmp_path)
+    assert "sv99" not in text
+    assert "SENTINEL" not in text
+
+
+NOW = 1_000_000.0
+GRACE = 60.0
+
+
+def _seed(root: Path, name: str, age: float) -> Path:
+    d = root / name
+    d.mkdir()
+    (d / "cookies.txt").write_text(COOKIE_LINE)
+    os.utime(d, (NOW - age, NOW - age))
+    return d
+
+
+def _sweep(root: Path) -> int:
+    return sweep_stale_cookie_dirs(root, grace_seconds=GRACE, clock=lambda: NOW)
+
+
+def test_sweep_removes_only_stale_prefixed_dirs(tmp_path: Path) -> None:
+    root = tmp_path / "tmp"
+    root.mkdir()
+    stale = _seed(root, f"{COOKIE_TMP_PREFIX}old", GRACE + 1)
+    fresh = _seed(root, f"{COOKIE_TMP_PREFIX}new", GRACE - 1)
+    other = _seed(root, "something-else-old", GRACE + 1)
+    plain_file = root / f"{COOKIE_TMP_PREFIX}file"
+    plain_file.write_text("x")
+    os.utime(plain_file, (NOW - GRACE - 1, NOW - GRACE - 1))
+
+    assert _sweep(root) == 1
+
+    assert not stale.exists()
+    assert fresh.exists() and other.exists() and plain_file.exists()
+    assert root.exists()
+
+
+def test_sweep_logs_only_an_aggregate_count(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    root = tmp_path / "tmp"
+    root.mkdir()
+    stale = _seed(root, f"{COOKIE_TMP_PREFIX}old", GRACE + 1)
+    with caplog.at_level(logging.DEBUG):
+        _sweep(root)
+    rendered = "\n".join(
+        f"{r.getMessage()} {r.__dict__} {r.exc_text}" for r in caplog.records
+    )
+    assert "swept 1 stale cookie dirs" in rendered
+    assert COOKIE_TMP_PREFIX not in rendered
+    assert stale.name not in rendered
+    assert "SENTINEL" not in rendered
+
+
+def test_sweep_tolerates_a_dir_that_cannot_be_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    root = tmp_path / "tmp"
+    root.mkdir()
+    bad = _seed(root, f"{COOKIE_TMP_PREFIX}bad", GRACE + 1)
+    good = _seed(root, f"{COOKIE_TMP_PREFIX}good", GRACE + 1)
+    real = shutil.rmtree
+
+    def flaky(path: str | Path, *a: object, **k: object) -> None:
+        if Path(path) == bad:
+            raise PermissionError(13, "denied", str(path))
+        real(path)
+
+    monkeypatch.setattr(shutil, "rmtree", flaky)
+    with caplog.at_level(logging.DEBUG):
+        assert _sweep(root) == 1
+    assert bad.exists() and not good.exists()
+    assert COOKIE_TMP_PREFIX not in "\n".join(r.getMessage() for r in caplog.records)
+
+
+def test_sweep_of_a_missing_root_is_a_no_op(tmp_path: Path) -> None:
+    assert _sweep(tmp_path / "absent") == 0

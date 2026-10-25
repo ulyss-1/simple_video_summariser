@@ -15,6 +15,7 @@ from typing import Any, cast
 
 import psycopg
 import pytest
+import structlog.testing
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
@@ -241,6 +242,7 @@ def test_healthz_keeps_its_own_503_body_on_a_pool_timeout(
     timeouts = [r for r in logs.records() if r.get("event") == "db.pool_unavailable"]
     assert timeouts and timeouts[0]["request_id"] == "req-pool-1"
     assert timeouts[0]["error"] == "PoolTimeout"
+    assert timeouts[0]["reason"] == "pool_exhausted"
 
 
 def test_metrics_keeps_its_fixed_503_body_on_a_pool_timeout(app: FastAPI, use_pool: Any) -> None:
@@ -306,4 +308,114 @@ def test_an_unreachable_database_times_out_to_503_and_leaks_neither_dsn_nor_pass
     assert SECRET not in everything
     assert UNREACHABLE_DSN not in everything
     assert "postgresql://" not in everything
-    assert any(r.get("event") == "db.pool_unavailable" for r in logs.records())
+    unavailable = [r for r in logs.records() if r.get("event") == "db.pool_unavailable"]
+    assert unavailable
+    assert all(r["reason"] == "db_unreachable" for r in unavailable)
+
+
+# --- the 503 cause: exhausted pool vs unreachable database (#218) ---------------
+
+
+def _pool_unavailable(logs: LogSink) -> list[dict[str, Any]]:
+    return [r for r in logs.records() if r.get("event") == "db.pool_unavailable"]
+
+
+def _get_503(app: FastAPI, path: str = "/videos") -> Any:
+    with TestClient(app) as client:
+        return client.get(path)
+
+
+def test_the_two_causes_log_distinct_reasons_and_answer_the_same_503(
+    app: FastAPI, use_pool: Any, logs: LogSink
+) -> None:
+    exhausted = FakePool(
+        getconn_error=PoolTimeout("t"), stats={"pool_size": 2, "pool_available": 0}
+    )
+    unreachable = FakePool(
+        getconn_error=PoolTimeout("t"),
+        stats={"pool_size": 0, "pool_available": 0, "connections_errors": 3},
+    )
+    use_pool(exhausted)
+    first = _get_503(app)
+    use_pool(unreachable)
+    second = _get_503(app)
+
+    reasons = [r["reason"] for r in _pool_unavailable(logs)]
+    assert reasons == ["pool_exhausted", "db_unreachable"]
+    assert first.status_code == second.status_code == 503
+    assert first.json() == second.json()
+
+
+@pytest.mark.parametrize(
+    ("stats", "reason"),
+    [
+        ({"pool_size": 1, "pool_available": 0}, "pool_exhausted"),
+        ({"pool_size": 0, "pool_available": 0}, "db_unreachable"),
+    ],
+)
+def test_neither_cause_leaks_the_dsn_password_or_host(
+    app: FastAPI, use_pool: Any, logs: LogSink, stats: dict[str, int], reason: str
+) -> None:
+    use_pool(FakePool(getconn_error=PoolTimeout("t"), stats=stats))
+
+    response = _get_503(app)
+
+    assert [r["reason"] for r in _pool_unavailable(logs)] == [reason]
+    everything = logs.text() + response.text
+    for leak in ("postgresql://", SECRET, "127.0.0.1", reason):
+        assert leak not in response.text
+    assert SECRET not in everything
+    assert "postgresql://" not in everything
+    assert "127.0.0.1" not in everything
+
+
+@pytest.mark.parametrize(
+    ("stats", "reason"),
+    [
+        # Closed port with the real pool: size counts attempts, none completed.
+        ({"pool_size": 2, "pool_available": 0, "connections_errors": 2}, "db_unreachable"),
+        # Some connects completed, others failed: capacity, not outage.
+        (
+            {"pool_size": 2, "pool_available": 0, "connections_errors": 1, "connections_ms": 9},
+            "pool_exhausted",
+        ),
+    ],
+)
+def test_failed_connect_counters_separate_an_outage_from_a_busy_pool(
+    stats: dict[str, int], reason: str
+) -> None:
+    pool = FakePool(getconn_error=PoolTimeout("t"), stats=stats)
+
+    with structlog.testing.capture_logs() as captured, pytest.raises(deps.DatabaseUnavailable):
+        next(deps.get_conn(request_with(pool)))
+
+    assert captured[0]["reason"] == reason
+
+
+def test_an_established_but_dying_pool_counts_as_exhausted() -> None:
+    # Ambiguous case: connections exist (pool_size >= 1) but none is free.
+    pool = FakePool(getconn_error=PoolTimeout("t"), stats={"pool_size": 1, "pool_available": 0})
+
+    with structlog.testing.capture_logs() as captured, pytest.raises(deps.DatabaseUnavailable):
+        next(deps.get_conn(request_with(pool)))
+
+    assert captured[0]["reason"] == "pool_exhausted"
+
+
+@pytest.mark.parametrize(
+    "pool",
+    [
+        FakePool(getconn_error=PoolTimeout("t"), stats_error=RuntimeError("no stats")),
+        FakePool(getconn_error=PoolTimeout("t"), stats={}),
+        FakePool(getconn_error=PoolClosed("c")),
+        FakePool(getconn_error=PoolTimeout("t"), stats={"pool_size": 1, "pool_available": 1}),
+    ],
+    ids=["stats-raises", "stats-empty", "pool-closed", "idle-but-timed-out"],
+)
+def test_an_unclassifiable_failure_degrades_to_the_plain_503(pool: FakePool) -> None:
+    with structlog.testing.capture_logs() as captured, pytest.raises(deps.DatabaseUnavailable):
+        next(deps.get_conn(request_with(pool)))
+
+    assert captured[0]["event"] == "db.pool_unavailable"
+    assert "reason" not in captured[0]
+    assert pool.returned == []

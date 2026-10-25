@@ -69,7 +69,7 @@ class Fakes:
         self.calls.append(("meta", video_id))
         return self.videos.get(video_id)
 
-    def latest_analysis(self, conn: Any, video_id: str) -> Analysis | None:
+    def latest_analysis(self, conn: Any, video_id: str, **_prefer: Any) -> Analysis | None:
         self.calls.append(("latest", video_id))
         mine = [a for a in self.analyses if a.video_id == video_id]
         return max(mine, key=lambda a: a.created_at or datetime.min.replace(tzinfo=UTC), default=None)

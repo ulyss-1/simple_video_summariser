@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
-import { StrictMode } from 'react'
+import { StrictMode, useEffect } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Player } from './Player'
 import { PlayerProvider, usePlayer } from './PlayerContext'
@@ -219,9 +219,9 @@ describe('Player ignores hostile messages', () => {
   it.each([
     ['other origin', (_e: Window) => ({ data: json('onReady'), origin: 'https://www.youtube.com', source: _e })],
     ['evil origin', (_e: Window) => ({ data: json('onReady'), origin: 'https://evil.example', source: _e })],
-    ['window itself as source', (_e: Window) => ({ data: json('onReady'), origin: ORIGIN, source: window })],
-    ['another iframe as source', (_e: Window) => ({ data: json('onReady'), origin: ORIGIN, source: otherFrame() })],
-    ['null source', (_e: Window) => ({ data: json('onReady'), origin: ORIGIN, source: null })],
+    ['window itself as source', () => ({ data: json('onReady'), origin: ORIGIN, source: window })],
+    ['another iframe as source', () => ({ data: json('onReady'), origin: ORIGIN, source: otherFrame() })],
+    ['null source', () => ({ data: json('onReady'), origin: ORIGIN, source: null })],
     ['non-string data', (_e: Window) => ({ data: { event: 'onReady' }, origin: ORIGIN, source: _e })],
     ['invalid JSON', (_e: Window) => ({ data: '{oops', origin: ORIGIN, source: _e })],
     ['JSON null', (_e: Window) => ({ data: 'null', origin: ORIGIN, source: _e })],
@@ -378,7 +378,10 @@ describe('Player unmount', () => {
     const remove = vi.spyOn(window, 'removeEventListener')
     let captured: ((s: number) => void) | undefined
     function Capture() {
-      captured = usePlayer()?.seekTo
+      const seekTo = usePlayer()?.seekTo
+      useEffect(() => {
+        captured = seekTo
+      })
       return null
     }
     const view = render(

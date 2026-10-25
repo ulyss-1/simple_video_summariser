@@ -253,9 +253,29 @@ class JobQueue(Protocol):
     def enqueue(self, kind: str, video_id: str, *, dedupe_key: str = "default",
                 payload: dict | None = None, priority: int = 0,
                 run_after: datetime | None = None) -> int | None: ...
-    def claim(self, kinds: list[str]) -> AbstractContextManager[Job | None]: ...
-    def heartbeat(self, job_id: int) -> None: ...
+    def claim(self, kinds: Sequence[str], *, worker: str,
+              dedupe_key: str | None = None) -> AbstractContextManager[Job | None]: ...
+    def heartbeat(self, job_id: int, worker: str) -> bool: ...
+    def reap_stale(self, older_than_sec: int | None = None) -> int: ...
+    def fail_job(self, job: Job, worker: str, exc: BaseException) -> None: ...
+    def force_pending(self, job_id: int, priority: int) -> bool: ...
+    def raise_priority(self, video_id: str, priority: int) -> list[int]: ...
 ```
+
+**What belongs on `JobQueue` (#201).** A queue operation is on the Protocol when
+a backend-agnostic caller depends on it through the port: the workers the CLI
+runs over `InProcessQueue`, and the API write-path functions (`submit_video`,
+`request_reanalysis`), which take a queue port by construction. Operations
+reached only by code that legitimately builds a `PostgresQueue` (operator
+sweeps and lifecycle) stay off it.
+
+- On the port: `enqueue`, `claim`, `heartbeat`, `reap_stale`, `force_pending`,
+  `raise_priority`, `fail_job`.
+- `fail_job` is on the port: the worker's runtime-limit watchdog (#66) calls it
+  through a `JobQueue` reference, so the former `getattr` fallback is gone.
+  `InProcessQueue.fail_job` is a no-op, matching its no-retry contract.
+- `PostgresQueue` only: `close` (#106), `retry_dead`, `retry_dead_matching`,
+  `cancel_backfill`, `resolve_stale_analyze` (ops routes and planner loop).
 
 `ChunkBatchSummarizer` (#88) is an optional extension: it adds
 `analyze_chunks(chunks, roster, meta) -> list[ChunkAnalysis]`, one analysis per
@@ -445,6 +465,9 @@ a job just to defer it. Each planner tick, `stale_analyze` finds `pending`
 `analyze` jobs on any other version and re-keys each to the current version in
 place (keeping its priority), or marks it `dead` as superseded when the target
 key already has work or the video already has an analysis at that version (#100).
+A `pending` `analyze` job whose key is malformed (fails `^[^:]+:[^:]+$`, so no
+analyzer can ever claim it) is dead-lettered as `BUG` by the same pass, with a
+fixed, redacted `last_error` that does not echo the key (#200).
 
 ### Reaping (C2)
 
@@ -577,6 +600,13 @@ CREATE INDEX search_docs_fts_idx ON search_docs USING GIN (fts);
 
 Query weights are `'{0.1, 0.2, 0.4, 1.0}'` (D, C, B, A).
 
+Highlighted excerpts for title and analysis matches (#169, migration
+`0022_search_analysis_text`): `search_docs.analysis_text TEXT NOT NULL DEFAULT ''`
+holds the plain text behind weights B and C (latest TL;DR, topic titles and
+summaries, claim texts, `videos.description`), one per line, written by
+`refresh_search_doc` beside `fts`. `ts_headline` (English query) runs over it and
+over `videos.title`; excerpts have `start_sec: null` and precede the transcript's.
+
 ```sql
 -- ============ chunks (D9c) ============
 
@@ -621,6 +651,15 @@ CREATE TABLE analyses (
 );
 CREATE INDEX analyses_video_idx ON analyses (video_id, created_at DESC);
 CREATE INDEX analyses_version_idx ON analyses (prompt_version, model);
+-- Which analysis a video DISPLAYS when it has several (#146): the read layer
+-- prefers the newest analysis whose (model, prompt_version) match the
+-- configured summarizer (common.config.summarizer_model + PROMPT_VERSION),
+-- falling back to the newest of any kind. So an eval run (#62) or a manual
+-- re-analysis with another model does not replace the production one in the
+-- Library, the detail view, the SSR render page or the CLI. One soft-preference
+-- ORDER BY, threaded through latest_analysis, latest_analysis_run and the
+-- Library's latest_analysis_at, so the paths never disagree; the full history
+-- is still listed newest-first at GET /videos/{id}/analyses.
 
 CREATE TABLE topics (
     id          BIGSERIAL PRIMARY KEY,
@@ -1050,7 +1089,9 @@ changed something" from "my LLM is down" at a glance.
 
 A NULL `error_class` on a `pending`/`dead` job means the reaper reset it after a
 lost heartbeat (`last_error = 'worker lost: heartbeat stale'`); it is not a
-class and has no retry policy.
+class and has no retry policy. A job superseded by `stale_analyze` (§11.6 of
+the queue) also has a NULL class; an `analyze` job with a malformed
+`dedupe_key` is dead-lettered by that resolution as `BUG` (#200).
 
 ---
 
@@ -1169,7 +1210,7 @@ than reading `os.environ` directly.
 | `AUTO_CAPTION_FALLBACK` | `1` | transcriber, planner |
 | `SKIP_SHORTS` | `0` | planner (poll), transcriber (ingest): `1` records YouTube Shorts found by RSS polling or backfill as `unavailable = 'short'` and never processes them; `0` (default, owner decision on #80) includes them. Never applies to `adhoc` submissions. A global flag for now; the owner intends to promote it to a per-channel choice once per-channel settings exist (§7.1, Shorts policy) |
 | `AUDIO_KEEP` / `AUDIO_TTL_DAYS` / `AUDIO_MAX_GB` | `1` / `30` / `20` | transcriber, planner |
-| `AUDIO_MIN_FREE_GB` / `AUDIO_MIN_FREE_PCT` | `2` / `5` | planner: free-space floor on the `AUDIO_DIR` volume (#105). When free space is below the larger of the two, audio retention evicts the oldest audio beyond what `AUDIO_MAX_GB` would, never a running job's. `0` for either disables that half; `AUDIO_MIN_FREE_PCT` is `0 <= x < 100`. A floor at or above the volume size evicts nothing and logs `planner.audio_retention.free_space_floor_invalid` |
+| `AUDIO_MIN_FREE_GB` / `AUDIO_MIN_FREE_PCT` | `2` / `5` | planner: free-space floor on the `AUDIO_DIR` volume (#105). When free space is below the larger of the two, audio retention evicts the oldest audio beyond what `AUDIO_MAX_GB` would, never a running job's. `0` for either disables that half; `AUDIO_MAX_GB` and `AUDIO_MIN_FREE_GB` are finite floats (`inf`/`NaN`/negative fail at startup, #197); `AUDIO_MIN_FREE_PCT` is `0 <= x < 100`. A floor at or above the volume size evicts nothing and logs `planner.audio_retention.free_space_floor_invalid` |
 | `POLL_INTERVAL_SEC` | `3600` | planner |
 | `RECONCILE_INTERVAL_SEC` | `21600` | planner: how often each active channel's newest uploads are checked against the RSS feed for videos it dropped (#93) |
 | `BACKFILL_INTERVAL_SEC` | `60` | planner: how often the `channel_backfill` task takes one bounded slice of the oldest pending backfill request (#115) |
@@ -1910,6 +1951,7 @@ gauges, no tracing stack.
 | Summarizer | `FakeSummarizer` returning canned JSON; plus schema-violation fixtures |
 | Error classification | Table-driven over real yt-dlp/provider error strings |
 | API | FastAPI `TestClient` against a seeded database |
+| Browser (#177) | Playwright (`@playwright/test`, chromium only) in `web/e2e/` against `vite preview` of the production build; offline, `/api` stubbed |
 | Quality (manual) | Golden set of ~20 videos; compare runs via the Compare view (D5) |
 
 The quality evaluation is deliberately manual. Automating "is this summary

@@ -410,6 +410,39 @@ def test_unknown_speakers_are_shown_as_unattributed_in_item_lines() -> None:
     assert "· unknown ·" not in out
 
 
+def test_only_exact_lowercase_unknown_is_relabelled_unattributed() -> None:
+    # Exact match, not case-insensitive and not stripped: "Unknown", "UNKNOWN"
+    # and " unknown" are ordinary speaker names and are left as-is; only the
+    # exact lowercase "unknown" is relabelled and counted. This must match
+    # services/api/render.py (_UNKNOWN) and web/src/components/ClaimItem.tsx so
+    # the three implementations cannot drift. #195.
+    claims = (
+        claim("a", 10, "unknown"),
+        claim("b", 20, "Unknown"),
+        claim("c", 30, "UNKNOWN"),
+        claim("d", 40, " unknown"),
+    )
+    out = render_report(LABEL_A, LABEL_B, [entry(run(LABEL_A, claims=claims), None)])
+
+    # Item-line relabel (one exact match); a case-insensitive comparison would
+    # relabel three and strip() two.
+    assert out.count("· Unattributed ·") == 1
+    # Unknown-count cell: 1 of 4 claims. "3/4" or "2/4" would mean the count
+    # used a loosened comparison.
+    assert "| 1/4 |" in out
+
+
+def test_window_headings_in_the_rendered_report_are_in_ascending_order() -> None:
+    # Reversing the window order (in group_windows or in the renderer) leaves
+    # every heading present but out of order, so a presence-only check cannot
+    # see it. Pin the order explicitly. #195.
+    a = run(LABEL_A, claims=(claim("early", 10), claim("mid", 400), claim("late", 700)))
+    out = render_report(LABEL_A, LABEL_B, [entry(a, None)])
+
+    positions = [out.index(f"#### {window_label(k)}") for k in (0, 1, 2)]
+    assert positions == sorted(positions)
+
+
 def test_a_zero_cost_is_shown_not_called_unrecorded() -> None:
     out = render_report(LABEL_A, LABEL_B, [entry(run(LABEL_A, cost=0.0), None)])
     assert "0.0000" in out

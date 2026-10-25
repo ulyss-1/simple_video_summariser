@@ -1,14 +1,16 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, rethrowHttp } from '../api'
-import { apiUrl } from '../api/base'
+import { api, ApiError, rethrowHttp } from '../api'
 import {
+  bulkRetryBody,
+  isBulkRetryOut,
   jobsQuery,
   isHealth,
+  isPositiveSafeInt,
   isJobList,
   isOpsChannelList,
   retryMessage,
-  retryPath,
   type HealthOut,
+  type BulkRetryOut,
   type JobListOut,
   type OpsChannelListOut,
   type OpsFilters,
@@ -95,20 +97,22 @@ export function useRetryJob(onResult: (jobId: number, message: string) => void) 
   return useMutation({
     retry: 0,
     mutationFn: async (id: number): Promise<RetryOutcome> => {
-      const path = retryPath(id) // throws for an id that is not a positive safe integer
-      // A network failure rejects: the mutation errors, with no refetch.
-      const res = await fetch(apiUrl(path), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: '{}',
-      })
-      let body: unknown
-      try {
-        body = await res.json()
-      } catch {
-        body = undefined
-      }
-      return { type: 'http', status: res.status, body }
+      if (!isPositiveSafeInt(id)) throw new Error('Invalid job id')
+      // An HTTP error or an unreadable 2xx body becomes an outcome; a network
+      // failure rejects: the mutation errors, with no refetch.
+      return api
+        .post('/ops/jobs/{id}/retry', { params: { path: { id } }, body: {} })
+        .then((body): RetryOutcome => ({ type: 'http', status: 200, body }))
+        .catch((error: unknown): RetryOutcome => {
+          if (error instanceof ApiError && (error.kind === 'http' || error.kind === 'parse')) {
+            return {
+              type: 'http',
+              status: error.status ?? 200,
+              body: error.body ?? undefined,
+            }
+          }
+          throw error
+        })
     },
     onSuccess: async (outcome, id) => {
       onResult(id, retryMessage(id, outcome))
@@ -116,4 +120,28 @@ export function useRetryJob(onResult: (jobId: number, message: string) => void) 
     },
     onError: (_error, id) => onResult(id, retryMessage(id, { type: 'network' })),
   })
+}
+
+async function postBulkRetry(filters: OpsFilters, dryRun: boolean): Promise<BulkRetryOut> {
+  const body: unknown = await api
+    .post('/ops/jobs/retry', { body: bulkRetryBody(filters, dryRun) })
+    .catch((error: unknown) => rethrowHttp(error, (_e, status) => new OpsError(status)))
+  if (!isBulkRetryOut(body)) throw new Error('Unexpected response shape')
+  return body
+}
+
+/**
+ * POST /api/ops/jobs/retry (#161). `preview` is the dry run that counts the
+ * matching dead jobs; `run` retries them and then refreshes everything under
+ * ['ops']. Neither is retried automatically.
+ */
+export function useBulkRetry() {
+  const client = useQueryClient()
+  const preview = useMutation({ retry: 0, mutationFn: (filters: OpsFilters) => postBulkRetry(filters, true) })
+  const run = useMutation({
+    retry: 0,
+    mutationFn: (filters: OpsFilters) => postBulkRetry(filters, false),
+    onSuccess: () => client.invalidateQueries({ queryKey: ['ops'] }),
+  })
+  return { preview, run }
 }

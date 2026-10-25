@@ -494,7 +494,11 @@ def test_fresh_summarizer_reports_zero_usage(prompts: PromptSet) -> None:
 
 
 @pytest.mark.parametrize(
-    "bad", [_DROP, None, -5, "12", 3.5, True, [1]], ids=str
+    "bad",
+    [_DROP, None, -5, "12", 3.5, True, [1]],
+    # Explicit ids: ids=str over _DROP (an object()) embedded a memory address
+    # (<object object at 0x...>) that differs per process, defeating --lf (#194).
+    ids=["dropped", "none", "negative-int", "numeric-string", "float", "bool-true", "list"],
 )
 def test_unusable_prompt_eval_count_adds_zero_and_never_raises(
     prompts: PromptSet, bad: object, caplog: pytest.LogCaptureFixture

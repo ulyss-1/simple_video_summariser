@@ -53,12 +53,17 @@ def test_the_handler_is_installed_before_the_heavy_imports_begin(tmp_path: Path)
 
 @pytest.mark.skipif(not proc_status_available(), reason="needs /proc")
 def test_sigterm_the_moment_the_handler_exists_exits_0(tmp_path: Path) -> None:
-    # The issue asks for ten rounds: the signal lands at a different point of
-    # startup each time. Each round waits on the exact condition (SigCgt).
-    for round_no in range(10):
-        code, out = race_once(MODULE, tmp_path)
+    # One round, not ten. #108's AC asked for a ten-round loop, but
+    # testing-guidelines.md ("Flaky or racy behaviour") bans "passes N runs in
+    # a row" loops and supersedes it (#198). This check also cannot fail on the
+    # original bug: the SigCgt bit only appears once main() installs the latch's
+    # handler, so race_once always sends SIGTERM after a handler exists, even on
+    # the unfixed code. It is a regression guard only; what actually proves the
+    # fix is the window / SIGINT / ordering tests, which do fail on the parent
+    # tree. Do not restore the loop.
+    code, out = race_once(MODULE, tmp_path)
 
-        assert code == 0, f"round {round_no}: exit {code}\n{out}"
+    assert code == 0, out
 
 
 def test_importing_the_entrypoint_does_not_change_sigterm_or_sigint() -> None:
@@ -188,3 +193,40 @@ def test_a_signal_while_the_summarizer_is_built_skips_the_probe_and_the_started_
     assert rc == 0
     assert probes == []
     assert [e for e in logs if e["event"] == "analyzer.started"] == []
+
+
+def test_a_signal_after_the_started_line_still_skips_the_ollama_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The signal lands after the latch check that follows logging setup, while
+    # the worker name is resolved: the analyzer.started line still logs, but the
+    # probe guard `and not latch.requested` must skip the probe. Dropping that
+    # guard runs the probe anyway; the difference is latency only (both still
+    # exit 0), so no other test fails. Pins the guard (#198).
+    from common.config import Settings
+    from services.analyzer import main as analyzer_main
+
+    def signalling_worker_name() -> str:
+        os.kill(os.getpid(), signal.SIGTERM)
+        return "analyzer-1"
+
+    probes: list[str] = []
+
+    def transport(url: str, _timeout: float) -> Any:
+        probes.append(url)
+        raise ConnectionRefusedError("no ollama")
+
+    monkeypatch.setattr(analyzer_main, "worker_name", signalling_worker_name)
+    monkeypatch.setattr(analyzer_main, "configure_logging", lambda _s: None)
+    settings = Settings(DATABASE_URL="postgresql://u:p@h/db", SUMMARIZER="ollama")  # type: ignore[arg-type]
+
+    rc = analyzer_main.main(
+        settings=settings,
+        summarizer_factory=lambda _s: types.SimpleNamespace(name="fake"),
+        connect=_boom,  # type: ignore[arg-type]
+        handler_factory=_boom,  # type: ignore[arg-type]
+        probe_transport=transport,
+    )
+
+    assert rc == 0
+    assert probes == []

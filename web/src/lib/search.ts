@@ -105,16 +105,6 @@ export function buildSearchRequest(q: string, page: number): URLSearchParams {
 
 // ---- response -------------------------------------------------------------
 
-/** The most seconds a hit link carries; #43 stores segment starts up to 1e9. */
-export const MAX_LINK_SEC = 1_000_000_000
-
-/** `/videos/{id}?t=<whole seconds>` for a usable segment start; null otherwise. */
-export function timestampHref(videoId: string, startSec: number | null): string | null {
-  if (typeof startSec !== 'number' || !Number.isFinite(startSec)) return null
-  if (startSec < 0 || startSec > MAX_LINK_SEC) return null
-  return `/videos/${encodeURIComponent(videoId)}?t=${Math.floor(startSec)}`
-}
-
 export interface ExcerptFragment {
   spans: Span[]
   /** The excerpt's start in seconds, or null when it has no usable one. */
@@ -158,6 +148,8 @@ function isExcerpt(v: unknown): boolean {
   )
 }
 
+const MATCHED_FIELDS = ['title', 'analysis', 'transcript']
+
 function isResult(v: unknown): boolean {
   return (
     isObject(v) &&
@@ -167,6 +159,8 @@ function isResult(v: unknown): boolean {
     isStringOrNull(v.channel_title) &&
     isStringOrNull(v.published_at) &&
     isStringOrNull(v.unavailable) &&
+    Array.isArray(v.matched_in) &&
+    v.matched_in.every((f) => typeof f === 'string' && MATCHED_FIELDS.includes(f)) &&
     Array.isArray(v.excerpts) &&
     v.excerpts.every(isExcerpt)
   )

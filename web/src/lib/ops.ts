@@ -175,6 +175,68 @@ export function retryPath(id: number): string {
   return `ops/jobs/${id}/retry`
 }
 
+export type BulkRetryBody = components['schemas']['BulkRetryBody']
+export type BulkRetryOut = components['schemas']['BulkRetryOut']
+
+/**
+ * The listing's filter as a POST /ops/jobs/retry body (#161): dead jobs only,
+ * kind and error class omitted when Any, "No class" sent as "none". Exactly
+ * these keys: the body is strict, so a stray key is a 422.
+ */
+export function bulkRetryBody(f: OpsFilters, dryRun: boolean): BulkRetryBody {
+  const body: BulkRetryBody = { state: 'dead', limit: OPS_PAGE_SIZE, dry_run: dryRun }
+  if (f.kind !== null) body.kind = f.kind
+  if (f.errorClass !== null) body.error_class = f.errorClass
+  return body
+}
+
+/** Names the scope of a bulk retry for the confirmation. */
+export function bulkScopeLabel(f: OpsFilters): string {
+  if (f.kind === null && f.errorClass === null) return 'all dead jobs'
+  const parts: string[] = []
+  if (f.kind !== null) parts.push(`kind ${f.kind}`)
+  if (f.errorClass !== null) parts.push(f.errorClass === NO_CLASS ? 'no error class' : `error class ${f.errorClass}`)
+  return `dead jobs with ${parts.join(' and ')}`
+}
+
+/** True when a transcription can be among the matching jobs. */
+export function bulkIncludesTranscribe(f: OpsFilters): boolean {
+  return f.kind === null || f.kind === 'transcribe'
+}
+
+/** The fixed message for a real bulk retry that succeeded. */
+export function bulkRetryMessage(out: BulkRetryOut): string {
+  const n = `Retried ${out.retried} ${out.retried === 1 ? 'job' : 'jobs'}`
+  return out.has_more
+    ? `${n}. The limit of ${OPS_PAGE_SIZE} per call was reached and more remain: run it again to retry the next batch.`
+    : `${n}.`
+}
+
+/** The fixed message for a failed bulk call: an HTTP status, or null for a network failure. */
+export function bulkRetryErrorMessage(status: number | null): string {
+  switch (status) {
+    case 409:
+      return 'Concurrent change, try again'
+    case 429:
+      return 'Too many requests. Try again shortly.'
+    case 503:
+      return 'The database is unavailable. Try again shortly.'
+    default:
+      return 'Retry failed'
+  }
+}
+
+export function isBulkRetryOut(v: unknown): v is BulkRetryOut {
+  return (
+    isObject(v) &&
+    isCount(v.retried) &&
+    typeof v.has_more === 'boolean' &&
+    typeof v.dry_run === 'boolean' &&
+    Array.isArray(v.job_ids) &&
+    v.job_ids.every(isPositiveSafeInt)
+  )
+}
+
 export type RetryOutcome =
   | { type: 'network' }
   | { type: 'http'; status: number; body: unknown }

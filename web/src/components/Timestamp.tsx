@@ -1,3 +1,6 @@
+import { useEffect, useRef } from 'react'
+import { Link } from 'react-router'
+import { buildMomentHref } from '../lib/moment'
 import { usePlayer } from './PlayerContext'
 
 /** `M:SS` below one hour, `H:MM:SS` from one hour. Plain arithmetic: no Date, no Intl. */
@@ -22,15 +25,30 @@ function toIsoDuration(seconds: number): string {
 
 /**
  * The single click-to-seek primitive. Renders nothing for a missing or
- * invalid time, and plain text when there is no player to seek.
+ * invalid time. With no player it is a link to `/videos/:videoId?t=` when a
+ * `videoId` is given (#129), otherwise plain text.
  */
-export function Timestamp({ seconds }: { seconds: number | null | undefined }) {
+export function Timestamp({
+  seconds,
+  videoId,
+}: {
+  seconds: number | null | undefined
+  videoId?: string
+}) {
   const player = usePlayer()
   if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) return null
 
   const label = formatTimestamp(seconds)
   const time = <time dateTime={toIsoDuration(seconds)}>{label}</time>
-  if (player === null) return time
+  if (player === null) {
+    const href = videoId === undefined ? null : buildMomentHref(videoId, seconds)
+    if (href === null) return time
+    return (
+      <Link to={href} className="timestamp" aria-label={`Open at ${label}`}>
+        {time}
+      </Link>
+    )
+  }
   return (
     <button
       type="button"
@@ -43,4 +61,29 @@ export function Timestamp({ seconds }: { seconds: number | null | undefined }) {
       {time}
     </button>
   )
+}
+
+/**
+ * Deep-link seek-on-load (#129). Lives here so this module keeps the only
+ * literal seek call (sourceScan). It goes through the same `usePlayer().seekTo`
+ * as a click, so #48's before-ready queue times it. Fires once per distinct
+ * value, and never while the embed is in the `error` state (that seek would
+ * open a tab). Call it where the `Player` is mounted (a child's register effect
+ * runs before this one); pass null until then.
+ */
+export function useMomentSeek(seconds: number | null): void {
+  const player = usePlayer()
+  const failed = player?.status === 'error'
+  const seekTo = player?.seekTo
+  const done = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (seconds === null) {
+      done.current = null
+      return
+    }
+    if (seekTo === undefined || failed || done.current === seconds) return
+    done.current = seconds
+    seekTo(seconds)
+  }, [seconds, seekTo, failed])
 }

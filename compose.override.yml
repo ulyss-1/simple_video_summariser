@@ -73,7 +73,7 @@ services:
   db:
     networks: [internal, devhost]
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${DB_HOST_PORT-5432}:5432"  # overridable; DB_HOST_PORT= (empty) lets Docker pick
 
   migrate:
     volumes:
@@ -147,11 +147,12 @@ services:
     environment:
       API_PROXY_TARGET: http://api:8000
     ports: !override
-      - "127.0.0.1:5173:5173"
+      - "127.0.0.1:${WEB_DEV_PORT-5173}:5173"  # overridable; WEB_DEV_PORT= (empty) lets Docker pick
     volumes:
       - ./web/src:/home/node/app/src:ro
       - ./web/index.html:/home/node/app/index.html:ro
       - ./web/index.css:/home/node/app/index.css:ro
+      - ./web/public:/home/node/app/public:ro
       - ./web/package.json:/home/node/app/package.json:ro
       - ./web/package-lock.json:/home/node/app/package-lock.json:ro
       - ./web/tsconfig.json:/home/node/app/tsconfig.json:ro

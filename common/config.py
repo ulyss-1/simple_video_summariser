@@ -25,7 +25,6 @@ from urllib.parse import urlsplit
 
 from pydantic import (
     Field,
-    NonNegativeFloat,
     NonNegativeInt,
     PositiveFloat,
     PositiveInt,
@@ -119,8 +118,8 @@ class Settings(BaseSettings):
     AUDIO_DIR: Path = Path("/data/audio")
     AUDIO_KEEP: bool = True
     AUDIO_TTL_DAYS: PositiveInt = 30
-    AUDIO_MAX_GB: PositiveFloat = 20
-    AUDIO_MIN_FREE_GB: NonNegativeFloat = 2
+    AUDIO_MAX_GB: float = Field(default=20, gt=0, allow_inf_nan=False)
+    AUDIO_MIN_FREE_GB: float = Field(default=2, ge=0, allow_inf_nan=False)
     AUDIO_MIN_FREE_PCT: float = Field(default=5, ge=0, lt=100)
     YTDLP_COOKIE_FILE: Path | None = None
 
@@ -330,6 +329,16 @@ def _sanitised(exc: ValidationError) -> ValidationError:
         for e in exc.errors(include_url=False)
     ]
     return ValidationError.from_exception_data(exc.title, line_errors, hide_input=True)
+
+
+def summarizer_model(settings: Settings) -> str:
+    """The model the configured summarizer uses: ``OLLAMA_MODEL`` or ``ANTHROPIC_MODEL``.
+
+    The display layer prefers the analysis made with this model and
+    ``PROMPT_VERSION`` (#146), so eval or re-analysis runs with another model do
+    not replace the production one.
+    """
+    return settings.OLLAMA_MODEL if settings.SUMMARIZER == "ollama" else settings.ANTHROPIC_MODEL
 
 
 @lru_cache(maxsize=1)

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { Player } from "../components/Player";
-import { Timestamp } from "../components/Timestamp";
+import { Timestamp, useMomentSeek } from "../components/Timestamp";
 import { TranscriptApiError, useTranscript } from "../hooks/useTranscript";
 import { useVideo } from "../hooks/useVideo";
 import {
@@ -14,9 +14,10 @@ import {
   sourceLabel,
   speakerLabels,
 } from "../lib/transcript";
+import { parseStartTime } from "../lib/moment";
 import { parseVideoId } from "../lib/videoId";
 
-// Plain semantic HTML on purpose: styling is #130. The page number lives in the
+// Semantic HTML styled by index.css (#130). The page number lives in the
 // URL only; TanStack Query owns the server state (architecture §9). Every
 // string from the API or the URL is a React text child, never markup.
 export function Transcript() {
@@ -29,7 +30,7 @@ export function Transcript() {
 
 function VideoNotFound() {
   return (
-    <section>
+    <section className="page">
       <h1>Video not found</h1>
       <p>
         <Link to="/">Library</Link>
@@ -55,6 +56,8 @@ function TranscriptView({ videoId }: { videoId: string }) {
   const q = useTranscript(videoId, page);
   const data = q.data;
   const switching = q.isPlaceholderData;
+  // The Player mounts once the transcript query has settled, so wait for it.
+  useMomentSeek(q.status === "pending" ? null : parseStartTime(params));
 
   const rawTitle = video.data?.title;
   const title = rawTitle != null && rawTitle.trim() !== "" ? rawTitle : videoId;
@@ -101,10 +104,10 @@ function TranscriptView({ videoId }: { videoId: string }) {
   if (videoMissing) return <VideoNotFound />;
 
   return (
-    <section>
+    <section className="page transcript">
       <h1>{title}</h1>
       <p>
-        <Link to={`/videos/${videoId}`}>Back to video</Link>
+        <Link className="transcript__back" to={`/videos/${videoId}`} viewTransition>Back to video</Link>
       </p>
       {q.status !== "pending" && (
         <Player videoId={videoId} title={rawTitle ?? undefined} />
@@ -114,13 +117,17 @@ function TranscriptView({ videoId }: { videoId: string }) {
         noTranscript ? (
           <p>No transcript yet for this video</p>
         ) : (
-          <div role="alert">
+          <div className="alert alert--danger" role="alert">
             <p>
               {error instanceof TranscriptApiError && error.status === 503
                 ? "The database is unavailable. Try again shortly."
                 : "Could not load the transcript"}
             </p>
-            <button type="button" onClick={() => void q.refetch()}>
+            <button
+              className="btn"
+              type="button"
+              onClick={() => void q.refetch()}
+            >
               Retry
             </button>
           </div>
@@ -175,7 +182,7 @@ function Segments({
 
   return (
     <>
-      <p>
+      <p className="muted">
         {sourceLabel(data.source)} · {languageLabel(data.language)}
       </p>
       {replaced && (
@@ -185,7 +192,7 @@ function Segments({
       <h2 ref={headingRef} tabIndex={-1}>
         Segments
       </h2>
-      <p aria-live="polite">
+      <p className="muted" aria-live="polite">
         {segments.length > 0
           ? `Segments ${formatCount(offset + 1)}–${formatCount(offset + segments.length)} of ${formatCount(total)}`
           : ""}
@@ -201,7 +208,7 @@ function Segments({
       )}
 
       {segments.length > 0 && (
-        <ol start={offset + 1}>
+        <ol className="card transcript__segments" start={offset + 1}>
           {segments.map((s, i) => {
             const speaker = labels[i];
             return (
@@ -218,18 +225,20 @@ function Segments({
       )}
 
       {total > 0 && (
-        <nav aria-label="Pagination">
+        <nav className="pagination" aria-label="Pagination">
           <button
+            className="btn"
             type="button"
             disabled={page <= 1 || switching}
             onClick={() => goTo(page - 1)}
           >
             Previous
           </button>{" "}
-          <span>
+          <span className="muted">
             Page {page} of {pages}
           </span>{" "}
           <button
+            className="btn"
             type="button"
             disabled={!hasNext || switching}
             onClick={() => goTo(page + 1)}
