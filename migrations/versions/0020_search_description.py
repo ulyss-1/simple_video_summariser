@@ -1,7 +1,7 @@
 """search_docs: also match the video description
 
-Revision ID: 0015
-Revises: 0014
+Revision ID: 0020
+Revises: 0019
 Create Date: 2026-10-17
 
 Issue #168. ``videos.description`` joins the materialised search vector
@@ -29,8 +29,8 @@ from collections.abc import Sequence
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0015"
-down_revision: str | None = "0014"
+revision: str = "0020"
+down_revision: str | None = "0019"
 branch_labels: Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

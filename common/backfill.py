@@ -279,8 +279,8 @@ def backfill(
                             enqueued += 1
 
     if not dry_run and max_enqueue is None:
-        with conn.transaction():
-            clear_feed_gap(conn, channel_id, source="backfill")
+        with provide() as c, c.transaction():
+            clear_feed_gap(c, channel_id, source="backfill")
 
     return BackfillResult(
         channel_id=channel_id,

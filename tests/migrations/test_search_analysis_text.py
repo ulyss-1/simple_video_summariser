@@ -1,4 +1,4 @@
-"""Migration ``0016_search_analysis_text`` (issue #169)."""
+"""Migration ``0021_search_analysis_text`` (issue #169)."""
 
 from __future__ import annotations
 
@@ -31,14 +31,14 @@ def _columns(conn: psycopg.Connection[tuple[object, ...]]) -> set[str]:
     return {str(r[0]) for r in rows}
 
 
-def test_0016_is_chained_to_0015() -> None:
+def test_0021_is_chained_to_0020() -> None:
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "migrations"))
 
-    revision = ScriptDirectory.from_config(config).get_revision("0016")
+    revision = ScriptDirectory.from_config(config).get_revision("0021")
 
     assert revision is not None
-    assert revision.down_revision == "0015"
+    assert revision.down_revision == "0020"
 
 
 @integration
@@ -46,7 +46,7 @@ def test_upgrade_backfills_the_analysis_text_and_downgrade_drops_it(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = _config_for(postgres_dsn, monkeypatch)
-    command.upgrade(config, "0015")
+    command.upgrade(config, "0020")
     with psycopg.connect(postgres_dsn) as conn:
         conn.execute(
             "INSERT INTO videos (video_id, title, description)"
@@ -55,7 +55,7 @@ def test_upgrade_backfills_the_analysis_text_and_downgrade_drops_it(
         conn.commit()
         assert "analysis_text" not in _columns(conn)
 
-    command.upgrade(config, "0016")
+    command.upgrade(config, "0021")
 
     with psycopg.connect(postgres_dsn) as conn:
         row = conn.execute(
@@ -63,7 +63,7 @@ def test_upgrade_backfills_the_analysis_text_and_downgrade_drops_it(
         ).fetchone()
         assert row == ("about okapis",)
 
-    command.downgrade(config, "0015")
+    command.downgrade(config, "0020")
 
     with psycopg.connect(postgres_dsn) as conn:
         assert "analysis_text" not in _columns(conn)
@@ -74,7 +74,7 @@ def test_upgrade_backfills_the_analysis_text_and_downgrade_drops_it(
         ).fetchone()
         assert found is not None
 
-    command.upgrade(config, "0016")
+    command.upgrade(config, "0021")
     with psycopg.connect(postgres_dsn) as conn:
         row = conn.execute(
             "SELECT analysis_text FROM search_docs WHERE video_id = 'mig16video1'"
