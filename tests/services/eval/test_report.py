@@ -43,6 +43,9 @@ def run(
     tokens: tuple[int, int] = (100, 50),
     duration_ms: int | None = 1500,
     cost: float | None = None,
+    cache_read: int | None = None,
+    cache_write: int | None = None,
+    calls: int | None = None,
     created: datetime | None = datetime(2026, 10, 1, 12, 30, 5, tzinfo=UTC),
 ) -> AnalysisRun:
     return AnalysisRun(
@@ -58,6 +61,9 @@ def run(
             output_tokens=tokens[1],
             cost_usd=cost,
             duration_ms=duration_ms,
+            cache_read_tokens=cache_read,
+            cache_write_tokens=cache_write,
+            calls=calls,
             topics=topics,
             claims=claims,
             quotes=quotes,
@@ -238,8 +244,79 @@ def test_run_details_cost_and_confidence_breakdown() -> None:
     )
     b = run(LABEL_B, cost=0.0123)
     out = render_report(LABEL_A, LABEL_B, [entry(a, b)])
-    assert "not recorded" in out and "0.0123" in out
+    assert detail_row(out, "Cost (USD)") == ["not recorded", "0.0123"]
     assert "1 / 1 / 1 / 1" in out  # high / medium / low / not given
+
+
+DETAIL_LABELS = [
+    "Transcript source",
+    "Chunk strategy",
+    "Created (UTC)",
+    "Tokens (in / out)",
+    "Cache read tokens",
+    "Cache write tokens",
+    "Model calls",
+    "Duration (ms)",
+    "Cost (USD)",
+    "Topics / claims / quotes",
+    "Unattributed claims",
+    "Claim confidence (high / medium / low / not given)",
+    "Speakers coerced to unknown",
+]
+
+
+def detail_row(out: str, label: str) -> list[str]:
+    """The A and B cells of the details-table row with this label."""
+    rows = [ln for ln in out.splitlines() if ln.startswith(f"| {label} |")]
+    assert len(rows) == 1, rows
+    return [c.strip() for c in rows[0].strip().strip("|").split("|")[1:]]
+
+
+def test_cache_and_call_rows_show_values_against_not_recorded() -> None:
+    a = run(LABEL_A, cache_read=7, cache_write=11, calls=3)
+    b = run(LABEL_B)
+    out = render_report(LABEL_A, LABEL_B, [entry(a, b)])
+    assert "| Cache read tokens | 7 | not recorded |" in out
+    assert detail_row(out, "Cache write tokens") == ["11", "not recorded"]
+    assert detail_row(out, "Model calls") == ["3", "not recorded"]
+
+
+def test_cache_and_call_rows_show_a_known_zero_as_zero() -> None:
+    a = run(LABEL_A, cache_read=0, cache_write=0, calls=0)
+    b = run(LABEL_B, cache_read=0, cache_write=0, calls=0)
+    out = render_report(LABEL_A, LABEL_B, [entry(a, b)])
+    for label in ("Cache read tokens", "Cache write tokens", "Model calls"):
+        assert detail_row(out, label) == ["0", "0"]
+
+
+def test_cache_and_call_fields_are_independent() -> None:
+    a = run(LABEL_A, cache_read=5, cache_write=None, calls=2)
+    out = render_report(LABEL_A, LABEL_B, [entry(a, None)])
+    assert detail_row(out, "Cache read tokens")[0] == "5"
+    assert detail_row(out, "Cache write tokens")[0] == "not recorded"
+    assert detail_row(out, "Model calls")[0] == "2"
+
+
+def test_cache_and_call_numbers_have_no_separator() -> None:
+    a = run(LABEL_A, cache_read=1000, cache_write=1234567, calls=12)
+    out = render_report(LABEL_A, LABEL_B, [entry(a, None)])
+    assert detail_row(out, "Cache read tokens")[0] == "1000"
+    assert detail_row(out, "Cache write tokens")[0] == "1234567"
+
+
+def test_missing_run_shows_a_dash_in_every_details_row() -> None:
+    a = run(LABEL_A, cache_read=7, cache_write=11, calls=3)
+    out = render_report(LABEL_A, LABEL_B, [entry(a, None)])
+    assert len(DETAIL_LABELS) == 13
+    assert [detail_row(out, label)[1] for label in DETAIL_LABELS] == ["-"] * 13
+
+
+def test_details_table_row_order() -> None:
+    out = render_report(LABEL_A, LABEL_B, [entry(run(LABEL_A), run(LABEL_B))])
+    lines = out.splitlines()
+    start = next(i for i, ln in enumerate(lines) if ln.startswith("| Transcript source |"))
+    labels = [ln.split("|")[1].strip() for ln in lines[start : start + len(DETAIL_LABELS)]]
+    assert labels == DETAIL_LABELS
 
 
 def test_claims_are_grouped_in_windows_with_links_speaker_and_confidence() -> None:
