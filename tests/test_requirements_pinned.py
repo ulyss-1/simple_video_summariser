@@ -2,13 +2,15 @@
 
 A range or an unpinned name lets one `pip install` today differ from the one
 that passed CI yesterday. The checker is pure and tested on crafted input as
-well as on the real files. Transitive dependencies are not covered: that is
-#145.
+well as on the real files, and it also covers the `dev` extra in pyproject.toml.
+Transitive dependencies are locked by `scripts/lock_requirements.py` (#145);
+the dev extra's own are not (#264).
 """
 
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -157,3 +159,21 @@ def test_real_requirements_file_is_exactly_pinned(filename: str) -> None:
     assert find_unpinned(filename, text) == []
     # Guard against a vacuous pass: the file must contain at least one pin.
     assert "==" in text
+
+
+def _dev_extra() -> list[str]:
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    dev: list[str] = data["project"]["optional-dependencies"]["dev"]
+    return dev
+
+
+def test_unpinned_dev_entries_are_rejected() -> None:
+    # The dev extra goes through the same rules as the requirements files (#145).
+    problems = find_unpinned("pyproject.toml [dev]", "ruff\nmypy>=2\npytest==9.1.1")
+    assert [p.split(": ")[0] for p in problems] == ["pyproject.toml [dev]:1", "pyproject.toml [dev]:2"]
+
+
+def test_every_dev_extra_entry_is_an_exact_pin() -> None:
+    entries = _dev_extra()
+    assert len(entries) >= 4  # not vacuous: pytest, hypothesis, ruff, mypy at least
+    assert find_unpinned("pyproject.toml [dev]", "\n".join(entries)) == []

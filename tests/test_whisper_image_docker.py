@@ -235,7 +235,9 @@ def test_a_bad_pin_fails_the_build_with_pips_error_then_the_architecture_pointer
     context = tmp_path / "context"
     (context / "ops").mkdir(parents=True)
     shutil.copy(REPO_ROOT / "ops" / "Dockerfile.whisper", context / "ops")
-    (context / "requirements.whisper.txt").write_text("faster-whisper==0.0.0\n")
+    (context / "requirements.whisper.lock").write_text(
+        f"faster-whisper==0.0.0 --hash=sha256:{'a' * 64}\n"
+    )
     tag = f"ytdigest-whisper-badpin-{uuid.uuid4().hex[:8]}:latest"
     try:
         result = _docker(

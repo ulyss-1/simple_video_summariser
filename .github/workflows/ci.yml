@@ -79,8 +79,18 @@ jobs:
       # (not a third-party action) keeps the trusted-action set first-party.
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
-      - name: Install runtime and dev dependencies
-        run: pip install -r requirements.backend.txt -e ".[dev]"
+      # Hash-checking mode covers a whole pip command and refuses editables, so
+      # the lock and the editable dev install are two commands (#145).
+      - name: Install runtime dependencies from the lock
+        run: pip install --require-hashes --no-deps -r requirements.backend.lock
+      - name: Install dev dependencies
+        run: pip install -e ".[dev]"
+      # The dev install must not move a locked package (for example
+      # typing-extensions or packaging).
+      - name: Check the installed set against the lock
+        run: |
+          pip check
+          python scripts/lock_requirements.py --check-installed requirements.backend.lock
       - name: ruff check .
         run: ruff check .
       - name: mypy .
@@ -128,8 +138,18 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
-      - name: Install runtime and dev dependencies
-        run: pip install -r requirements.backend.txt -e ".[dev]"
+      # Hash-checking mode covers a whole pip command and refuses editables, so
+      # the lock and the editable dev install are two commands (#145).
+      - name: Install runtime dependencies from the lock
+        run: pip install --require-hashes --no-deps -r requirements.backend.lock
+      - name: Install dev dependencies
+        run: pip install -e ".[dev]"
+      # The dev install must not move a locked package (for example
+      # typing-extensions or packaging).
+      - name: Check the installed set against the lock
+        run: |
+          pip check
+          python scripts/lock_requirements.py --check-installed requirements.backend.lock
       # Builds ytdigest-backend:latest before the whisper image (which is
       # FROM that tag), then the frontend image, and runs their runtime checks.
       - name: pytest -m image

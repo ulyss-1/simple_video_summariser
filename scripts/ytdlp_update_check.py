@@ -109,8 +109,10 @@ def main(argv: Sequence[str] | None = None, *, fetch: Fetch = urllib_fetch) -> i
     if _parse(latest) > _parse(pinned):
         print(
             f"::error title=yt-dlp pin is behind PyPI::pinned yt-dlp=={pinned}, "
-            f"latest yt-dlp=={latest}. Bump the pin in requirements.backend.txt and "
-            "redeploy (architecture.md 16.11)."
+            f"latest yt-dlp=={latest}. Bump the pin in requirements.backend.txt, "
+            "regenerate requirements.backend.lock "
+            "(python scripts/lock_requirements.py backend --upgrade-package yt-dlp) "
+            "and redeploy (architecture.md 16.11)."
         )
         return 1
     return 0

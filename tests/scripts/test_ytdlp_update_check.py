@@ -96,6 +96,9 @@ def test_behind_names_both_versions_emits_an_annotation_and_exits_1(
     assert out.startswith("::error")  # a GitHub Actions annotation
     assert "2026.8.19" in out and "2026.9.30" in out
     assert "pinned" in out and "latest" in out
+    # The lock must follow the pin (#145), so the message says how.
+    assert "requirements.backend.lock" in out
+    assert "python scripts/lock_requirements.py backend --upgrade-package yt-dlp" in out
     assert fetch.urls == ["https://pypi.org/pypi/yt-dlp/json"]
 
 

@@ -1292,9 +1292,10 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
-COPY requirements.backend.txt .
+COPY requirements.backend.lock .
 RUN python -m venv /opt/venv && \
-    /opt/venv/bin/pip install -r requirements.backend.txt
+    /opt/venv/bin/pip install --require-hashes --no-deps -r requirements.backend.lock && \
+    /opt/venv/bin/pip check
 
 # ---- runtime ----
 FROM python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8
@@ -1315,7 +1316,19 @@ USER app
 `ffmpeg` is in the backend image because `ingest` may normalize audio even on
 the subtitle path; `yt-dlp` is a Python dependency, not a system package.
 
-**Layer ordering matters:** requirements are copied and installed *before*
+**Python locks (#145).** The images install from `requirements.backend.lock`
+and `requirements.whisper.lock`, generated from the matching `requirements.*.txt`
+by `scripts/lock_requirements.py`. A lock pins every package, transitive ones
+included, and carries the sha256 of *every* file PyPI publishes for that
+version, not only the one the generating machine chose, because WSL, the CI
+runner and `python:3.14-slim` can pick different manylinux wheels for the same
+version. `pip install --require-hashes --no-deps` then installs exactly that
+set. The whisper lock holds only what the whisper layer adds to the backend
+venv. A lock records a digest of its input, which an offline test compares:
+editing a requirements file without regenerating fails CI, a new upstream
+release never does.
+
+**Layer ordering matters:** the lock is copied and installed *before*
 application code. Editing a Python file then rebuilds only the final `COPY`
 layer, not the dependency install — the difference between a 5-second and a
 3-minute rebuild during Phase 1–5 iteration.
@@ -1328,11 +1341,12 @@ USER root
 WORKDIR /tmp
 # --only-binary: ctranslate2 ships no sdist, so a missing wheel must fail
 # loudly here rather than as an opaque resolver error. See 16.2.
-RUN --mount=type=bind,source=requirements.whisper.txt,target=requirements.whisper.txt \
+RUN --mount=type=bind,source=requirements.whisper.lock,target=requirements.whisper.lock \
     /opt/venv/bin/pip install --no-cache-dir --only-binary=:all: \
-        -r requirements.whisper.txt \
-    || (echo "ERROR: no binary wheel for a requirements.whisper.txt package for this Python minor, or the pin is wrong - see architecture.md 16.2" \
+        --require-hashes --no-deps -r requirements.whisper.lock \
+    || (echo "ERROR: no binary wheel for a requirements.whisper.lock package for this Python minor, or the pin is wrong - see architecture.md 16.2" \
         && exit 1)
+RUN /opt/venv/bin/pip check
 # /models is the whisper-models volume; a fresh volume copies its ownership.
 RUN mkdir -p /models && chown app:app /models
 WORKDIR /app
