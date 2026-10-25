@@ -55,8 +55,9 @@ running that command in WSL (use `bash -lc` for the `npm` ones).
   `requirements.backend.txt`, `requirements.whisper.txt` or the `dev` extra
   that is not an exact `name==version` pin, and `tests/test_requirements_lock.py`,
   which fails when a `requirements.*.lock` no longer matches its input. The job
-  installs from the lock with `--require-hashes`, then the dev extra, then
-  fails if the dev install moved a locked package.
+  installs from the backend and dev locks with `--require-hashes`, then the
+  project itself, then fails if an installed package differs from a lock or is
+  in neither.
 - `frontend`, in `web/`: `npm ci`, `npm run --if-present gen:api:check`,
   `npm run --if-present lint`, `npm test`, `npm run build`,
   `npm audit --audit-level=high`.

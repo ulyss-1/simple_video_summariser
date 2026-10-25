@@ -39,10 +39,11 @@ Setup
 - `cd web && npx playwright install --with-deps chromium` - once per machine;
   the browser for `npm run test:e2e` (#177), never fetched by `npm ci`/build
 - `python3.14 -m venv .venv && . .venv/bin/activate`
-- `pip install --require-hashes --no-deps -r requirements.backend.lock`, then
-  `pip install -e ".[dev]"` - runtime and dev dependencies, as two commands
-  (hash-checking mode covers a whole pip command and refuses editables). Then
-  `pip check`. `requirements.whisper.txt` is deliberately not installed on
+- `pip install --require-hashes --no-deps -r requirements.backend.lock -r requirements.dev.lock`,
+  then `pip install --no-deps --no-build-isolation --check-build-dependencies -e .` -
+  runtime and dev dependencies, as two commands (hash-checking mode covers a
+  whole pip command and refuses editables; `--no-build-isolation` builds the
+  editable with the locked `setuptools`). Then `pip check`. `requirements.whisper.txt` is deliberately not installed on
   the host because it adds ~2 GB. Wheels for 3.14 are no longer in doubt:
   on 2026-09-27, `faster-whisper` 1.2.1 with `ctranslate2` 4.8.2 and its
   whole tree installed from wheels and transcribed in `python:3.14-slim`
@@ -102,13 +103,16 @@ Activate `.venv` first; all Python commands assume it.
   - Postgres is on `127.0.0.1:5432` (see `alembic upgrade head` above)
   - the transcriber uses the `tiny` Whisper model unless `WHISPER_MODEL` is
     set (for example `WHISPER_MODEL=base docker compose up -d`)
-- `python scripts/lock_requirements.py backend|whisper [--upgrade | --upgrade-package NAME]` -
+- `python scripts/lock_requirements.py backend|whisper|dev [--upgrade | --upgrade-package NAME]` -
   regenerate a Python lock (Linux x86_64 / CPython 3.14 only, needs PyPI).
+  Order: `backend`, then `whisper`, then `dev` (each is resolved against the
+  earlier locks, which it never edits; after `backend` or `whisper`, regenerate
+  the later ones).
   By default old entries stay as constraints, so only what the input change
   forces moves; `--upgrade-package NAME` (repeatable) drops one pin,
   `--upgrade` re-resolves everything. A failure leaves the lock untouched.
-  `python scripts/lock_requirements.py --check-installed requirements.backend.lock`
-  fails when an installed package differs from the lock
+  `python scripts/lock_requirements.py --check-installed requirements.backend.lock requirements.dev.lock`
+  fails when an installed package differs from the locks or is in neither
 - `npm ci && npm run build` - in `web/`, frontend only
 - `npm run lint` - in `web/`; ESLint (react-hooks + React Compiler rules),
   fails on any warning; `bash -lc 'cd web && npm run lint'`
@@ -134,10 +138,13 @@ Rules
 - `requirements.backend.lock` and `requirements.whisper.lock` are generated
   from `requirements.backend.txt` / `requirements.whisper.txt` by
   `scripts/lock_requirements.py`, are never edited by hand, and are not a fifth
-  place to declare a dependency. Regenerate a lock in the same PR that changes
-  its input; an offline test fails otherwise.
+  place to declare a dependency. `requirements.dev.lock` is generated the same
+  way from `pyproject.toml`'s dev extra and `[build-system].requires`, with the
+  same rules. Regenerate a lock in the same PR that changes its input; an
+  offline test fails otherwise.
 - To bump a dev tool (`pytest`, `hypothesis`, `ruff`, `mypy`) deliberately, edit
   its exact pin in `pyproject.toml`, run `ruff check .`, `mypy .` and `pytest`,
+  regenerate the dev lock in the same PR (`python scripts/lock_requirements.py dev`),
   and fix the fallout in the same PR.
 - Dependencies live in four places: runtime Python deps in
   `requirements.backend.txt`, speech-to-text-only deps in

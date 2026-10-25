@@ -80,17 +80,18 @@ jobs:
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       # Hash-checking mode covers a whole pip command and refuses editables, so
-      # the lock and the editable dev install are two commands (#145).
-      - name: Install runtime dependencies from the lock
-        run: pip install --require-hashes --no-deps -r requirements.backend.lock
-      - name: Install dev dependencies
-        run: pip install -e ".[dev]"
-      # The dev install must not move a locked package (for example
-      # typing-extensions or packaging).
-      - name: Check the installed set against the lock
+      # the locks and the editable install are two commands (#145, #264). With
+      # --no-build-isolation pip builds the editable with the setuptools from
+      # requirements.dev.lock, not an unpinned one.
+      - name: Install runtime and dev dependencies from the locks
+        run: pip install --require-hashes --no-deps -r requirements.backend.lock -r requirements.dev.lock
+      - name: Install the project
+        run: pip install --no-deps --no-build-isolation --check-build-dependencies -e .
+      # Every installed distribution must be in a lock at the locked version.
+      - name: Check the installed set against the locks
         run: |
           pip check
-          python scripts/lock_requirements.py --check-installed requirements.backend.lock
+          python scripts/lock_requirements.py --check-installed requirements.backend.lock requirements.dev.lock
       - name: ruff check .
         run: ruff check .
       - name: mypy .
@@ -139,17 +140,18 @@ jobs:
         with:
           python-version: "3.14"
       # Hash-checking mode covers a whole pip command and refuses editables, so
-      # the lock and the editable dev install are two commands (#145).
-      - name: Install runtime dependencies from the lock
-        run: pip install --require-hashes --no-deps -r requirements.backend.lock
-      - name: Install dev dependencies
-        run: pip install -e ".[dev]"
-      # The dev install must not move a locked package (for example
-      # typing-extensions or packaging).
-      - name: Check the installed set against the lock
+      # the locks and the editable install are two commands (#145, #264). With
+      # --no-build-isolation pip builds the editable with the setuptools from
+      # requirements.dev.lock, not an unpinned one.
+      - name: Install runtime and dev dependencies from the locks
+        run: pip install --require-hashes --no-deps -r requirements.backend.lock -r requirements.dev.lock
+      - name: Install the project
+        run: pip install --no-deps --no-build-isolation --check-build-dependencies -e .
+      # Every installed distribution must be in a lock at the locked version.
+      - name: Check the installed set against the locks
         run: |
           pip check
-          python scripts/lock_requirements.py --check-installed requirements.backend.lock
+          python scripts/lock_requirements.py --check-installed requirements.backend.lock requirements.dev.lock
       # Builds ytdigest-backend:latest before the whisper image (which is
       # FROM that tag), then the frontend image, and runs their runtime checks.
       - name: pytest -m image
