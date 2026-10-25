@@ -830,7 +830,11 @@ proceeding. This makes a config change safe rather than silently inconsistent.
 
 Steps 3–5 are separate LLM calls with separate retry semantics: a roster
 failure falls back to an empty roster (all speakers `unknown`) and continues;
-a chunk failure fails the job.
+a chunk failure fails the job. When Ollama's flat reduce prompt exceeds its
+configured prompt budget, the adapter hierarchically reduces consecutive
+in-memory groups until the final prompt fits. The synthetic intermediate
+partials are not persisted; stored chunks and analyses retain their current
+shape.
 
 ---
 
@@ -1095,7 +1099,7 @@ than reading `os.environ` directly.
 | `SUMMARIZER` | `ollama` | analyzer |
 | `OLLAMA_MODEL` / `OLLAMA_HOST` | `qwen3.5:4b` | analyzer (see 16.7) |
 | `OLLAMA_OUTPUT_RESERVE_TOKENS` | `2048` | analyzer: tokens of `OLLAMA_NUM_CTX` kept free for the reply; prompt budget is `OLLAMA_NUM_CTX - OLLAMA_OUTPUT_RESERVE_TOKENS`, and startup fails if it is `>= OLLAMA_NUM_CTX` (#85) |
-| `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | — / `claude-haiku-4-5` | analyzer (D6: API key only) |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY_FILE` / `ANTHROPIC_MODEL` | — / — / `claude-haiku-4-5` | analyzer (D6: API key only); the explicit file path is the opt-in Compose-secret source |
 | `ANTHROPIC_BATCH` | `1` | use Batch API — 50% cost (16.8) |
 | `PROMPT_VERSION` | `v1` | analyzer, planner |
 | `SWEEP_MAX_JOBS_ANTHROPIC` | `100` | planner: cumulative per-`PROMPT_VERSION` count of re-analysis sweep jobs allowed while `SUMMARIZER=anthropic` (`0` = none); ignored for ollama (#99) |
@@ -1136,7 +1140,7 @@ Six runtime containers, four build contexts, three custom images.
 
 | Container | Image | Built from | Replicas | Role |
 |---|---|---|---|---|
-| `db` | `postgres:18-alpine` | upstream | 1 | data + queue |
+| `db` | `postgres:18-alpine` (digest-pinned) | upstream | 1 | data + queue |
 | `migrate` | `ytdigest-backend` | `ops/Dockerfile.backend` | one-shot | `alembic upgrade head` |
 | `api` | `ytdigest-backend` | same image | 1..N | HTTP API |
 | `planner` | `ytdigest-backend` | same image | **exactly 1** | periodic tasks (§1) |
@@ -1184,7 +1188,7 @@ toolchain.
 
 ```dockerfile
 # ---- builder ----
-FROM python:3.14-slim AS builder
+FROM python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8 AS builder
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential && rm -rf /var/lib/apt/lists/*
@@ -1194,7 +1198,7 @@ RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip install -r requirements.backend.txt
 
 # ---- runtime ----
-FROM python:3.14-slim
+FROM python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg curl && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /opt/venv /opt/venv
@@ -1251,7 +1255,7 @@ otherwise every `docker compose up --build` re-downloads it.
 
 ```dockerfile
 # ---- build ----
-FROM node:24-alpine AS build
+FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS build
 WORKDIR /src
 COPY web/package.json web/package-lock.json ./
 RUN npm ci                      # ci, not install — respects the lockfile exactly
@@ -1273,20 +1277,26 @@ variant (#140): nginx listens on container port **8080**, the pid file and
 temporary paths live under `/tmp`, and the container runs as uid 101, so it also
 starts with `--read-only --tmpfs /tmp`.
 
-The stage is pinned by tag **and** digest (#241), the multi-platform index
-digest, so every build uses the same bytes. Upstream rebuilds a stable tag
-for security fixes, so a pin goes stale silently unless something looks: the
-daily `base image digest check` workflow
+Every upstream base image is pinned by tag **and** digest (#241, #249), the
+multi-platform index digest, so every build uses the same bytes: `nginx`
+(runtime stage above), `node:24-alpine` (build stage and the dev `web` service
+in `compose.override.yml`), `python:3.14-slim` (both `ops/Dockerfile.backend`
+stages and `ops/Dockerfile.bakeoff`) and `postgres:18-alpine` (`db` in
+`compose.yml`). Copies of one tag carry one digest. `ops/Dockerfile.whisper`
+inherits the backend pin through `FROM ytdigest-backend:latest`. Upstream
+rebuilds a stable tag for security fixes, so a pin goes stale silently unless
+something looks: the daily `base image digest check` workflow
 (`.github/workflows/base-image-digest-check.yml`, running
-`scripts/base_image_digest_check.py ops/Dockerfile.frontend`) goes red, naming
-the pinned and the upstream digest. It only reports; a human bumps the pin, as
-for yt-dlp (§16.11). To bump: run
-`docker buildx imagetools inspect nginx/nginx-unprivileged:1.30-alpine`,
-replace the digest in `ops/Dockerfile.frontend` and in the listing above, open
-a PR, and deploy. A side benefit is build-cache correctness: a changed digest
-changes the `FROM` line, so the next `docker compose -f compose.yml up -d
---build` on the host is guaranteed to fetch the new base, which a tag-only
-`FROM` does not guarantee without `--pull`.
+`scripts/base_image_digest_check.py` on those Dockerfiles and compose files)
+goes red, naming the file, the line, the pinned and the upstream digest and the
+replacement reference. It only reports; a human bumps the pin, as for yt-dlp
+(§16.11). To bump an image: run `docker buildx imagetools inspect <name>:<tag>`,
+replace every copy of that digest in the Dockerfiles, the compose files and the
+listings in this document, open a PR, and deploy. One PR can refresh every stale
+pin. A side benefit is build-cache correctness: a changed digest changes the
+`FROM` line, so the next `docker compose -f compose.yml up -d --build` on the
+host is guaranteed to fetch the new base, which a tag-only `FROM` does not
+guarantee without `--pull`.
 
 **This is where D12's "no Node in production" becomes literal.** Node exists
 only in the `build` stage; the shipped image is nginx plus static files, ~30 MB,
@@ -1456,7 +1466,7 @@ x-logging: &logging
 
 services:
   db:
-    image: postgres:18-alpine   # >=18.6 (architecture.md 16.1)
+    image: postgres:18-alpine@sha256:898c60cb390d1085bc97bdd6a1ae968757421df394b071848b52b1c09c89d6a5   # >=18.6 (architecture.md 16.1)
     environment:
       POSTGRES_USER: ytdigest
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
@@ -1618,6 +1628,14 @@ networks:
   egress: {}
 ```
 
+For Anthropic secret-file deployments, merge the opt-in
+`compose.anthropic.yml` after this base file. It declares a required host file,
+mounts it read-only at `/run/secrets/anthropic_api_key` on `analyzer` only,
+sets `ANTHROPIC_API_KEY_FILE` to that target, and resets the direct key
+environment entry. Development may merge `compose.override.yml` between the
+base and secret overlay; the ordinary automatic development stack does not
+include the secret.
+
 Corrections to the earlier listing, all shipped in #58: `db` mounts
 `pgdata:/var/lib/postgresql` (#7); `planner`, `analyzer` and `transcriber`
 also join a new ordinary `egress` network, because an `internal: true`
@@ -1678,8 +1696,15 @@ multi-GB models.
 
 **Secrets.** `.env` is gitignored; `.env.example` is committed with placeholder
 values. `POSTGRES_PASSWORD` uses `:?required` so the stack refuses to start
-rather than silently defaulting. For `ANTHROPIC_API_KEY`, prefer a Docker
-secret or host-level env over `.env` once this leaves the development phase.
+rather than silently defaulting. The analyzer accepts the Anthropic key either
+from non-empty `ANTHROPIC_API_KEY` or from the regular UTF-8 file explicitly
+named by `ANTHROPIC_API_KEY_FILE`; setting both non-empty is an error. File
+loading strips terminal CR/LF only, and missing, unreadable, empty or malformed
+files fail startup without exposing content. No general secrets directory is
+read. `compose.anthropic.yml` is opt-in, mounts its secret only on `analyzer`,
+removes `ANTHROPIC_API_KEY` from that container's environment, and is deployed
+with `docker compose -f compose.yml -f compose.anthropic.yml up -d --build`.
+The base file retains Ollama and direct-environment compatibility.
 
 **`.dockerignore` is load-bearing**, not hygiene: without it, `web/node_modules`
 and `.git` enter the build context, inflating it by hundreds of MB and
@@ -1748,7 +1773,8 @@ Decided in #59, beyond the list above:
 - `migrate` gets `./migrations` mounted read-only, so a new revision runs with
   `docker compose run --rm migrate` and no rebuild. Migrations still never run
   on startup.
-- Vite runs on `127.0.0.1:5173` (from `node:24-alpine`, `./web` mounted), not
+- Vite runs on `127.0.0.1:5173` (from the same pinned `node:24-alpine` digest as
+  the frontend build stage, `./web` mounted), not
   8080: the overlay removes `web`'s `build:` (`!reset`) so the nginx image
   cannot be tagged `node:24-alpine`, and replaces the 8080 publish
   (`!override`). `API_PROXY_TARGET=http://api:8000` points its `/api` proxy at

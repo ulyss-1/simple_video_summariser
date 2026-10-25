@@ -52,7 +52,8 @@ def _yt_dlp_pin() -> str:
 def test_every_from_is_python_3_14_slim() -> None:
     froms = [args.split()[0] for name, args in _steps() if name == "FROM"]
     assert froms
-    assert all(f == "python:3.14-slim" for f in froms)
+    # Digest-pinned (#249): a bare tag fails.
+    assert all(re.fullmatch(r"python:3\.14-slim@sha256:[0-9a-f]{64}", f) for f in froms), froms
 
 
 def test_does_not_derive_from_the_backend_image() -> None:

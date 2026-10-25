@@ -4,7 +4,9 @@
 #   docker build -f ops/Dockerfile.frontend -t ytdigest-web:latest .
 
 # ---- build ----
-FROM node:24-alpine AS build
+# Digest-pinned like the runtime stage (#249); compose.override.yml's `web`
+# runs the same node digest. Bump per architecture.md 11.3.
+FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS build
 WORKDIR /src
 # The manifests come before any source, so editing a file under web/src never
 # invalidates the npm ci layer. `npm ci`, not `npm install`: it fails when

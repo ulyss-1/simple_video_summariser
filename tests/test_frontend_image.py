@@ -134,7 +134,8 @@ OWN_LOCATIONS = [h for h in _all_locations() if h not in PROXY_LOCATIONS]
 def test_stages_are_node_24_alpine_build_then_unprivileged_nginx_1_30_alpine() -> None:
     froms = [args for name, args in _steps() if name == "FROM"]
     assert len(froms) == 2
-    assert froms[0] == "node:24-alpine AS build"
+    # Digest-pinned (#249): a bare tag fails.
+    assert re.fullmatch(r"node:24-alpine@sha256:[0-9a-f]{64} AS build", froms[0])
     # Digest-pinned (#241): a bare tag fails.
     assert re.fullmatch(r"nginx/nginx-unprivileged:1\.30-alpine@sha256:[0-9a-f]{64}", froms[1])
 
@@ -240,8 +241,9 @@ def test_build_stage_declares_no_user() -> None:
 # ---- .dockerignore ----
 
 
-def test_dockerignore_excludes_web_dist() -> None:
-    assert "web/dist" in _dockerignore_lines()
+@pytest.mark.parametrize("path", ["web/dist", "web/tsconfig.tsbuildinfo"])
+def test_dockerignore_excludes_generated_frontend_artifacts(path: str) -> None:
+    assert path in _dockerignore_lines()
 
 
 def test_dockerignore_still_excludes_node_modules_and_env_files() -> None:
@@ -275,9 +277,9 @@ def test_dockerignore_keeps_what_the_build_needs(path: str) -> None:
             )
 
 
-def test_dockerignore_web_dist_is_appended_after_the_55_entries() -> None:
+def test_dockerignore_frontend_artifacts_are_appended_after_the_55_entries() -> None:
     lines = _dockerignore_lines()
-    assert lines[-2:] == ["web/dist", "web/coverage"]
+    assert lines[-3:] == ["web/dist", "web/tsconfig.tsbuildinfo", "web/coverage"]
     assert lines.index(".git") < lines.index("web/dist")
     assert lines.index("*:Zone.Identifier") < lines.index("web/dist")
 

@@ -143,10 +143,21 @@ def _is_running(pid: int) -> bool:
     """True unless ``pid`` is gone or a zombie (exited, not yet reaped by init)."""
     try:
         stat = pathlib.Path(f"/proc/{pid}/stat").read_text()
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
+        # ProcessLookupError (ESRCH): the process exited while /proc/<pid>/stat was read.
         return False
     state = stat.rsplit(")", 1)[1].split()[0]
     return state != "Z"
+
+
+def test_is_running_is_false_when_the_proc_entry_vanishes_mid_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def vanish(self: pathlib.Path, *args: object, **kwargs: object) -> str:
+        raise ProcessLookupError(3, "No such process")
+
+    monkeypatch.setattr(pathlib.Path, "read_text", vanish)
+    assert _is_running(1) is False
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="reads /proc")
