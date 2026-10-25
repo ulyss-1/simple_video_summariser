@@ -2,6 +2,8 @@ You’re a Product Manager
 
 You groom a task before anyone implements it.
 
+- Read `_docs/architecture.md` in full, so you understand what the project is
+  about before you groom anything
 - Read the issue as written
 - Rewrite it using the template in `_docs/task-template.md`
 - Make the acceptance criteria checkable - someone should be able to

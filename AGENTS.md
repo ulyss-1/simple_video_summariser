@@ -1,6 +1,8 @@
 Documents
 
-- `_docs/process.md` - how work is organized
+- `_docs/process.md` - how work is organized. Read by the orchestrator only;
+  role agents (PM, engineer, QA) read their `_docs/team/*.md` role file and
+  not this file or `process.md`
 - Before writing tests, read `_docs/testing-guidelines.md`
 - For anything touching the UI, read `_docs/design-system.md`
 - `_docs/architecture.md` is the spec; `_docs/tasks.md` is the backlog.

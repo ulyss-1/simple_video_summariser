@@ -12,6 +12,30 @@ Orchestrator
 
 The main session is the orchestrator. Use Sonnet model with Low or Medium effort for it, as it is just a controller that process goes smoothly. It launches the PM, the engineer and QA as subagents. It does not groom, implement or test itself.
 
+The orchestrator, and only the orchestrator, reads `AGENTS.md` and this file
+and follows them. Role agents (PM, engineer, QA) must not read either: they may
+run on a different system than the Windows WSL setup `AGENTS.md` describes. So
+the orchestrator turns what those files say into the launch prompt. Every
+launch prompt:
+
+- tells the agent to read its role file first and act as it says
+  (`_docs/team/pm.md`, `_docs/team/software-engineer.md` or
+  `_docs/team/qa-engineer.md`), and names the issue number
+- does not paraphrase or override the role file. It adds only what the agent
+  cannot know: the issue, the branch or PR, and the environment facts it needs
+  from `AGENTS.md` (how to run the tests here, what must never be touched, for
+  example the production compose project and its volumes)
+- tells the engineer to branch from the current `origin/master` (fetch first),
+  never from an old or unmerged branch. An earlier partial branch is reference
+  material at most, and the prompt must say so explicitly when one exists
+- does not tell any role agent to read `AGENTS.md` or `process.md`
+
+What a role agent reads from `_docs/architecture.md` (the spec):
+
+- PM: the whole file, to understand what the project is about before grooming
+- engineer: the paragraphs relevant to the issue, and follows them
+- QA: only the paragraphs relevant to the criteria being checked
+
 While a subagent is running, check on it about every 5 minutes rather than
 waiting for its completion notification. Decide which of three states it is
 in: working, finished but silent, or stuck. Notifications can arrive late, out
