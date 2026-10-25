@@ -288,7 +288,11 @@ first. A row older than 24 h is deleted with no API call, since Anthropic has
 expired the batch. For any other row it calls `cancel_orphan_batch`, and
 deletes the row on `cancelled` or `not_cancellable` and keeps it on
 `retry_later`. Rows of `pending` and `running` jobs are never touched, because
-resume depends on them. A retried dead job therefore resubmits its steps.
+resume depends on them. A row whose job was deleted (`DELETE /videos/{id}`,
+#251) keeps `job_id` NULL (`ON DELETE SET NULL`, migration 0019) and `submitted_at`,
+and the pass handles it like a `dead` / `done` row: cancel once, or expire after
+24 h, then delete. This is why the API, which has no `ANTHROPIC_API_KEY`, never
+cancels a batch itself. A retried dead job therefore resubmits its steps.
 
 `Summarizer` has three methods rather than one because D4b's roster pass and
 D9's reduce step are distinct LLM calls with distinct prompts and distinct
@@ -678,11 +682,13 @@ CREATE TABLE planner_task_runs (
 -- The Anthropic Message Batch each analyze step submitted, recorded before the
 -- first poll. A retried job resumes the batch when request_sha256 still matches,
 -- instead of submitting and paying for it again. Rows go when the analysis is
--- saved, or with the job (ON DELETE CASCADE), or, for a dead / done job whose
--- row survived, when the analyzer's orphan pass (#160) has cancelled its batch.
--- Migration 0013.
+-- saved, or, for a dead / done job whose row survived, when the analyzer's
+-- orphan pass (#160) has cancelled its batch. A row does not go with its job:
+-- deleting the job sets job_id to NULL (ON DELETE SET NULL, #251) and the same
+-- pass cancels the batch and deletes the row. Migration 0013; nullable job_id
+-- and SET NULL from migration 0019.
 CREATE TABLE llm_batches (
-    job_id         BIGINT NOT NULL REFERENCES jobs (id) ON DELETE CASCADE,
+    job_id         BIGINT REFERENCES jobs (id) ON DELETE SET NULL,  -- NULL: the job was deleted
     step_key       TEXT NOT NULL,        -- 'roster', 'chunks', 'chunks:repair', 'reduce', 'chunk:<seq>', ...:repair
     batch_id       TEXT NOT NULL,
     request_sha256 TEXT NOT NULL,        -- SHA-256 of the step's requests (custom_id and params)
