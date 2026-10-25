@@ -1,4 +1,4 @@
-"""Migration ``0020_search_description`` (issue #168)."""
+"""Migration ``0021_search_description`` (issue #168)."""
 
 from __future__ import annotations
 
@@ -41,14 +41,14 @@ def _trigger_def(conn: psycopg.Connection[tuple[object, ...]]) -> str:
     return str(row[0])
 
 
-def test_0020_is_chained_to_0019() -> None:
+def test_0021_is_chained_to_0020() -> None:
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "migrations"))
 
-    revision = ScriptDirectory.from_config(config).get_revision("0020")
+    revision = ScriptDirectory.from_config(config).get_revision("0021")
 
     assert revision is not None
-    assert revision.down_revision == "0019"
+    assert revision.down_revision == "0020"
 
 
 @integration
@@ -56,7 +56,7 @@ def test_upgrade_backfills_descriptions_and_downgrade_removes_them(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = _config_for(postgres_dsn, monkeypatch)
-    command.upgrade(config, "0019")
+    command.upgrade(config, "0020")
     with psycopg.connect(postgres_dsn) as conn:
         conn.execute(
             "INSERT INTO videos (video_id, title, description)"
@@ -65,7 +65,7 @@ def test_upgrade_backfills_descriptions_and_downgrade_removes_them(
         conn.commit()
         assert _matches(conn, "okapis") == []
 
-    command.upgrade(config, "0020")
+    command.upgrade(config, "0021")
 
     with psycopg.connect(postgres_dsn) as conn:
         assert _matches(conn, "okapis") == ["mig15video1"]
@@ -75,7 +75,7 @@ def test_upgrade_backfills_descriptions_and_downgrade_removes_them(
         assert doc is not None and "'okapi':3C" in doc[0]
         assert "UPDATE OF title, description" in _trigger_def(conn)
 
-    command.downgrade(config, "0019")
+    command.downgrade(config, "0020")
 
     with psycopg.connect(postgres_dsn) as conn:
         assert _matches(conn, "okapis") == []
@@ -83,7 +83,7 @@ def test_upgrade_backfills_descriptions_and_downgrade_removes_them(
         trigger = _trigger_def(conn)
         assert "UPDATE OF title ON" in trigger and "description" not in trigger
 
-    command.upgrade(config, "0020")
+    command.upgrade(config, "0021")
     with psycopg.connect(postgres_dsn) as conn:
         assert _matches(conn, "okapis") == ["mig15video1"]
 
@@ -92,7 +92,7 @@ def test_upgrade_backfills_descriptions_and_downgrade_removes_them(
 def test_changing_only_the_description_refreshes_the_search_doc(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    command.upgrade(_config_for(postgres_dsn, monkeypatch), "0020")
+    command.upgrade(_config_for(postgres_dsn, monkeypatch), "0021")
     with psycopg.connect(postgres_dsn) as conn:
         conn.execute("INSERT INTO videos (video_id, title) VALUES ('mig15trig01', 'Plain')")
         assert _matches(conn, "okapis") == []

@@ -1,7 +1,7 @@
 """search_docs: materialise the analysis text for highlighted excerpts
 
-Revision ID: 0021
-Revises: 0020
+Revision ID: 0022
+Revises: 0021
 Create Date: 2026-10-17
 
 Issue #169. ``ts_headline`` needs the original text, which the ``fts`` tsvector
@@ -13,7 +13,7 @@ stays in this one function and the existing triggers keep it in sync. (The title
 needs no column: the search reads ``videos.title``.)
 
 * ``upgrade()`` adds the column, replaces the function, rebuilds every row.
-* ``downgrade()`` restores the 0020 function, drops the column, rebuilds.
+* ``downgrade()`` restores the 0021 function, drops the column, rebuilds.
 
 Raw SQL through ``op.execute`` (convention set by #7). Runs only as the
 standalone ``migrate`` command.
@@ -26,8 +26,8 @@ from collections.abc import Sequence
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0021"
-down_revision: str | None = "0020"
+revision: str = "0022"
+down_revision: str | None = "0021"
 branch_labels: Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

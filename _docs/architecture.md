@@ -601,7 +601,7 @@ CREATE INDEX search_docs_fts_idx ON search_docs USING GIN (fts);
 Query weights are `'{0.1, 0.2, 0.4, 1.0}'` (D, C, B, A).
 
 Highlighted excerpts for title and analysis matches (#169, migration
-`0021_search_analysis_text`): `search_docs.analysis_text TEXT NOT NULL DEFAULT ''`
+`0022_search_analysis_text`): `search_docs.analysis_text TEXT NOT NULL DEFAULT ''`
 holds the plain text behind weights B and C (latest TL;DR, topic titles and
 summaries, claim texts, `videos.description`), one per line, written by
 `refresh_search_doc` beside `fts`. `ts_headline` (English query) runs over it and
