@@ -1078,6 +1078,32 @@ export interface components {
             /** Title */
             title: string | null;
         };
+        /** PlannerRunsOut */
+        PlannerRunsOut: {
+            /** Items */
+            items: components["schemas"]["PlannerTaskRunItem"][];
+        };
+        /** PlannerTaskRunItem */
+        PlannerTaskRunItem: {
+            /** Interval Sec */
+            interval_sec: number;
+            /** Last Count */
+            last_count: number | null;
+            /** Last Error */
+            last_error: string | null;
+            /** Last Finished At */
+            last_finished_at: string | null;
+            /** Last Ok At */
+            last_ok_at: string | null;
+            /** Last Outcome */
+            last_outcome: ("ok" | "failed") | null;
+            /** Last Skipped Locked At */
+            last_skipped_locked_at: string | null;
+            /** Last Started At */
+            last_started_at: string | null;
+            /** Task Name */
+            task_name: string;
+        };
         /**
          * ProgressOut
          * @description Progress of a transcribe job (#245).
@@ -1104,32 +1130,6 @@ export interface components {
             percent: number | null;
             /** Updated At */
             updated_at: string | null;
-        };
-        /** PlannerRunsOut */
-        PlannerRunsOut: {
-            /** Items */
-            items: components["schemas"]["PlannerTaskRunItem"][];
-        };
-        /** PlannerTaskRunItem */
-        PlannerTaskRunItem: {
-            /** Interval Sec */
-            interval_sec: number;
-            /** Last Count */
-            last_count: number | null;
-            /** Last Error */
-            last_error: string | null;
-            /** Last Finished At */
-            last_finished_at: string | null;
-            /** Last Ok At */
-            last_ok_at: string | null;
-            /** Last Outcome */
-            last_outcome: ("ok" | "failed") | null;
-            /** Last Skipped Locked At */
-            last_skipped_locked_at: string | null;
-            /** Last Started At */
-            last_started_at: string | null;
-            /** Task Name */
-            task_name: string;
         };
         /** QuoteOut */
         QuoteOut: {
