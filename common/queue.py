@@ -285,6 +285,8 @@ class Job:
     started_at: datetime | None = None
     #: When the planner announced this dead-letter to the operator (#67).
     alerted_at: datetime | None = None
+    #: Live figures of a running transcribe job (#245); cleared on every exit from ``running``.
+    progress: dict[str, Any] | None = None
 
 
 def _job_from_row(row: dict[str, Any]) -> Job:
@@ -319,6 +321,18 @@ class JobQueue(Protocol):
 
     def enqueue(
         self,
+        kind: str,
+        video_id: str,
+        *,
+        dedupe_key: str = "default",
+        payload: dict[str, Any] | None = None,
+        priority: int = 0,
+        run_after: datetime | None = None,
+    ) -> int | None: ...
+
+    def handoff(
+        self,
+        parent_job_id: int,
         kind: str,
         video_id: str,
         *,
@@ -403,6 +417,56 @@ class PostgresQueue:
             row = cur.fetchone()
         return int(row[0]) if row is not None else None
 
+    def handoff(
+        self,
+        parent_job_id: int,
+        kind: str,
+        video_id: str,
+        *,
+        dedupe_key: str = "default",
+        payload: dict[str, Any] | None = None,
+        priority: int = 0,
+        run_after: datetime | None = None,
+    ) -> int | None:
+        if kind not in _VALID_KINDS:
+            raise ValueError(
+                f"unknown job kind {kind!r}; expected one of {sorted(_VALID_KINDS)}"
+            )
+        with self._conn.transaction(), self._conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM videos WHERE video_id = %s FOR UPDATE", (video_id,))
+            if cur.fetchone() is None:
+                raise ValueError(f"no video {video_id!r} for handoff")
+            cur.execute(
+                "SELECT priority FROM jobs WHERE id = %s AND video_id = %s",
+                (parent_job_id, video_id),
+            )
+            parent = cur.fetchone()
+            if parent is None:
+                raise ValueError(
+                    f"parent job {parent_job_id} does not belong to video {video_id!r}"
+                )
+            cur.execute(
+                """
+                INSERT INTO jobs (video_id, kind, dedupe_key, payload, priority, run_after)
+                VALUES (%(video_id)s, %(kind)s, %(dedupe_key)s, %(payload)s,
+                        %(priority)s, COALESCE(%(run_after)s, now()))
+                ON CONFLICT (video_id, kind, dedupe_key)
+                    WHERE state IN ('pending', 'running')
+                DO NOTHING
+                RETURNING id
+                """,
+                {
+                    "video_id": video_id,
+                    "kind": kind,
+                    "dedupe_key": dedupe_key,
+                    "payload": Jsonb(payload if payload is not None else {}),
+                    "priority": max(int(parent[0]), priority),
+                    "run_after": run_after,
+                },
+            )
+            row = cur.fetchone()
+        return int(row[0]) if row is not None else None
+
     # -- claim ---------------------------------------------------------------
 
     @contextmanager
@@ -428,7 +492,7 @@ class PostgresQueue:
                 worker,
                 """
                 UPDATE jobs SET state='pending', run_after=%(until)s,
-                       attempts=attempts-1, locked_by=NULL, locked_at=NULL
+                       attempts=attempts-1, locked_by=NULL, locked_at=NULL, progress=NULL
                 WHERE id=%(id)s AND locked_by=%(worker)s AND state='running'
                 """,
                 {"until": defer.until},
@@ -439,7 +503,7 @@ class PostgresQueue:
                 worker,
                 """
                 UPDATE jobs SET state='pending', run_after=now(),
-                       attempts=attempts-1, locked_by=NULL, locked_at=NULL
+                       attempts=attempts-1, locked_by=NULL, locked_at=NULL, progress=NULL
                 WHERE id=%(id)s AND locked_by=%(worker)s AND state='running'
                 """,
                 {},
@@ -458,7 +522,8 @@ class PostgresQueue:
                 worker,
                 """
                 UPDATE jobs SET state='done', finished_at=now(),
-                       locked_by=NULL, locked_at=NULL
+                       locked_by=NULL, locked_at=NULL, progress=NULL,
+                       last_error=NULL, error_class=NULL
                 WHERE id=%(id)s AND locked_by=%(worker)s AND state='running'
                 """,
                 {},
@@ -507,7 +572,7 @@ class PostgresQueue:
                 worker,
                 """
                 UPDATE jobs SET state='dead', finished_at=now(),
-                       locked_by=NULL, locked_at=NULL,
+                       locked_by=NULL, locked_at=NULL, progress=NULL,
                        last_error=%(last_error)s, error_class=%(error_class)s
                 WHERE id=%(id)s AND locked_by=%(worker)s AND state='running'
                 """,
@@ -525,7 +590,7 @@ class PostgresQueue:
             """
             UPDATE jobs SET state='pending',
                    run_after = now() + (%(delay_sec)s * interval '1 second'),
-                   locked_by=NULL, locked_at=NULL,
+                   locked_by=NULL, locked_at=NULL, progress=NULL,
                    last_error=%(last_error)s, error_class=%(error_class)s
             WHERE id=%(id)s AND locked_by=%(worker)s AND state='running'
             """,
@@ -731,18 +796,21 @@ class PostgresQueue:
         )
 
     def raise_priority(self, video_id: str, priority: int) -> list[int]:
-        """Raise every ``pending`` job of ``video_id`` below ``priority`` to it (#103).
-
-        Whatever its kind or key. Returns the ids it changed. Only ``priority``
-        is written, so a job in backoff keeps its ``run_after`` and spends no
-        attempt; a job at or above ``priority`` is left alone. Nothing is
-        inserted. PostgresQueue only, not on the ``JobQueue`` Protocol.
-        """
-        return self._update_pending(
-            "priority = %(priority)s",
-            "video_id = %(video_id)s AND priority < %(priority)s",
-            {"video_id": video_id, "priority": priority},
-        )
+        """Raise queued work and running successor producers for one video (#103, #155)."""
+        with self._conn.transaction(), self._conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM videos WHERE video_id = %s FOR UPDATE", (video_id,))
+            cur.fetchone()
+            cur.execute(
+                """
+                UPDATE jobs SET priority = %(priority)s
+                WHERE video_id = %(video_id)s AND priority < %(priority)s
+                  AND (state = 'pending'
+                       OR (state = 'running' AND kind IN ('ingest', 'transcribe')))
+                RETURNING id
+                """,
+                {"video_id": video_id, "priority": priority},
+            )
+            return [int(row[0]) for row in cur.fetchall()]
 
     def cancel_backfill(self, channel_id: str, backfill_id: str) -> list[CancelledJob]:
         """Delete one backfill's still-``pending`` ``ingest`` jobs of a channel (#116).
@@ -851,7 +919,7 @@ class PostgresQueue:
                                           %(max_backoff)s)
                                       * (1 + (random() * 2 - 1) * %(jitter)s))
                             END,
-                    locked_by = NULL, locked_at = NULL,
+                    locked_by = NULL, locked_at = NULL, progress = NULL,
                     last_error = %(last_error)s, error_class = NULL
                 FROM stale
                 WHERE j.id = stale.id AND j.state = 'running'

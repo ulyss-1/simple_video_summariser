@@ -70,12 +70,14 @@ def _analysis(
     tokens: tuple[int, int] = (0, 0),
     cost: float | None = None,
     coerced: int | None = None,
+    usage: tuple[int | None, int | None, int | None] = (None, None, None),
 ) -> None:
     conn.execute(
         "INSERT INTO analyses (video_id, transcript_id, chunk_strategy, model, prompt_version,"
-        " tldr, input_tokens, output_tokens, cost_usd, speakers_coerced)"
-        " VALUES (%s, %s, 's', %s, %s, 't', %s, %s, %s, %s)",
-        (vid, transcript_id, model, prompt_version, tokens[0], tokens[1], cost, coerced),
+        " tldr, input_tokens, output_tokens, cost_usd, speakers_coerced,"
+        " cache_read_tokens, cache_write_tokens, calls)"
+        " VALUES (%s, %s, 's', %s, %s, 't', %s, %s, %s, %s, %s, %s, %s)",
+        (vid, transcript_id, model, prompt_version, tokens[0], tokens[1], cost, coerced, *usage),
     )
 
 
@@ -202,7 +204,19 @@ def test_tokens_are_summed_per_model(conn: psycopg.Connection[Any]) -> None:
     _analysis(conn, "a", t, model="qwen", prompt_version="v2", tokens=(5, 2))
     _analysis(conn, "a", t, model="claude", tokens=(7, 3))
 
-    assert token_usage_by_model(conn) == {"qwen": (15, 3), "claude": (7, 3)}
+    assert token_usage_by_model(conn) == {"qwen": (15, 3, 0, 0, 0), "claude": (7, 3, 0, 0, 0)}
+
+
+def test_cache_tokens_and_calls_are_summed_and_null_contributes_nothing(
+    conn: psycopg.Connection[Any],
+) -> None:
+    t = _transcript(conn, "a")
+    _analysis(conn, "a", t, model="qwen", tokens=(10, 1), usage=(None, None, None))
+    _analysis(conn, "a", t, model="qwen", prompt_version="v2", tokens=(5, 2), usage=(5, 7, 2))
+    _analysis(conn, "a", t, model="qwen", prompt_version="v3", tokens=(1, 1), usage=(1, 0, 4))
+    _analysis(conn, "a", t, model="old", tokens=(3, 3))
+
+    assert token_usage_by_model(conn) == {"qwen": (16, 4, 6, 7, 6), "old": (3, 3, 0, 0, 0)}
 
 
 def test_empty_analyses_give_no_usage_no_cost_and_zero_coercions(

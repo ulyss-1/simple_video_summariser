@@ -272,6 +272,28 @@ the Anthropic adapter implements it. Its batches are recorded in `llm_batches`
 before the first poll; a retried job resumes them, and a cancelled job stops
 waiting within a second and leaves its batch running.
 
+`OrphanBatchCanceller` (#160) is a third optional extension, again only on the
+Anthropic adapter: `cancel_orphan_batch(batch_id)` sends one cancel and returns
+`"cancelled"`, `"not_cancellable"` or `"retry_later"` (401, 403, 429, 5xx or a
+transport failure); it never raises and touches no per-job state, so another
+thread may call it while a job runs. A job that ends `dead` (non-retryable
+error, max attempts, the reaper, the watchdog, a superseded job) or `done`
+without `clear()` can leave a row in `llm_batches` whose batch keeps running
+and billing. The analyzer, the only service holding `ANTHROPIC_API_KEY` (D6),
+runs the orphan pass (`services/analyzer/orphans.py`) in a daemon thread
+when its summarizer implements the protocol, also with `ANTHROPIC_BATCH=0`. The
+thread opens its own connection per pass and runs one pass at startup and then
+one every 600 s. A pass takes up to 20 rows of `dead` / `done` jobs, oldest
+first. A row older than 24 h is deleted with no API call, since Anthropic has
+expired the batch. For any other row it calls `cancel_orphan_batch`, and
+deletes the row on `cancelled` or `not_cancellable` and keeps it on
+`retry_later`. Rows of `pending` and `running` jobs are never touched, because
+resume depends on them. A row whose job was deleted (`DELETE /videos/{id}`,
+#251) keeps `job_id` NULL (`ON DELETE SET NULL`, migration 0019) and `submitted_at`,
+and the pass handles it like a `dead` / `done` row: cancel once, or expire after
+24 h, then delete. This is why the API, which has no `ANTHROPIC_API_KEY`, never
+cancels a batch itself. A retried dead job therefore resubmits its steps.
+
 `Summarizer` has three methods rather than one because D4b's roster pass and
 D9's reduce step are distinct LLM calls with distinct prompts and distinct
 failure modes. Collapsing them into one `summarize()` would hide that a roster
@@ -304,12 +326,29 @@ and rate-limitable.
 Claim ordering is `priority DESC, run_after ASC`. This is what prevents a
 200-episode backfill from starving today's episodes (D9b).
 
+Pipeline handoff preserves the greater of the successor's supplied priority and
+the parent job's current persisted priority. Handoff and `POST /videos`
+reprioritization serialize on the video's row: resubmission raises pending jobs
+and running `ingest`/`transcribe` jobs, but never running `analyze`. Therefore a
+human bump reaches the next stage without durable per-video override state and
+without leaking into a later re-analysis sweep or unrelated pipeline run (#155).
+
 RSS-gap reconciliation (#93) queues at the Normal band with `origin = 'rss'`:
 a channel that uploads more than the ~15 feed entries between two polls loses
 videos the feed never showed, and those are forward-monitored content, not
 history. Only uploads positioned above a known post-`monitor_from` video (the
 anchor) in the channel's newest-50 listing are recovered; anything below it may
 be pre-cutoff history and stays for an explicit backfill (D9b, #41).
+
+The channel gap columns are current state, not event history (#156). Polling's
+existing possible-gap condition sets `suspected` without moving an existing
+start time. Reconciliation changes only an existing marker: no valid anchor is
+`no_anchor`; a lowest anchor at the final unique entry of a full bounded listing
+is `listing_window_exhausted`; any other valid anchor clears the marker after
+all candidate writes commit atomically. Catalog, database, rate-limit and budget
+failures preserve it. A complete real synchronous backfill and a planner request
+that reaches `done` clear it; dry, failed, cancelled, partial or interrupted runs
+do not.
 
 Backfills beyond `POST /channels/{id}/backfill`'s 500 uploads (#115) are not a
 job kind: `jobs.video_id` is `NOT NULL`, so a per-channel job does not fit, and a
@@ -399,8 +438,12 @@ CREATE TABLE channels (
     added_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     poll_failing_since TIMESTAMPTZ,                    -- start of the current failed-poll run; NULL = last poll ok (#90)
     poll_failures INTEGER     NOT NULL DEFAULT 0,      -- failed RSS polls in a row; 0 iff poll_failing_since IS NULL (#90)
+    feed_gap_detected_at TIMESTAMPTZ,                  -- start of the current unresolved feed gap (#156)
+    feed_gap_reason TEXT,                              -- suspected | no_anchor | listing_window_exhausted
     CHECK (poll_failures >= 0),
-    CHECK ((poll_failures = 0) = (poll_failing_since IS NULL))
+    CHECK ((poll_failures = 0) = (poll_failing_since IS NULL)),
+    CHECK (feed_gap_reason IS NULL OR feed_gap_reason IN ('suspected', 'no_anchor', 'listing_window_exhausted')),
+    CHECK ((feed_gap_detected_at IS NULL) = (feed_gap_reason IS NULL))
 );
 
 CREATE TABLE videos (
@@ -445,7 +488,17 @@ CREATE INDEX transcripts_fts_idx ON transcripts USING GIN (fts);
 -- needs a new migration that also re-runs ALTER COLUMN fts SET EXPRESSION.
 -- transcript_ts_config(lang TEXT) RETURNS regconfig
 -- transcript_search_tsquery(q TEXT) RETURNS tsquery  -- OR over all those configs
+```
 
+`transcript_ts_config` uses a built-in PostgreSQL text-search configuration
+where one is mapped and `simple` otherwise. The `simple` configuration
+lowercases text but does not segment an unspaced run: the complete run is one
+lexeme. An exact whole-run or whole-token query can therefore match, but a query
+for text inside that run does not. Whitespace and punctuation can create token
+boundaries. This is a documented v1 limitation for unsupported languages; v1
+adds no segmenter or alternate index (#167).
+
+```sql
 -- source preference (D2): manual > whisper > auto
 CREATE FUNCTION transcript_rank(src TEXT) RETURNS INT IMMUTABLE LANGUAGE sql AS
 $$ SELECT CASE src WHEN 'youtube_manual' THEN 0
@@ -513,6 +566,9 @@ CREATE TABLE analyses (
     speaker_roster JSONB,              -- LLM-derived, versioned  (C3)
     input_tokens   INTEGER NOT NULL DEFAULT 0,
     output_tokens  INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens  INTEGER,        -- (#139) NULL = not recorded (pre-0018 rows)
+    cache_write_tokens INTEGER,        -- (#139) NULL = not recorded
+    calls          INTEGER,            -- (#139) model requests of the job, repairs included; NULL = not recorded
     cost_usd       NUMERIC(10,5),
     duration_ms    INTEGER,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -590,7 +646,8 @@ CREATE TABLE jobs (
     finished_at  TIMESTAMPTZ,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     started_at   TIMESTAMPTZ,        -- latest claim (#60)
-    alerted_at   TIMESTAMPTZ         -- dead-letter announced to the operator (#67)
+    alerted_at   TIMESTAMPTZ,        -- dead-letter announced to the operator (#67)
+    progress     JSONB               -- live figures of a running transcribe job (#245)
 );
 
 CREATE UNIQUE INDEX jobs_active_uniq ON jobs (video_id, kind, dedupe_key)
@@ -616,7 +673,8 @@ CREATE TABLE planner_task_runs (
     last_error             TEXT,                       -- "<Class>: <message>", <= 500 chars, no traceback
     last_count             INTEGER,                    -- value fn() returned; NULL on failure or None
     last_ok_at             TIMESTAMPTZ,                -- finish time of the last ok run
-    last_skipped_locked_at TIMESTAMPTZ                 -- another planner held the lock; touches no other column
+    last_skipped_locked_at TIMESTAMPTZ,                -- another planner held the lock; touches no other column
+    cumulative_count       BIGINT NOT NULL DEFAULT 0   -- sum of non-NULL counts from ok runs (#138)
 );
 
 -- ============ analyze batches (#89) ============
@@ -624,9 +682,13 @@ CREATE TABLE planner_task_runs (
 -- The Anthropic Message Batch each analyze step submitted, recorded before the
 -- first poll. A retried job resumes the batch when request_sha256 still matches,
 -- instead of submitting and paying for it again. Rows go when the analysis is
--- saved, or with the job (ON DELETE CASCADE). Migration 0013.
+-- saved, or, for a dead / done job whose row survived, when the analyzer's
+-- orphan pass (#160) has cancelled its batch. A row does not go with its job:
+-- deleting the job sets job_id to NULL (ON DELETE SET NULL, #251) and the same
+-- pass cancels the batch and deletes the row. Migration 0013; nullable job_id
+-- and SET NULL from migration 0019.
 CREATE TABLE llm_batches (
-    job_id         BIGINT NOT NULL REFERENCES jobs (id) ON DELETE CASCADE,
+    job_id         BIGINT REFERENCES jobs (id) ON DELETE SET NULL,  -- NULL: the job was deleted
     step_key       TEXT NOT NULL,        -- 'roster', 'chunks', 'chunks:repair', 'reduce', 'chunk:<seq>', ...:repair
     batch_id       TEXT NOT NULL,
     request_sha256 TEXT NOT NULL,        -- SHA-256 of the step's requests (custom_id and params)
@@ -819,24 +881,42 @@ separated per D13.
 
 | Method | Path | Notes |
 |---|---|---|
-| `POST` | `/videos` | body `{url}`; priority `+10`; returns job id |
+| `POST` | `/videos` | body `{url}`; priority `+10`; returns job id; clears a matching deletion tombstone atomically |
+| `DELETE` | `/videos/{id}` | permanently deletes the video and derived data; `409` while any job is running; records a tombstone so only explicit `POST /videos` can restore it |
 | `POST` | `/channels` | forward-only; sets `monitor_from`. Accepts a channel ID, `youtube.com/channel/` URL, or `@handle`, `/c/` or `/user/` reference; a name is resolved synchronously with one bounded yt-dlp call (at most 20 s, #81, an exception to the no-processing rule in §1): `404` if it does not exist, `503` on timeout or rate limit, `502` on bad output |
 | `GET` | `/channels` | paginated channel list (id, title, active, video count), powers the Library channel filter |
 | `POST` | `/channels/{id}/backfill` | `{limit, dry_run}`; priority `-10` (D9b) |
 | `POST` | `/channels/{id}/backfill-requests` | `{limit <= 5000, dry_run}`; only records a request, the planner `channel_backfill` task runs it (#115); `409` while the channel has a pending or running one |
 | `GET` | `/channels/{id}/backfill-requests/{request_id}` | state, attempts, enqueued, timestamps and `result` (the shape of the synchronous response) (#115) |
-| `POST` | `/channels/{id}/backfill/cancel` | `{backfill_id}`; deletes that backfill's pending `ingest` jobs (#116) |
+| `POST` | `/channels/{id}/backfill/cancel` | `{backfill_id}`; ends the matching active request and deletes only its pending backfill-priority `ingest` jobs; a matching running `ingest` finishes normally and is excluded from `cancelled`, while already-created `transcribe` and `analyze` jobs are not cancelled (#116, #166) |
 | `POST` | `/videos/{id}/reanalyze` | force new `analyze` at current version |
-| `GET` | `/videos` | paginated library view; filters: channel, state, date |
+| `GET` | `/videos` | paginated library view; filters: channel, state, date; repeated paired `sort=title|published|status|channel`, `order=asc|desc` (up to four unique keys) |
 | `GET` | `/videos/{id}` | latest analysis + job state |
 | `GET` | `/videos/{id}/analyses` | all runs (Compare view, D7) |
 | `GET` | `/videos/{id}/transcript` | paginated segments |
 | `GET` | `/videos/{id}/render` | **server-side HTML render** (D12c) |
-| `GET` | `/search?q=` | FTS over `search_docs` (title, latest analysis, preferred transcript); `matched_in` and transcript `ts_headline` excerpts |
+| `GET` | `/search?q=` | FTS over `search_docs` (title, latest analysis, preferred transcript); `matched_in` and transcript `ts_headline` excerpts. Transcript search uses a mapped built-in PostgreSQL configuration or `simple`; with `simple`, exact whole runs/tokens can match, but text inside an unspaced run cannot unless whitespace or punctuation creates a token boundary (#167). |
+| `GET` | `/ops/channels` | current poll health plus nullable feed-gap state; strict `failing` or `attention` filter (mutually exclusive), failures first, then oldest gaps, then healthy channels |
 | `GET` | `/ops/jobs` | filter by state/kind — powers Ops view |
 | `POST` | `/ops/jobs/{id}/retry` | resurrect a dead job |
 | `GET` | `/healthz` | liveness + queue depth by kind/state |
 | `GET` | `/metrics` | Prometheus text format (optional) |
+
+`GET /videos` accepts repeated `sort` and `order` parameters paired by position,
+in primary-to-quaternary precedence order. Keys are unique and capped at the
+four columns; invalid, empty, wrong-case, duplicate, over-cap or mismatched
+multi-key sequences are `422` before database access. Scalar compatibility is
+unchanged: neither parameter means `published desc`, one `sort` alone uses
+`desc`, and one `order` alone uses `published`; omitted counterparts are not
+allowed for a multi-key sequence. Unknown unrelated parameters remain ignored.
+
+The server applies the requested sequence before offset pagination. Title and
+channel compare `lower(...) COLLATE "C"`; title, channel and publication NULLs
+are last in either direction. Status rank ascending is `idle`, `processing`,
+`done`, `unavailable`, `failed`, and descending reverses it. If `published`
+appears anywhere, `discovered_at DESC` follows all requested keys. Every mode
+ends with exactly one immutable `video_id ASC`; requested directions never
+reverse this final tie-break.
 
 Every route passes through `deps.require_auth` — a no-op returning `None` in
 v1, one implementation change away from enforcing a bearer token (D13).
@@ -1184,11 +1264,33 @@ ARG VITE_API_BASE=/api
 RUN npm run build               # prebuild runs gen:api first → /src/dist
 
 # ---- runtime ----
-FROM nginx:1.27-alpine
+FROM nginx/nginx-unprivileged:1.30-alpine@sha256:517607ae849a46afbd400616a783e4ead0290f52d20ccc0618ccea1a49362474
+USER root                       # build-time cleanup only; nothing starts as root
 RUN rm -rf /usr/share/nginx/html/*   # the base image's own index.html, 50x.html
 COPY --from=build /src/dist /usr/share/nginx/html
 COPY ops/nginx.conf /etc/nginx/conf.d/default.conf
+USER 101                        # numeric non-root runtime user
 ```
+
+The runtime is the maintained nginx stable line (1.30) in its unprivileged
+variant (#140): nginx listens on container port **8080**, the pid file and
+temporary paths live under `/tmp`, and the container runs as uid 101, so it also
+starts with `--read-only --tmpfs /tmp`.
+
+The stage is pinned by tag **and** digest (#241), the multi-platform index
+digest, so every build uses the same bytes. Upstream rebuilds a stable tag
+for security fixes, so a pin goes stale silently unless something looks: the
+daily `base image digest check` workflow
+(`.github/workflows/base-image-digest-check.yml`, running
+`scripts/base_image_digest_check.py ops/Dockerfile.frontend`) goes red, naming
+the pinned and the upstream digest. It only reports; a human bumps the pin, as
+for yt-dlp (§16.11). To bump: run
+`docker buildx imagetools inspect nginx/nginx-unprivileged:1.30-alpine`,
+replace the digest in `ops/Dockerfile.frontend` and in the listing above, open
+a PR, and deploy. A side benefit is build-cache correctness: a changed digest
+changes the `FROM` line, so the next `docker compose -f compose.yml up -d
+--build` on the host is guaranteed to fetch the new base, which a tag-only
+`FROM` does not guarantee without `--pull`.
 
 **This is where D12's "no Node in production" becomes literal.** Node exists
 only in the `build` stage; the shipped image is nginx plus static files, ~30 MB,
@@ -1232,12 +1334,12 @@ map $request_uri $api_path {
 # through untouched).
 
 server {
-    listen 80;
+    listen 8080;
     root /usr/share/nginx/html;
     access_log /var/log/nginx/access.log ytdigest;
 
     # Deviation from 11.3: redirects nginx issues are relative, never naming
-    # the container's :80 (wrong behind the 127.0.0.1:8080 mapping and proxy).
+    # the container's :8080 (wrong behind the 127.0.0.1:8080 mapping and proxy).
     absolute_redirect off;
     # Deviation from 11.3: no version in the Server header or error pages.
     server_tokens off;
@@ -1410,7 +1512,7 @@ services:
   web:
     build: {context: ., dockerfile: ops/Dockerfile.frontend}
     image: ytdigest-web:latest
-    ports: ["127.0.0.1:8080:80"]      # loopback only (D13)
+    ports: ["127.0.0.1:8080:8080"]    # loopback only (D13)
     depends_on: {api: {condition: service_healthy}}
     networks: [edge]
     logging: *logging
@@ -1664,9 +1766,30 @@ Decided in #59, beyond the list above:
   mountpoint in the host tree as root. The `web` command starts as root only
   to give `/home/node/app` to `node`, then runs `npm ci` and the dev server as
   `node`. A new top-level file Vite needs must be added to the list.
-- The workers (`planner`, `analyzer`, `transcriber`) get the same mounts but
-  keep their commands; after an edit, `docker compose restart <service>`
-  picks it up. Restarting them automatically is #142.
+- The workers (`planner`, `analyzer`, `transcriber`) get the same mounts and
+  keep their commands (no wrapper, no shell). They restart on a source edit
+  through Docker Compose Watch (#142): `develop.watch` with `action: restart`
+  in `compose.override.yml` only. Compose Watch is built into `docker
+  compose`, so it adds no dependency, matching #59's "no `watchfiles`"
+  decision; `sync` is not used because the mounts are read-only. The dev loop
+  is `docker compose up -d --build` followed by `docker compose watch
+  --no-up` in its own terminal, or `docker compose up --watch --build` in the
+  foreground; `-d` and `--watch` cannot be combined. Without watch nothing
+  restarts by itself, and `docker compose restart <service>` still picks up
+  an edit. `api` has no rule (uvicorn reloads it). Each worker watches
+  `./common`, `./adapters` and only its own `./services/<worker>`, ignoring
+  `**/__pycache__` (the directory itself), `**/__pycache__/**` and `**/*.pyc`,
+  so host-side `pytest` restarts nothing.
+  Adding a cross-service import to a worker (for example `services.planner`
+  importing `services.analyzer`) means adding that path to its watch list.
+  A job in flight at restart: the worker stops claiming and gives the handler
+  `WORKER_SHUTDOWN_GRACE_SEC` (default 20 s) to finish, then sets
+  `ctx.cancelled`; a handler that reaches `check_cancelled()` hands the job
+  back without spending an attempt (#13). For `transcribe` the transcription
+  starts again from the beginning on the next claim and its progress is lost.
+  A handler blocked past the 30 s `stop_grace_period` is SIGKILLed and the
+  reaper recovers the job (#12). So do not edit worker code during a long dev
+  transcription you want to keep; run plain `up -d` (no watch) instead.
 
 Production deployment uses `docker compose -f compose.yml up -d` explicitly, so
 the override is never applied by accident.
@@ -1682,9 +1805,14 @@ gauges, no tracing stack.
   every line. One correlation id per job, propagated through adapter calls.
 - **Key metrics** (exposed at `/metrics`, scraped or just curl'd):
   `queue_depth{kind,state}`, `job_duration_seconds{kind}`,
-  `whisper_rtf`, `llm_tokens_total{model,direction}`, `llm_cost_usd_total`,
+  `whisper_rtf`, `llm_tokens_total{model,direction}` (directions `input`,
+  `output`, `cache_read`, `cache_write`), `llm_calls_total{model}` (#139),
+  `llm_cost_usd_total`,
   `speaker_coercions_total` (§8.1 — the D4b quality canary),
-  `audio_bytes_used`.
+  `audio_bytes_used`, and zero-filled
+  `feed_gap_channels{reason="suspected|no_anchor|listing_window_exhausted"}`.
+  Feed-gap metrics are one aggregate query in the scrape snapshot and never
+  carry channel, title, error, URL or other unbounded labels.
 - **The two that matter most:** `queue_depth{kind="transcribe",state="pending"}`
   trending up over a week is D3's revisit trigger; `speaker_coercions_total`
   rising is D4b's.

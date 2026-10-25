@@ -52,6 +52,12 @@ Activate `.venv` first; all Python commands assume it.
 - `pytest` - the whole suite; requires Docker Desktop running
 - `pytest tests/test_queue.py` - one test file
 - `ruff check .` and `mypy .` - lint and types
+- `pytest tests/test_pipeline_smoke_docker.py -m image` - the hermetic
+  one-video smoke (#137): brings up the real compose stack in a throwaway
+  `ytdigest-t137-*` project and takes one video from `POST /api/videos` to
+  `done` (recorded captions, stub Ollama). Needs Docker Desktop; uses no
+  network or API key. It publishes `web` on a Docker-picked loopback port, so
+  it does not need a free 8080 on a machine where 8080 is taken
 - `docker compose up -d db` - bring up just the dev Postgres (task #7);
   refuses to start without `POSTGRES_PASSWORD` set
 - `alembic upgrade head` / `alembic downgrade base` - from the host venv,
@@ -73,8 +79,18 @@ Activate `.venv` first; all Python commands assume it.
   - `./common`, `./adapters` and `./services` are mounted read-only into
     `api`, `planner`, `analyzer` and `transcriber`; `api` runs
     `uvicorn --reload` and picks up an edit on save
-  - the workers do not reload: after an edit run
-    `docker compose restart <service>` (no rebuild; automatic restart is #142)
+  - the workers restart on a source edit through Docker Compose Watch (#142;
+    built into `docker compose`, so no new dependency, like #59's "no
+    `watchfiles`"). Run `docker compose up -d --build`, then
+    `docker compose watch --no-up` in its own terminal, or in the foreground
+    `docker compose up --watch --build`; `-d` and `--watch` cannot be
+    combined. Each worker watches `./common`, `./adapters` and only its own
+    `./services/<worker>`; if a worker starts importing another service
+    package, add that path to its `develop.watch` list in
+    `compose.override.yml`. Without watch nothing restarts by itself:
+    `docker compose restart <service>` (no rebuild) still works. A job in
+    flight is cancelled on restart (a `transcribe` starts over), so avoid
+    editing worker code during a long transcription you want to keep
   - Postgres is on `127.0.0.1:5432` (see `alembic upgrade head` above)
   - the transcriber uses the `tiny` Whisper model unless `WHISPER_MODEL` is
     set (for example `WHISPER_MODEL=base docker compose up -d`)

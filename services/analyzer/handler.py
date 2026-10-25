@@ -189,7 +189,10 @@ def sanitize_chunk(
 
 @dataclass(slots=True)
 class _Tally:
-    """Tokens and spend of the successful calls of one job, from ``take_usage()``.
+    """Tokens, calls and spend of every billed call of one job, from ``take_usage()``.
+
+    That includes a roster pass that failed with ``LLMInvalidOutputError`` (#151, #139).
+    Cache tokens and the call count are summed the same way (#139).
 
     ``cost_usd`` follows one rule (#102): ``NULL`` means "no price reported".
     ``total_cost`` is ``None`` when any tallied ``Usage`` with ``calls > 0`` has no
@@ -201,6 +204,9 @@ class _Tally:
 
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    calls: int = 0
     cost: float = 0.0
     priced: bool = False
     unpriced: bool = False
@@ -209,6 +215,9 @@ class _Tally:
         usage = summarizer.take_usage()
         self.input_tokens += usage.input_tokens
         self.output_tokens += usage.output_tokens
+        self.cache_read_tokens += usage.cache_read_tokens
+        self.cache_write_tokens += usage.cache_write_tokens
+        self.calls += usage.calls
         if usage.calls > 0:
             if usage.cost_usd is None:
                 self.unpriced = True
@@ -314,6 +323,9 @@ def make_analyze_handler(
             tldr="",
             speaker_roster=Roster(()).to_json(),
             speakers_coerced=0,
+            cache_read_tokens=0,
+            cache_write_tokens=0,
+            calls=0,
         )
         if not chunks:
             empty_ms = elapsed_ms()
@@ -323,6 +335,9 @@ def make_analyze_handler(
                     "chunks": 0,
                     "input_tokens": 0,
                     "output_tokens": 0,
+                    "cache_read_tokens": 0,
+                    "cache_write_tokens": 0,
+                    "calls": 0,
                     "cost_usd": None,
                     "duration_ms": empty_ms,
                     "speakers_coerced": 0,
@@ -347,7 +362,7 @@ def make_analyze_handler(
                 error=str(exc),
             )
             roster = Roster(())
-            summarizer.take_usage()  # the failed call adds nothing
+            tally.add(summarizer)  # a failed call was still billed
 
         ordered = sorted(chunks, key=lambda c: c.seq)
         timed = [timestamped_chunk(chunk, segments) for chunk in ordered]
@@ -397,6 +412,9 @@ def make_analyze_handler(
                 speaker_roster=roster.to_json(),
                 input_tokens=tally.input_tokens,
                 output_tokens=tally.output_tokens,
+                cache_read_tokens=tally.cache_read_tokens,
+                cache_write_tokens=tally.cache_write_tokens,
+                calls=tally.calls,
                 cost_usd=tally.total_cost,
                 duration_ms=duration_ms,
                 speakers_coerced=coerced,
@@ -408,6 +426,9 @@ def make_analyze_handler(
                 "chunks": len(chunks),
                 "input_tokens": tally.input_tokens,
                 "output_tokens": tally.output_tokens,
+                "cache_read_tokens": tally.cache_read_tokens,
+                "cache_write_tokens": tally.cache_write_tokens,
+                "calls": tally.calls,
                 "cost_usd": tally.total_cost,
                 "duration_ms": duration_ms,
                 "speakers_coerced": coerced,

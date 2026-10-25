@@ -105,6 +105,9 @@ def analysis(
     prompt_version: str = "v1",
     tldr: str = "tldr",
     cost_usd: str | None = None,
+    cache_read_tokens: int | None = None,
+    cache_write_tokens: int | None = None,
+    calls: int | None = None,
     speaker_roster: Any = None,
     topics: list[tuple[int, str]] | None = None,
     claims: list[dict[str, Any]] | None = None,
@@ -114,12 +117,14 @@ def analysis(
         """
         INSERT INTO analyses (video_id, transcript_id, chunk_strategy, model, prompt_version,
                               tldr, speaker_roster, input_tokens, output_tokens, cost_usd,
-                              duration_ms, created_at)
-        VALUES (%s, %s, 'time:900:60', %s, %s, %s, %s::jsonb, 11, 22, %s, 333, %s)
+                              duration_ms, created_at, cache_read_tokens,
+                              cache_write_tokens, calls)
+        VALUES (%s, %s, 'time:900:60', %s, %s, %s, %s::jsonb, 11, 22, %s, 333, %s, %s, %s, %s)
         RETURNING id
         """,
         (video_id, transcript_id, model, prompt_version, tldr,
-         None if speaker_roster is None else json.dumps(speaker_roster), cost_usd, at(created)),
+         None if speaker_roster is None else json.dumps(speaker_roster), cost_usd, at(created),
+         cache_read_tokens, cache_write_tokens, calls),
     ).fetchone()
     assert row is not None
     analysis_id = int(row[0])

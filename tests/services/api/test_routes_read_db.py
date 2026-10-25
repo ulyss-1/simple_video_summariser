@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from common.config import get_settings
 from common.db import create_pool
+from common.repo.jobs import write_progress
 from services.api import deps
 from services.api.main import create_app
 from tests.common.repo import read_seed as seed
@@ -89,6 +90,7 @@ def test_a_library_item_has_exactly_the_documented_fields(
             "last_failure": {"job_id": dead, "kind": "ingest", "error_class": "BUG",
                              "finished_at": "2026-01-01T00:02:00Z"},
             "latest_analysis_at": "2026-01-01T00:07:00Z",
+            "has_transcript": True,
         }
     ]
     assert "SECRET" not in response.text
@@ -268,6 +270,57 @@ def test_a_processing_video_detail(api: TestClient, db: psycopg.Connection[Any])
     assert body["status"] == "processing"
     assert body["active_job"] == {"id": job_id, "kind": "ingest", "state": "running"}
     assert (body["analysis"], body["transcript"]) == (None, None)
+    assert body["progress"] is None
+
+
+def test_a_transcribing_video_detail_carries_the_progress_of_its_transcribe_job(
+    api: TestClient, db: psycopg.Connection[Any]
+) -> None:
+    seed.video(db, VID)
+    job_id = seed.job(db, VID, "transcribe", "running", created=1)
+    db.execute("UPDATE jobs SET locked_by = 'w1' WHERE id = %s", (job_id,))
+    write_progress(
+        db,
+        job_id,
+        "w1",
+        {
+            "percent": 40,
+            "done_sec": 40.0,
+            "duration_sec": 100.0,
+            "elapsed_sec": 80.0,
+            "eta_sec": 120.0,
+            "estimated_sec": 100.0,
+            "estimate_source": "default",
+        },
+    )
+
+    body = api.get(f"/videos/{VID}").json()
+
+    assert body["progress"]["percent"] == 40
+    assert body["progress"]["eta_sec"] == 120.0
+    assert body["progress"]["estimate_source"] == "default"
+    assert body["progress"]["updated_at"] is not None
+
+
+def test_analyses_carry_cache_tokens_and_calls_with_null_kept_apart_from_zero(
+    api: TestClient, db: psycopg.Connection[Any]
+) -> None:
+    seed.video(db, VID, title="T")
+    tid = seed.transcript(db, VID, "whisper", segments=[{"start": 0, "end": 1, "text": "a"}])
+    recorded = seed.analysis(db, VID, tid, created=1, cache_read_tokens=7,
+                             cache_write_tokens=11, calls=3)
+    before = seed.analysis(db, VID, tid, created=2)
+    zero = seed.analysis(db, VID, tid, created=3, cache_read_tokens=0,
+                         cache_write_tokens=0, calls=0)
+    keys = ("cache_read_tokens", "cache_write_tokens", "calls")
+
+    items = api.get(f"/videos/{VID}/analyses").json()["items"]
+
+    assert {a["id"]: tuple(a[k] for k in keys) for a in items} == {
+        recorded: (7, 11, 3), before: (None, None, None), zero: (0, 0, 0),
+    }
+    detail = api.get(f"/videos/{VID}").json()["analysis"]
+    assert (detail["id"], *(detail[k] for k in keys)) == (zero, 0, 0, 0)
 
 
 def test_a_done_video_detail_has_the_transcript_and_latest_analysis(
@@ -297,7 +350,8 @@ def test_a_done_video_detail_has_the_transcript_and_latest_analysis(
     assert set(analysis) == {
         "id", "model", "prompt_version", "chunk_strategy", "transcript_id",
         "transcript_source", "created_at", "tldr", "speaker_roster", "input_tokens",
-        "output_tokens", "cost_usd", "duration_ms", "topics", "claims", "quotes",
+        "output_tokens", "cache_read_tokens", "cache_write_tokens", "calls", "cost_usd",
+        "duration_ms", "topics", "claims", "quotes",
     }
     assert (analysis["id"], analysis["tldr"], analysis["transcript_source"]) == (
         newest, "</p><b>x", "whisper",

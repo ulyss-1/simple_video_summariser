@@ -25,20 +25,35 @@ from __future__ import annotations
 
 import math
 import unicodedata
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+
+from common.repo.planner_runs import PlannerTaskRun
 
 CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 
 KINDS: tuple[str, ...] = ("ingest", "transcribe", "analyze")
 STATES: tuple[str, ...] = ("pending", "running", "done", "dead")
 OTHER = "other"
+PLANNER_TASKS: tuple[str, ...] = (
+    "reap",
+    "auto_caption_fallback",
+    "audio_retention",
+    "stale_analyze",
+    "reanalysis_sweep",
+    "poll_channels",
+    "reconcile_channels",
+    "channel_backfill",
+    "dead_letter_alerts",
+)
 
 #: Upper bounds in seconds, ``le`` of ``job_duration_seconds`` (``+Inf`` is implicit).
 DURATION_BUCKETS: tuple[int, ...] = (1, 5, 15, 60, 300, 900, 1800, 3600, 7200, 14400)
 
 MAX_LABEL_CHARS = 128
 MAX_MODELS = 20
+#: Numbers per model in ``MetricsSnapshot.token_usage``.
+USAGE_FIELDS = 5
 
 _REPLACEMENT = "\ufffd"
 _BAD_CATEGORIES = frozenset({"Cc", "Cs", "Zl", "Zp"})
@@ -62,15 +77,18 @@ class MetricsSnapshot:
     """Everything one scrape needs, as read from one database snapshot."""
 
     queue_depth: Mapping[tuple[str, str], int]
+    feed_gap_channels: Mapping[str, int]
     job_durations: Mapping[str, DurationHistogram]
     whisper_rtf: float | None
-    #: model name -> (input tokens, output tokens)
-    token_usage: Mapping[str, tuple[int, int]]
+    #: model name -> (input, output, cache read, cache write tokens, calls); missing
+    #: trailing numbers count as 0
+    token_usage: Mapping[str, tuple[int, ...]]
     #: ``None`` when no analysis has a known price
     llm_cost_usd: float | None
     speaker_coercions: int
     audio_bytes: int
     reanalysis_backlog: int
+    planner_task_runs: Sequence[PlannerTaskRun] = ()
 
 
 def sanitize_label_value(value: str) -> str:
@@ -168,32 +186,71 @@ def _duration_samples(durations: Mapping[str, DurationHistogram]) -> list[str]:
     return lines
 
 
-def bound_models(usage: Mapping[str, tuple[int, int]]) -> dict[str, tuple[int, int]]:
-    """Sanitise model names, merge collisions, keep the top ``MAX_MODELS`` by total tokens.
+def _padded(values: Sequence[int]) -> tuple[int, ...]:
+    """``values`` zero-padded on the right to ``USAGE_FIELDS`` numbers."""
+    return (*values, *(0,) * (USAGE_FIELDS - len(values)))
 
-    Ties are broken by (sanitised) name. The rest is summed into ``"other"``.
+
+def bound_models(
+    usage: Mapping[str, tuple[int, ...]], *, cap: int = MAX_MODELS
+) -> dict[str, tuple[int, ...]]:
+    """Sanitise model names, merge collisions, keep the top ``cap`` by input + output tokens.
+
+    Each value is a tuple of sums (input, output, cache read, cache write, calls; trailing
+    fields may be missing and count as 0); merging and folding sum every field. The ranking
+    uses input + output only, so cache tokens and calls never change which models stay.
+    Ties are broken by (sanitised) name. The rest is summed into ``"other"``. Every result
+    value has the length of the longest input tuple.
     """
-    merged: dict[str, tuple[int, int]] = {}
-    for model, (inp, out) in usage.items():
+    width = max((len(v) for v in usage.values()), default=0)
+    merged: dict[str, tuple[int, ...]] = {}
+    for model, values in usage.items():
         key = sanitize_label_value(model)
-        prev_in, prev_out = merged.get(key, (0, 0))
-        merged[key] = (prev_in + inp, prev_out + out)
+        prev = merged.get(key, (0,) * width)
+        merged[key] = tuple(a + b for a, b in zip(prev, _padded(values), strict=False))
     ranked = sorted(merged.items(), key=lambda item: (-(item[1][0] + item[1][1]), item[0]))
-    result: dict[str, tuple[int, int]] = dict(ranked[:MAX_MODELS])
-    rest_in = sum(v[0] for _, v in ranked[MAX_MODELS:])
-    rest_out = sum(v[1] for _, v in ranked[MAX_MODELS:])
-    if ranked[MAX_MODELS:]:
-        prev_in, prev_out = result.get(OTHER, (0, 0))
-        result[OTHER] = (prev_in + rest_in, prev_out + rest_out)
+    result: dict[str, tuple[int, ...]] = dict(ranked[:cap])
+    rest = ranked[cap:]
+    if rest:
+        folded = result.get(OTHER, (0,) * width)
+        for _, values in rest:
+            folded = tuple(a + b for a, b in zip(folded, values, strict=True))
+        result[OTHER] = folded
     return result
 
 
-def _token_samples(usage: Mapping[str, tuple[int, int]]) -> list[str]:
+_DIRECTIONS: tuple[str, ...] = ("input", "output", "cache_read", "cache_write")
+
+
+def _token_samples(usage: Mapping[str, tuple[int, ...]]) -> list[str]:
     lines: list[str] = []
-    for model, (inp, out) in sorted(bound_models(usage).items()):
-        lines.append(_sample("llm_tokens_total", (("model", model), ("direction", "input")), inp))
-        lines.append(_sample("llm_tokens_total", (("model", model), ("direction", "output")), out))
+    for model, values in sorted(bound_models(usage).items()):
+        for direction, value in zip(_DIRECTIONS, _padded(values), strict=False):
+            lines.append(
+                _sample("llm_tokens_total", (("model", model), ("direction", direction)), value)
+            )
     return lines
+
+
+def _call_samples(usage: Mapping[str, tuple[int, ...]]) -> list[str]:
+    return [
+        _sample("llm_calls_total", (("model", model),), _padded(values)[4])
+        for model, values in sorted(bound_models(usage).items())
+    ]
+
+
+def _completed_planner_runs(runs: Sequence[PlannerTaskRun]) -> list[PlannerTaskRun]:
+    allowed = frozenset(PLANNER_TASKS)
+    return sorted(
+        (
+            run
+            for run in runs
+            if run.task_name in allowed
+            and run.last_finished_at is not None
+            and run.last_outcome in ("ok", "failed")
+        ),
+        key=lambda run: run.task_name,
+    )
 
 
 def render(snapshot: MetricsSnapshot) -> str:
@@ -204,6 +261,15 @@ def render(snapshot: MetricsSnapshot) -> str:
         "gauge",
         "Jobs per kind and state. Kinds and states outside the known sets are summed into other.",
         _queue_depth_samples(snapshot.queue_depth),
+    )
+    lines += _family(
+        "feed_gap_channels",
+        "gauge",
+        "Channels with a current unresolved feed gap, by bounded reason.",
+        [
+            _sample("feed_gap_channels", (("reason", reason),), snapshot.feed_gap_channels.get(reason, 0))
+            for reason in ("suspected", "no_anchor", "listing_window_exhausted")
+        ],
     )
     lines += _family(
         "job_duration_seconds",
@@ -222,9 +288,18 @@ def render(snapshot: MetricsSnapshot) -> str:
     lines += _family(
         "llm_tokens_total",
         "counter",
-        "Tokens recorded on analyses, by model and direction. Sum over stored rows: "
-        "deleting a video can lower it.",
+        "Tokens recorded on analyses, by model and direction. Analyses recorded before "
+        "cache tokens were tracked are not included in the cache_read and cache_write "
+        "directions. Sum over stored rows: deleting a video can lower it.",
         _token_samples(snapshot.token_usage),
+    )
+    lines += _family(
+        "llm_calls_total",
+        "counter",
+        "Model requests recorded on analyses, by model, repair attempts included. Analyses "
+        "from before calls were tracked are not included. Sum over stored rows: deleting a "
+        "video can lower it.",
+        _call_samples(snapshot.token_usage),
     )
     cost = snapshot.llm_cost_usd
     lines += _family(
@@ -251,5 +326,40 @@ def render(snapshot: MetricsSnapshot) -> str:
         "gauge",
         "Videos with a transcript but no analysis at the configured PROMPT_VERSION.",
         [_sample("reanalysis_backlog_videos", (), snapshot.reanalysis_backlog)],
+    )
+    completed = _completed_planner_runs(snapshot.planner_task_runs)
+    reap = next((run for run in completed if run.task_name == "reap"), None)
+    lines += _family(
+        "reaped_jobs_total",
+        "counter",
+        "Stale running jobs returned to pending or moved to dead by completed reaper runs.",
+        [] if reap is None or reap.last_ok_at is None else [_sample("reaped_jobs_total", (), reap.cumulative_count)],
+    )
+    lines += _family(
+        "planner_task_last_run_timestamp_seconds",
+        "gauge",
+        "Unix timestamp when the planner task most recently completed, by task.",
+        [
+            _sample(
+                "planner_task_last_run_timestamp_seconds",
+                (("task", run.task_name),),
+                run.last_finished_at.timestamp(),
+            )
+            for run in completed
+            if run.last_finished_at is not None
+        ],
+    )
+    lines += _family(
+        "planner_task_last_success",
+        "gauge",
+        "Whether the planner task's most recently completed run succeeded (1) or failed (0).",
+        [
+            _sample(
+                "planner_task_last_success",
+                (("task", run.task_name),),
+                1 if run.last_outcome == "ok" else 0,
+            )
+            for run in completed
+        ],
     )
     return "\n".join(lines) + "\n"
