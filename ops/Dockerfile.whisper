@@ -5,18 +5,22 @@
 #   docker build -f ops/Dockerfile.whisper -t ytdigest-whisper:latest .
 FROM ytdigest-backend:latest
 USER root
-# The requirements file is bind-mounted at build time, next to /tmp, so it is
-# never written into a layer and /app stays exactly the backend's /app.
+# The lock is bind-mounted at build time, next to /tmp, so it is never written
+# into a layer and /app stays exactly the backend's /app. It holds only what
+# the whisper layer adds to the backend venv (scripts/lock_requirements.py,
+# #145), hash-pinned, so --no-deps and --require-hashes apply.
 WORKDIR /tmp
 # --only-binary: ctranslate2 ships no sdist, so a missing wheel must fail
 # loudly here rather than as an opaque resolver error (architecture.md 16.2).
 # pip's own output is left visible, so the failing package can be read above
 # the ERROR line. The message cannot tell a missing wheel from a bad pin.
-RUN --mount=type=bind,source=requirements.whisper.txt,target=requirements.whisper.txt \
+RUN --mount=type=bind,source=requirements.whisper.lock,target=requirements.whisper.lock \
     /opt/venv/bin/pip install --no-cache-dir --only-binary=:all: \
-        -r requirements.whisper.txt \
-    || (echo "ERROR: no binary wheel for a requirements.whisper.txt package for this Python minor, or the pin is wrong - see architecture.md 16.2" \
+        --require-hashes --no-deps -r requirements.whisper.lock \
+    || (echo "ERROR: no binary wheel for a requirements.whisper.lock package for this Python minor, or the pin is wrong - see architecture.md 16.2" \
         && exit 1)
+# The whole venv (backend plus whisper) must still be a consistent set.
+RUN /opt/venv/bin/pip check
 # /models is the whisper-models volume (HF_HOME): a fresh named volume copies
 # the ownership of the image directory it is mounted on, so it must belong to
 # app or the first model download fails with a permission error.

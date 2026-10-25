@@ -35,6 +35,11 @@ def jobs(*files: str) -> dict[str, bool]:
         (("README.md",), True, False, True),
         ((".github/workflows/ci.yml",), True, True, True),
         (("some/unknown/path.txt",), True, False, True),
+        # The locks feed both the python job and the image builds (#145).
+        (("requirements.backend.lock",), True, False, True),
+        (("requirements.whisper.lock",), True, False, True),
+        (("scripts/lock_requirements.py",), True, False, True),
+        (("tests/test_requirements_lock.py", "tests/scripts/test_lock_requirements.py"), True, False, False),
     ],
 )
 def test_jobs_follow_the_changed_paths(

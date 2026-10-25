@@ -34,12 +34,22 @@ def test_single_from_is_the_backend_image() -> None:
     assert froms == ["ytdigest-backend:latest"]
 
 
-def test_install_uses_binary_only_wheels_from_the_requirements_file() -> None:
+def test_install_uses_binary_only_hashed_wheels_from_the_lock() -> None:
     run = _install_run()
     assert "/opt/venv/bin/pip install" in run
     assert "--only-binary=:all:" in run
     assert "--no-cache-dir" in run
-    assert "-r requirements.whisper.txt" in run
+    assert "--require-hashes" in run.split()
+    assert "--no-deps" in run.split()
+    assert "-r requirements.whisper.lock" in run
+    assert "requirements.whisper.txt" not in run
+
+
+def test_pip_check_runs_after_the_install() -> None:
+    steps = _steps()
+    install = next(i for i, (n, a) in enumerate(steps) if n == "RUN" and "pip install" in a)
+    check = next(i for i, (n, a) in enumerate(steps) if n == "RUN" and "/opt/venv/bin/pip check" in a)
+    assert install < check
 
 
 def test_install_targets_the_base_venv_and_nothing_else() -> None:
@@ -62,6 +72,7 @@ def test_install_fails_loudly_pointing_at_architecture_16_2() -> None:
     assert branch.rstrip().endswith("exit 1")
     # The message cannot tell a missing wheel from a bad pin, so it names both.
     assert "no binary wheel" in branch
+    assert "requirements.whisper.lock" in branch
     assert "pin is wrong" in branch
     # pip's own output must stay visible.
     assert "/dev/null" not in run
@@ -77,11 +88,11 @@ def test_requirements_file_is_not_left_in_app() -> None:
     for name, args in _steps():
         if name == "WORKDIR":
             workdir = args
-        if name == "COPY" and "requirements.whisper.txt" in args:
+        if name == "COPY" and "requirements.whisper.lock" in args:
             copied = True
             assert not workdir.startswith("/app")
             assert "rm " in run
-    assert copied, "requirements.whisper.txt is never provided to the build"
+    assert copied, "requirements.whisper.lock is never provided to the build"
 
 
 def test_workdir_is_app_at_the_end() -> None:
@@ -98,6 +109,7 @@ def test_no_application_code_or_backend_inputs_are_copied() -> None:
                 )
                 assert source not in {
                     "requirements.backend.txt",
+                    "requirements.backend.lock",
                     "pyproject.toml",
                     "alembic.ini",
                     ".",
@@ -162,8 +174,9 @@ def test_image_never_runs_migrations() -> None:
     assert "alembic upgrade" not in DOCKERFILE.read_text()
 
 
-def test_dockerignore_does_not_exclude_the_whisper_requirements() -> None:
+def test_dockerignore_does_not_exclude_the_whisper_lock() -> None:
     for line in _dockerignore_lines():
-        assert "requirements.whisper.txt" not in line
+        assert "requirements.whisper" not in line
+        assert not line.endswith(".lock")
         assert not line.startswith("!")
         assert line not in {"requirements*", "requirements*.txt", "*.txt", "**/*.txt"}

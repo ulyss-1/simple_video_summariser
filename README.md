@@ -52,8 +52,11 @@ running that command in WSL (use `bash -lc` for the `npm` ones).
   `pytest -m "integration and not image"` (testcontainers starts Postgres on
   the runner's Docker). The fast step includes the OpenAPI drift test and
   `tests/test_requirements_pinned.py`, which fails on any requirement in
-  `requirements.backend.txt` or `requirements.whisper.txt` that is not an exact
-  `name==version` pin.
+  `requirements.backend.txt`, `requirements.whisper.txt` or the `dev` extra
+  that is not an exact `name==version` pin, and `tests/test_requirements_lock.py`,
+  which fails when a `requirements.*.lock` no longer matches its input. The job
+  installs from the lock with `--require-hashes`, then the dev extra, then
+  fails if the dev install moved a locked package.
 - `frontend`, in `web/`: `npm ci`, `npm run --if-present gen:api:check`,
   `npm run --if-present lint`, `npm test`, `npm run build`,
   `npm audit --audit-level=high`.

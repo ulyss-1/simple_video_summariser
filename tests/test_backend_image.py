@@ -7,6 +7,7 @@ and `compose.yml` as text, so they run under `pytest -m "not integration"`.
 
 from __future__ import annotations
 
+import fnmatch
 import re
 from pathlib import Path
 
@@ -76,7 +77,7 @@ def test_requirements_are_copied_before_any_application_code() -> None:
     req_index = next(
         i
         for i, args in enumerate(copies)
-        if "requirements.backend.txt" in _copy_sources(args)
+        if "requirements.backend.lock" in _copy_sources(args)
     )
     app_indexes = [
         i
@@ -100,16 +101,28 @@ def test_pip_install_runs_before_application_code_is_copied() -> None:
     assert pip_index < first_app_copy
 
 
-def test_builder_installs_only_the_backend_requirements_into_opt_venv() -> None:
+def test_builder_installs_only_the_hashed_backend_lock_into_opt_venv() -> None:
     runs = [a for n, a in _instructions() if n == "RUN"]
     installs = [a for a in runs if "pip install" in a]
     assert len(installs) == 1
-    assert "-r requirements.backend.txt" in installs[0]
-    assert "/opt/venv" in installs[0]
-    assert "pip install ." not in installs[0]
-    assert "-e" not in installs[0].split()
-    assert "requirements.whisper.txt" not in installs[0]
-    assert ".[dev]" not in installs[0]
+    install = installs[0]
+    assert "--require-hashes" in install.split()
+    assert "--no-deps" in install.split()
+    assert "-r requirements.backend.lock" in install
+    assert "/opt/venv" in install
+    assert "pip install ." not in install
+    assert "-e" not in install.split()
+    # The builder no longer resolves anything from the unlocked input (#145).
+    assert "requirements.backend.txt" not in install
+    assert "requirements.whisper" not in install
+    assert ".[dev]" not in install
+    assert "pip check" in install.split("pip install", 1)[1]
+
+
+def test_the_builder_never_copies_the_unlocked_requirements() -> None:
+    for name, args in _instructions():
+        if name in {"COPY", "ADD"}:
+            assert "requirements.backend.txt" not in _copy_sources(args)
 
 
 def test_runtime_apt_packages_are_only_ffmpeg_and_curl() -> None:
@@ -130,6 +143,7 @@ def test_whisper_requirements_and_pyproject_are_not_copied() -> None:
         if name in {"COPY", "ADD"}:
             sources = _copy_sources(args)
             assert "requirements.whisper.txt" not in sources
+            assert "requirements.whisper.lock" not in sources
             assert "pyproject.toml" not in sources
             assert "." not in sources
             assert "./" not in sources
@@ -229,6 +243,29 @@ def test_dockerignore_keeps_prompts_migrations_and_alembic_ini() -> None:
         assert "migrations" not in line
         assert "alembic" not in line
         assert not line.endswith(".txt")
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["requirements*", "requirements.*", "requirements.*.lock", "*.lock", "**/*.lock",
+     "requirements.backend.lock", "requirements.whisper.lock"],
+)
+def test_dockerignore_excludes_no_lock_file(pattern: str) -> None:
+    # The pattern check itself: a line that would drop a lock must be flagged.
+    assert _excludes_a_lock(pattern)
+
+
+def _excludes_a_lock(line: str) -> bool:
+    return any(
+        fnmatch.fnmatchcase(lock, line.removeprefix("**/"))
+        for lock in ("requirements.backend.lock", "requirements.whisper.lock")
+    )
+
+
+def test_dockerignore_keeps_the_python_locks_in_the_build_context() -> None:
+    lines = _dockerignore_lines()
+    assert lines  # not vacuous
+    assert not [line for line in lines if _excludes_a_lock(line)]
 
 
 # ---- compose.yml `migrate` service ----

@@ -240,7 +240,7 @@ def default_run_pip(args: list[str]) -> tuple[int, str]:
 
 
 def default_fetch(url: str) -> bytes:
-    with urllib.request.urlopen(url, timeout=30) as response:  # noqa: S310 - fixed https PyPI URL
+    with urllib.request.urlopen(url, timeout=30) as response:
         data: bytes = response.read()
     return data
 

@@ -93,7 +93,7 @@ def test_direct_pins_map_canonical_name_to_version_without_extras() -> None:
 
 
 def _render(report: dict[str, object], digests: Mapping[tuple[str, str], set[str]], **kw: object) -> str:
-    return lock.lock_text(
+    text: str = lock.lock_text(
         report,
         digests,
         input_name="requirements.backend.txt",
@@ -101,6 +101,7 @@ def _render(report: dict[str, object], digests: Mapping[tuple[str, str], set[str
         digest=A,
         **kw,
     )
+    return text
 
 
 def test_lock_text_has_header_and_sorted_pins_with_every_published_hash() -> None:
@@ -312,17 +313,22 @@ class FakePip:
         return 0, ""
 
 
-def _fetch_for(digests: Mapping[tuple[str, str], list[str]]):  # type: ignore[no-untyped-def]
-    requested: list[str] = []
+class FakePyPI:
+    """Stands in for the PyPI JSON API; records the URLs asked for."""
 
-    def fetch(url: str) -> bytes:
-        requested.append(url)
+    def __init__(self, digests: Mapping[tuple[str, str], list[str]]) -> None:
+        self.digests = digests
+        self.requested: list[str] = []
+
+    def __call__(self, url: str) -> bytes:
+        self.requested.append(url)
         parts = url.split("/")
-        key = (parts[-3], parts[-2])
-        return json.dumps({"urls": [{"digests": {"sha256": h}} for h in digests[key]]}).encode()
+        found = self.digests[(parts[-3], parts[-2])]
+        return json.dumps({"urls": [{"digests": {"sha256": h}} for h in found]}).encode()
 
-    fetch.requested = requested  # type: ignore[attr-defined]
-    return fetch
+
+def _fetch_for(digests: Mapping[tuple[str, str], list[str]]) -> FakePyPI:
+    return FakePyPI(digests)
 
 
 def _repo(tmp_path: Path) -> Path:
@@ -345,7 +351,7 @@ def test_generate_backend_writes_the_lock_and_asks_pypi_json_api(tmp_path: Path)
     parsed = lock.parse_lock((root / "requirements.backend.lock").read_text())
     assert parsed == {"bar": ("2.0", (B,)), "dep": ("5", (C,)), "foo": ("1.0", (A, D))}
     assert lock.header_digest((root / "requirements.backend.lock").read_text()) == lock.input_digest(BACKEND_TXT)
-    assert "https://pypi.org/pypi/foo/1.0/json" in fetch.requested  # type: ignore[attr-defined]
+    assert "https://pypi.org/pypi/foo/1.0/json" in fetch.requested
     args = pip.calls[0]
     assert args[1:3] == ["-m", "pip"]
     for flag in ("--dry-run", "--ignore-installed", "--quiet", "--report"):
@@ -457,7 +463,7 @@ def test_whisper_resolves_on_the_backend_lock_and_writes_only_what_it_adds(tmp_p
     assert "requirements.backend.txt" in joined and "requirements.whisper.txt" in joined
     assert {"foo==1.0", "bar==2.0", "dep==5"} <= set(pip.constraints[0].splitlines())
     # Nothing is fetched for packages the backend lock already covers.
-    assert not any("/foo/" in u or "/dep/" in u for u in fetch.requested)  # type: ignore[attr-defined]
+    assert not any("/foo/" in u or "/dep/" in u for u in fetch.requested)
 
 
 def test_whisper_needs_the_backend_lock(tmp_path: Path) -> None:

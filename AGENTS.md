@@ -39,8 +39,10 @@ Setup
 - `cd web && npx playwright install --with-deps chromium` - once per machine;
   the browser for `npm run test:e2e` (#177), never fetched by `npm ci`/build
 - `python3.14 -m venv .venv && . .venv/bin/activate`
-- `pip install -r requirements.backend.txt -e ".[dev]"` - runtime and dev
-  dependencies. `requirements.whisper.txt` is deliberately not installed on
+- `pip install --require-hashes --no-deps -r requirements.backend.lock`, then
+  `pip install -e ".[dev]"` - runtime and dev dependencies, as two commands
+  (hash-checking mode covers a whole pip command and refuses editables). Then
+  `pip check`. `requirements.whisper.txt` is deliberately not installed on
   the host because it adds ~2 GB. Wheels for 3.14 are no longer in doubt:
   on 2026-09-27, `faster-whisper` 1.2.1 with `ctranslate2` 4.8.2 and its
   whole tree installed from wheels and transcribed in `python:3.14-slim`
@@ -100,6 +102,13 @@ Activate `.venv` first; all Python commands assume it.
   - Postgres is on `127.0.0.1:5432` (see `alembic upgrade head` above)
   - the transcriber uses the `tiny` Whisper model unless `WHISPER_MODEL` is
     set (for example `WHISPER_MODEL=base docker compose up -d`)
+- `python scripts/lock_requirements.py backend|whisper [--upgrade | --upgrade-package NAME]` -
+  regenerate a Python lock (Linux x86_64 / CPython 3.14 only, needs PyPI).
+  By default old entries stay as constraints, so only what the input change
+  forces moves; `--upgrade-package NAME` (repeatable) drops one pin,
+  `--upgrade` re-resolves everything. A failure leaves the lock untouched.
+  `python scripts/lock_requirements.py --check-installed requirements.backend.lock`
+  fails when an installed package differs from the lock
 - `npm ci && npm run build` - in `web/`, frontend only
 - `npm run lint` - in `web/`; ESLint (react-hooks + React Compiler rules),
   fails on any warning; `bash -lc 'cd web && npm run lint'`
@@ -122,6 +131,14 @@ command instead of running it directly:
 
 Rules
 
+- `requirements.backend.lock` and `requirements.whisper.lock` are generated
+  from `requirements.backend.txt` / `requirements.whisper.txt` by
+  `scripts/lock_requirements.py`, are never edited by hand, and are not a fifth
+  place to declare a dependency. Regenerate a lock in the same PR that changes
+  its input; an offline test fails otherwise.
+- To bump a dev tool (`pytest`, `hypothesis`, `ruff`, `mypy`) deliberately, edit
+  its exact pin in `pyproject.toml`, run `ruff check .`, `mypy .` and `pytest`,
+  and fix the fallout in the same PR.
 - Dependencies live in four places: runtime Python deps in
   `requirements.backend.txt`, speech-to-text-only deps in
   `requirements.whisper.txt` (this split keeps ~2 GB out of every other
