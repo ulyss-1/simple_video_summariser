@@ -4,7 +4,7 @@ A range or an unpinned name lets one `pip install` today differ from the one
 that passed CI yesterday. The checker is pure and tested on crafted input as
 well as on the real files, and it also covers the `dev` extra in pyproject.toml.
 Transitive dependencies are locked by `scripts/lock_requirements.py` (#145);
-the dev extra's own are not (#264).
+the dev extra's and the build backend's are in `requirements.dev.lock` (#264).
 """
 
 from __future__ import annotations
@@ -177,3 +177,21 @@ def test_every_dev_extra_entry_is_an_exact_pin() -> None:
     entries = _dev_extra()
     assert len(entries) >= 4  # not vacuous: pytest, hypothesis, ruff, mypy at least
     assert find_unpinned("pyproject.toml [dev]", "\n".join(entries)) == []
+
+
+def _build_requires() -> list[str]:
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    requires: list[str] = data["build-system"]["requires"]
+    return requires
+
+
+def test_an_unpinned_build_requirement_is_rejected() -> None:
+    problems = find_unpinned("pyproject.toml [build-system]", "setuptools>=77")
+    assert [p.split(": ")[0] for p in problems] == ["pyproject.toml [build-system]:1"]
+    assert find_unpinned("pyproject.toml [build-system]", "setuptools==84.2.1") == []
+
+
+def test_every_build_requirement_is_an_exact_pin() -> None:
+    entries = _build_requires()
+    assert any(e.startswith("setuptools") for e in entries)  # not vacuous
+    assert find_unpinned("pyproject.toml [build-system]", "\n".join(entries)) == []

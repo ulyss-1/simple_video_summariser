@@ -1,10 +1,14 @@
 """Generate and check the hash-pinned Python locks (issue #145).
 
-    python scripts/lock_requirements.py backend|whisper [--upgrade | --upgrade-package NAME]
-    python scripts/lock_requirements.py --check-installed requirements.backend.lock
+    python scripts/lock_requirements.py backend|whisper|dev [--upgrade | --upgrade-package NAME]
+    python scripts/lock_requirements.py --check-installed requirements.backend.lock requirements.dev.lock
 
 ``requirements.backend.lock`` and ``requirements.whisper.lock`` are generated
-from ``requirements.backend.txt`` and ``requirements.whisper.txt``: every
+from ``requirements.backend.txt`` and ``requirements.whisper.txt``, and
+``requirements.dev.lock`` (issue #264) from ``pyproject.toml``'s ``dev`` extra
+plus its ``[build-system].requires``, resolved against the other two locks as
+constraints and holding only what the dev layer adds. Order: ``backend``, then
+``whisper``, then ``dev``. A lock holds: every
 package the install would put into the image, transitive ones included, as an
 exact ``name==version`` with the sha256 of every file PyPI publishes for that
 version (so the same lock holds on WSL, the CI runner and ``python:3.14-slim``,
@@ -38,6 +42,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 import urllib.request
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from pathlib import Path
@@ -47,7 +52,15 @@ ROOT = Path(__file__).resolve().parent.parent
 TARGETS = {
     "backend": ("requirements.backend.txt", "requirements.backend.lock"),
     "whisper": ("requirements.whisper.txt", "requirements.whisper.lock"),
+    "dev": (
+        "pyproject.toml [project.optional-dependencies].dev and [build-system].requires",
+        "requirements.dev.lock",
+    ),
 }
+# Locks a target is resolved against as read-only constraints, in the order to regenerate.
+BASES = {"backend": (), "whisper": ("backend",), "dev": ("backend", "whisper")}
+# Distributions that may be installed without being in a lock.
+UNLOCKED_ALLOWED = ("pip", "ytdigest")
 
 RunPip = Callable[[list[str]], tuple[int, str]]
 Fetch = Callable[[str], bytes]
@@ -108,6 +121,61 @@ def input_digest(text: str) -> str:
 def direct_pins(text: str) -> dict[str, str]:
     """{canonical name: version} of the pins an input declares (extras dropped)."""
     return {name: version for name, _, version in _requirement_lines(text)}
+
+
+def pyproject_requirements(text: str) -> tuple[list[str], list[str]]:
+    """(dev extra entries, `[build-system].requires` entries) of a pyproject.toml text."""
+    data = tomllib.loads(text)
+    dev = list(data.get("project", {}).get("optional-dependencies", {}).get("dev", []))
+    build = list(data.get("build-system", {}).get("requires", []))
+    return dev, build
+
+
+def dev_requirements_text(pyproject_text: str) -> str:
+    """The dev and build entries as a requirements file, for pip to resolve."""
+    dev, build = pyproject_requirements(pyproject_text)
+    return "\n".join([*dev, *build]) + "\n"
+
+
+def dev_input_digest(pyproject_text: str) -> str:
+    """Digest of the dev and build entries, each set kept apart (`dev:` / `build:`)."""
+    dev, build = pyproject_requirements(pyproject_text)
+    lines = sorted(
+        [f"dev:{n}" for n in normalize_input("\n".join(dev))]
+        + [f"build:{n}" for n in normalize_input("\n".join(build))]
+    )
+    return hashlib.sha256(("\n".join(lines) + "\n").encode()).hexdigest()
+
+
+def dev_direct_pins(pyproject_text: str) -> dict[str, str]:
+    return direct_pins(dev_requirements_text(pyproject_text))
+
+
+def conflict_message(input_name: str, stderr: str, base_locks: Sequence[str]) -> str:
+    """What to tell the user when pip cannot resolve an input."""
+    if not base_locks:
+        return (
+            f"pip could not resolve {input_name}:\n{stderr.strip()}\n"
+            "If an old lock entry is in the way, retry with `--upgrade-package <name>` "
+            "for that package, or `--upgrade` to re-resolve everything."
+        )
+    names = " and ".join(base_locks)
+    return (
+        f"pip could not resolve {input_name} against {names} (used as constraints):\n"
+        f"{stderr.strip()}\n"
+        f"{names} and the lock being written were left unchanged; this script never edits "
+        "a constraint lock. Change the dev pins to fit it, or bump the shared package "
+        "in its own input and regenerate in order: backend, whisper, dev."
+    )
+
+
+def follow_up(target: str) -> str | None:
+    """Which dependent locks to regenerate after `target` was written."""
+    later = [t for t in TARGETS if target in BASES[t]]
+    if not later:
+        return None
+    steps = ", then ".join(f"`python scripts/lock_requirements.py {t}`" for t in later)
+    return f"{TARGETS[target][1]} changed; the dependent locks may now be stale. Regenerate: {steps}"
 
 
 # ---- report and PyPI digests -> lock text ----
@@ -219,6 +287,17 @@ def check_installed(installed: Mapping[str, str], locked: Lock) -> list[str]:
     return problems
 
 
+def unlocked_installed(
+    installed: Mapping[str, str], locked: Lock, allowed: Collection[str] = UNLOCKED_ALLOWED
+) -> list[str]:
+    """Messages for installed distributions that no lock lists (bar `allowed`)."""
+    return [
+        f"{name}: installed {version}, in no lock"
+        for name, version in sorted(installed.items())
+        if name not in locked and name not in allowed
+    ]
+
+
 def platform_problem(
     system: str, machine: str, implementation: str, version: tuple[int, int]
 ) -> str | None:
@@ -258,16 +337,15 @@ def _constraint_lines(
     target: str, root: Path, drop: Collection[str], upgrade: bool, direct: Collection[str]
 ) -> list[str]:
     own = TARGETS[target][1]
-    sources: list[tuple[str, bool]] = []  # (lock file name, always kept)
-    if target == "whisper":
-        sources.append((TARGETS["backend"][1], True))
+    sources: list[tuple[str, bool]] = [(TARGETS[base][1], True) for base in BASES[target]]
     sources.append((own, False))
     lines: list[str] = []
     for filename, always in sources:
         path = root / filename
         if not path.exists():
             if filename != own:
-                raise LockError(f"{filename} is needed first: run `python scripts/lock_requirements.py backend`")
+                base = next(t for t, (_, lock_name) in TARGETS.items() if lock_name == filename)
+                raise LockError(f"{filename} is needed first: run `python scripts/lock_requirements.py {base}`")
             continue
         if upgrade and not always:
             continue
@@ -276,6 +354,17 @@ def _constraint_lines(
                 continue
             lines.append(f"{name}=={version}")
     return lines
+
+
+def _write_atomically(path: Path, text: str) -> None:
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+        os.replace(tmp_name, path)
+    finally:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
 
 
 def generate(
@@ -289,11 +378,19 @@ def generate(
 ) -> Path:
     """Write the lock for `target` (atomically) and return its path."""
     input_name, lock_name = TARGETS[target]
-    texts = {t: (root / TARGETS[t][0]).read_text() for t in ("backend", target)}
-    direct = set().union(*(direct_pins(t) for t in texts.values()))
+    backend_text = (root / TARGETS["backend"][0]).read_text()
+    if target == "dev":
+        pyproject_text = (root / "pyproject.toml").read_text()
+        own_text = dev_requirements_text(pyproject_text)
+        digest = dev_input_digest(pyproject_text)
+    else:
+        own_text = (root / input_name).read_text()
+        digest = input_digest(own_text)
+    direct = set(direct_pins(backend_text)) | set(direct_pins(own_text))
     drop = {canonical_name(n) for n in upgrade_packages}
     constraints = _constraint_lines(target, root, drop, upgrade, direct)
     command = f"python scripts/lock_requirements.py {target}"
+    base_locks = [TARGETS[b][1] for b in BASES[target]] if target == "dev" else []
 
     with tempfile.TemporaryDirectory() as tmp:
         report_path = Path(tmp) / "report.json"
@@ -301,41 +398,35 @@ def generate(
                 "--report", str(report_path)]
         if target == "whisper":
             args += ["--only-binary=:all:", "-r", str(root / TARGETS["backend"][0])]
-        args += ["-r", str(root / input_name)]
+        if target == "dev":
+            args += ["-r", str(root / TARGETS["backend"][0])]
+            own_path = Path(tmp) / "dev-requirements.txt"
+            own_path.write_text(own_text)
+            args += ["-r", str(own_path)]
+        else:
+            args += ["-r", str(root / input_name)]
         if constraints:
             constraint_path = Path(tmp) / "constraints.txt"
             constraint_path.write_text("\n".join(constraints) + "\n")
             args += ["-c", str(constraint_path)]
         returncode, stderr = run_pip(args)
         if returncode != 0:
-            raise LockError(
-                f"pip could not resolve {input_name}:\n{stderr.strip()}\n"
-                "If an old lock entry is in the way, retry with `--upgrade-package <name>` "
-                "for that package, or `--upgrade` to re-resolve everything."
-            )
+            raise LockError(conflict_message(input_name, stderr, base_locks))
         report = json.loads(report_path.read_text())
 
     exclude: set[str] = set()
-    if target == "whisper":
+    if target != "backend":
         exclude = set(parse_lock((root / TARGETS["backend"][1]).read_text()))
     digests: dict[tuple[str, str], set[str]] = {}
     for name, version in reported_packages(report):
         if name not in exclude:
             digests[(name, version)] = _published_hashes(name, version, fetch)
     text = lock_text(
-        report, digests, input_name=input_name, command=command,
-        digest=input_digest(texts[target]), exclude=exclude,
+        report, digests, input_name=input_name, command=command, digest=digest, exclude=exclude,
     )
 
     path = root / lock_name
-    fd, tmp_name = tempfile.mkstemp(dir=root, prefix=f".{lock_name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(text)
-        os.replace(tmp_name, path)
-    finally:
-        if os.path.exists(tmp_name):
-            os.unlink(tmp_name)
+    _write_atomically(path, text)
     return path
 
 
@@ -360,19 +451,25 @@ def main(
     group.add_argument("--upgrade", action="store_true", help="re-resolve from scratch")
     group.add_argument("--upgrade-package", action="append", default=[], metavar="NAME",
                        help="drop this package's old pin (repeatable)")
-    parser.add_argument("--check-installed", metavar="LOCK",
-                        help="fail when an installed package differs from the lock")
+    parser.add_argument("--check-installed", nargs="+", metavar="LOCK",
+                        help="fail when an installed package differs from the locks or is in none")
     args = parser.parse_args(argv)
 
     try:
         if args.check_installed:
-            locked = parse_lock(Path(args.check_installed).read_text())
-            problems = check_installed(_installed() if installed is None else installed, locked)
+            have = _installed() if installed is None else installed
+            locked: Lock = {}
+            problems: list[str] = []
+            for lock_file in args.check_installed:
+                one = parse_lock(Path(lock_file).read_text())
+                problems += [f"lock drift in {lock_file}: {p}" for p in check_installed(have, one)]
+                locked.update(one)
+            problems += [f"lock drift: {p}" for p in unlocked_installed(have, locked)]
             for problem in problems:
-                print(f"lock drift in {args.check_installed}: {problem}", file=sys.stderr)
+                print(problem, file=sys.stderr)
             return 1 if problems else 0
         if args.target is None:
-            parser.error("give backend or whisper, or --check-installed LOCK")
+            parser.error("give backend, whisper or dev, or --check-installed LOCK...")
         system, machine, impl, version = platform or (
             sys.platform, _platform.machine(), sys.implementation.name, sys.version_info[:2]
         )
@@ -387,6 +484,9 @@ def main(
         print(f"lock_requirements: {err}", file=sys.stderr)
         return 1
     print(f"wrote {path.name}")
+    note = follow_up(args.target)
+    if note:
+        print(note)
     return 0
 
 
