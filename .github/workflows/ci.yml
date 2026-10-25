@@ -4,9 +4,30 @@
 name: CI
 
 on:
+  # A docs-only change that no test reads cannot break CI. Never list a file
+  # that tests/ reads: AGENTS.md, README.md, _docs/architecture.md,
+  # _docs/deploy-host.md and _docs/testing-guidelines.md.
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '_docs/team/**'
+      - '_docs/process.md'
+      - '_docs/plan.md'
+      - '_docs/progress.md'
+      - '_docs/task-template.md'
+      - '_docs/tasks.md'
+      - '_docs/design-system.md'
   push:
     branches: [master]
+    paths-ignore:
+      - 'docs/**'
+      - '_docs/team/**'
+      - '_docs/process.md'
+      - '_docs/plan.md'
+      - '_docs/progress.md'
+      - '_docs/task-template.md'
+      - '_docs/tasks.md'
+      - '_docs/design-system.md'
   workflow_dispatch:
 
 permissions:
