@@ -277,7 +277,7 @@ def test_dockerignore_keeps_what_the_build_needs(path: str) -> None:
 
 def test_dockerignore_web_dist_is_appended_after_the_55_entries() -> None:
     lines = _dockerignore_lines()
-    assert lines[-1] == "web/dist"
+    assert lines[-2:] == ["web/dist", "web/coverage"]
     assert lines.index(".git") < lines.index("web/dist")
     assert lines.index("*:Zone.Identifier") < lines.index("web/dist")
 
