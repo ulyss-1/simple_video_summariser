@@ -62,18 +62,24 @@ def test_returns_each_task_ordered_by_name_with_its_last_run(
     assert reconcile["last_ok_at"] == "2026-01-02T03:04:05Z"
 
 
-def test_the_metrics_gauge_exposes_last_success_only_for_tasks_that_succeeded(
+def test_the_metrics_gauges_report_each_tasks_last_run_and_outcome(
     api: TestClient, db: psycopg.Connection[Any]
 ) -> None:
-    record_finished(db, "reconcile", interval_sec=21600, at=OK_AT, outcome="ok", error=None, count=3)
+    record_finished(db, "reap", interval_sec=21600, at=OK_AT, outcome="ok", error=None, count=3)
     record_finished(
-        db, "poll", interval_sec=3600, at=FAIL_AT, outcome="failed", error="boom", count=None
+        db, "stale_analyze", interval_sec=3600, at=FAIL_AT, outcome="failed", error="boom", count=None
     )
 
-    body = api.get("/metrics").text
-    name = "planner_task_last_success_timestamp_seconds"
+    lines = api.get("/metrics").text.splitlines()
 
-    samples = [ln for ln in body.splitlines() if ln.startswith(name + "{")]
-    assert samples == [f'{name}{{task="reconcile"}} {OK_AT.timestamp()!r}']
-    # poll never succeeded: no sample, so time()-metric is absent (alert on that too).
-    assert 'task="poll"' not in body
+    def samples(name: str) -> list[str]:
+        return [ln for ln in lines if ln.startswith(name + "{")]
+
+    assert samples("planner_task_last_success") == [
+        'planner_task_last_success{task="reap"} 1',
+        'planner_task_last_success{task="stale_analyze"} 0',
+    ]
+    assert sorted(samples("planner_task_last_run_timestamp_seconds")) == [
+        f'planner_task_last_run_timestamp_seconds{{task="reap"}} {OK_AT.timestamp()!r}',
+        f'planner_task_last_run_timestamp_seconds{{task="stale_analyze"}} {FAIL_AT.timestamp()!r}',
+    ]
