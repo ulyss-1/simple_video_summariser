@@ -57,6 +57,13 @@ def _docker(
     )
 
 
+# A container that has just been started gets up to a minute to answer, checked
+# every 5 s (the first check is immediate), so a fast start passes at once and a
+# slow one on a loaded runner still has time. 20 s was too short under load.
+STARTUP_DEADLINE = 60.0
+STARTUP_POLL = 5.0
+
+
 def _wait(
     condition: Callable[[], bool], *, deadline: float, interval: float = 0.2
 ) -> bool:
@@ -221,7 +228,9 @@ def test_serves_root_on_a_read_only_root_with_only_tmp_writable(image: str) -> N
             except OSError:
                 return False
 
-        assert _wait(serves, deadline=20), _docker("logs", name).stderr
+        assert (
+            _wait(serves, deadline=STARTUP_DEADLINE, interval=STARTUP_POLL)
+        ), _docker("logs", name).stderr
     finally:
         _docker("rm", "-f", name)
 
@@ -251,7 +260,7 @@ def test_docker_stop_exits_zero_within_the_default_grace_period(image: str) -> N
             logs = _docker("logs", name)
             return "start worker processes" in logs.stdout + logs.stderr
 
-        assert _wait(up, deadline=15)
+        assert _wait(up, deadline=STARTUP_DEADLINE, interval=STARTUP_POLL)
         t0 = time.monotonic()
         assert _docker("stop", name, timeout=30).returncode == 0
         assert time.monotonic() - t0 < 10
@@ -442,7 +451,9 @@ def make_stack(image: str) -> Iterator[Callable[[], Stack]]:
         assert run.returncode == 0, run.stderr
         port_out = _docker("port", web, "8080/tcp").stdout.split()[0]
         stack = Stack(network, image, web, int(port_out.rsplit(":", 1)[1]))
-        started = _wait(lambda: _serves(stack), deadline=20)
+        started = _wait(
+            lambda: _serves(stack), deadline=STARTUP_DEADLINE, interval=STARTUP_POLL
+        )
         assert started, stack.logs()
         return stack
 
