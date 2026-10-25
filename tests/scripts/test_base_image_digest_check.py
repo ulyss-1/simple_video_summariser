@@ -1,4 +1,4 @@
-"""Scheduled base-image digest check (issue #241). No network: the fetch is injected."""
+"""Scheduled base-image digest and stable-line check (issues #241, #250). No network: the fetch is injected."""
 
 from __future__ import annotations
 
@@ -618,4 +618,396 @@ def test_workflow_uses_only_first_party_actions_pinned_to_a_sha_already_trusted(
 def test_workflow_runs_the_script_once_on_every_pinned_file() -> None:
     runs = re.findall(r"^\s+run:\s*(.+)$", _workflow(), re.MULTILINE)
 
-    assert runs == ["python3 scripts/base_image_digest_check.py " + " ".join(CHECKED_FILES)]
+    assert runs == [
+        "python3 scripts/base_image_digest_check.py "
+        + " ".join(CHECKED_FILES)
+        + f" --stable-line {IMAGE}"
+    ]
+
+
+# -- the stable-line check (issue #250) -------------------------------------
+
+LINE_PATH = f"/v2/{IMAGE}/tags/list"
+NOISE = [
+    "1.30-alpine-slim",
+    "1.30-alpine3.24",
+    "1.30.6-alpine",
+    "1.30-trixie",
+    "stable-alpine",
+    "mainline-alpine",
+    "1.31-alpine",
+]
+LINE_FLAG = ["--stable-line", IMAGE]
+
+
+def _tags_page(tags: object, link: str | None = None) -> Response:
+    headers = {} if link is None else {"Link": f'<{link}>; rel="next"'}
+    return 200, headers, json.dumps({"tags": tags}).encode()
+
+
+class HubFetch:
+    """Answers the digest conversation and the tag list of ``IMAGE``; records every call.
+
+    ``pages`` maps a request path (with query) to its reply; a path not in it
+    fails the test, so following a bad ``Link`` would show in ``calls``.
+    """
+
+    def __init__(
+        self,
+        pages: Mapping[str, Response | Exception],
+        *,
+        manifest: Response | Exception | None = None,
+        token: Response | Exception | None = None,
+    ) -> None:
+        self.pages = pages
+        self.manifest = manifest or _manifest(PINNED)
+        self.token = token or _token("tok")
+        self.calls: list[tuple[str, str, dict[str, str], float]] = []
+
+    def __call__(self, method: str, url: str, headers: Mapping[str, str], timeout: float) -> Response:
+        self.calls.append((method, url, dict(headers), timeout))
+        assert timeout > 0
+        if "auth.docker.io" in url:
+            answer = self.token
+        elif "/manifests/" in url:
+            answer = self.manifest
+        else:
+            answer = self.pages[url.removeprefix("https://registry-1.docker.io")]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    def list_calls(self) -> list[tuple[str, str, dict[str, str], float]]:
+        return [c for c in self.calls if "/tags/list" in c[1]]
+
+
+def _hub(
+    tags: object,
+    *,
+    manifest: Response | Exception | None = None,
+    token: Response | Exception | None = None,
+) -> HubFetch:
+    return HubFetch({LINE_PATH: _tags_page(tags)}, manifest=manifest, token=token)
+
+
+def _run_line(
+    tmp_path: Path,
+    fetch: HubFetch,
+    capsys: pytest.CaptureFixture[str],
+    text: str = DOCKERFILE,
+    max_pages: int = 10,
+    flags: list[str] | None = None,
+) -> tuple[int, str, str]:
+    path = tmp_path / "Dockerfile"
+    path.write_bytes(text.encode())
+    args = [str(path), *(LINE_FLAG if flags is None else flags)]
+    code = check.main(args, fetch=fetch, max_pages=max_pages)
+    out = capsys.readouterr()
+    assert path.read_bytes() == text.encode()  # the check reports; it never edits
+    return code, out.out, out.err
+
+
+def _one(out: str, title: str) -> str:
+    (line,) = [ln for ln in out.splitlines() if f"title={title}::" in ln]
+    return line
+
+
+def test_without_the_stable_line_flag_the_tag_list_is_never_read(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fetch = _hub([TAG, "1.32-alpine"])
+
+    code, out, err = _run_line(tmp_path, fetch, capsys, flags=[])
+
+    assert (code, out, err) == (0, "", "")
+    assert fetch.list_calls() == []
+
+
+def test_the_real_frontend_dockerfile_parses_as_one_stable_line() -> None:
+    refs = check.pinned_references((REPO_ROOT / "ops" / "Dockerfile.frontend").read_text())
+
+    pins = check.stable_line_pins(refs, [IMAGE])
+
+    assert [(p.ref.tag, (p.major, p.minor), p.variant) for p in pins] == [(TAG, (1, 30), "alpine")]
+
+
+def test_the_tag_list_is_read_with_a_get_and_the_bearer_token_of_its_scope(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fetch = _hub([TAG], token=_token("list-token"))
+
+    _run_line(tmp_path, fetch, capsys)
+
+    token_urls = [c[1] for c in fetch.calls if "auth.docker.io" in c[1]]
+    assert all(f"scope=repository:{IMAGE}:pull" in u for u in token_urls)
+    ((method, url, headers, _),) = fetch.list_calls()
+    assert method == "GET"
+    assert url == f"https://registry-1.docker.io{LINE_PATH}"
+    assert headers["Authorization"] == "Bearer list-token"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["1.31-alpine", "1.33-alpine", "1.32-alpine-slim", "1.32-alpine3.26", "1.32-trixie"],
+        ["1.4-alpine", "1.28-alpine", "0.32-alpine"],
+    ],
+    ids=["mainline_variant_and_os_noise", "numerically_older_lines"],
+)
+def test_a_current_line_is_silent_even_with_noise_tags(
+    extra: list[str], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, out, err = _run_line(tmp_path, _hub([TAG, *NOISE, *extra]), capsys)
+
+    assert (code, out, err) == (0, "", "")
+
+
+@pytest.mark.parametrize(
+    ("extra", "newest"),
+    [
+        (["1.32-alpine"], "1.32-alpine"),
+        (["1.32-alpine", "1.34-alpine"], "1.34-alpine"),
+        (["1.34-alpine", "1.32-alpine"], "1.34-alpine"),
+        (["2.0-alpine"], "2.0-alpine"),
+        (["1.32-alpine", "2.0-alpine", "1.4-alpine"], "2.0-alpine"),
+    ],
+)
+def test_a_newer_stable_line_is_reported_with_the_newest_and_how_to_move(
+    extra: list[str], newest: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, out, err = _run_line(tmp_path, _hub([TAG, *NOISE, *extra]), capsys)
+
+    assert code == 1 and err == ""
+    assert out.count("::error") == 1
+    line = _one(out, "Base image stable line superseded")
+    for needle in (IMAGE, TAG, f"{IMAGE}:{newest}", f"imagetools inspect {IMAGE}:{newest}", "11.3"):
+        assert needle in line
+
+
+def test_a_withdrawn_pinned_tag_is_reported_and_names_the_newest_line_if_any(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, out, _ = _run_line(tmp_path, _hub(["1.32-alpine", "1.34-alpine", *NOISE]), capsys)
+
+    assert code == 1 and out.count("::error") == 1
+    line = _one(out, "Base image line withdrawn upstream")
+    assert f"no longer publishes {IMAGE}:{TAG}" in line and f"{IMAGE}:1.34-alpine" in line
+
+
+def test_a_withdrawn_pinned_tag_with_no_newer_line_still_goes_red(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, out, _ = _run_line(tmp_path, _hub(NOISE), capsys)
+
+    assert code == 1 and out.count("::error") == 1
+    assert f"no longer publishes {IMAGE}:{TAG}" in _one(out, "Base image line withdrawn upstream")
+
+
+# -- pagination ---------------------------------------------------------------
+
+
+def _pages(n: int) -> HubFetch:
+    """``n`` pages of a few tags; the newer line is on the last page only."""
+    paths = [LINE_PATH] + [f"{LINE_PATH}?last=p{i}&n=2" for i in range(1, n)]
+    pages: dict[str, Response | Exception] = {}
+    for i, path in enumerate(paths):
+        tags = ["1.31-alpine", "stable-alpine"] if i < n - 1 else ["1.32-alpine"]
+        if i == 0:
+            tags.append(TAG)
+        pages[path] = _tags_page(tags, paths[i + 1] if i + 1 < n else None)
+    return HubFetch(pages)
+
+
+def test_a_newer_line_that_appears_only_on_page_two_is_found(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fetch = _pages(2)
+
+    code, out, _ = _run_line(tmp_path, fetch, capsys, max_pages=2)
+
+    assert code == 1 and f"{IMAGE}:1.32-alpine" in _one(out, "Base image stable line superseded")
+    urls = [c[1] for c in fetch.list_calls()]
+    assert urls[1] == f"https://registry-1.docker.io{LINE_PATH}?last=p1&n=2"
+    assert all(c[2]["Authorization"] == "Bearer tok" for c in fetch.list_calls())
+
+
+def test_more_pages_than_the_bound_is_an_unusable_reply(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fetch = _pages(3)
+
+    code, out, err = _run_line(tmp_path, fetch, capsys, max_pages=2)
+
+    assert (code, out) == (0, "")
+    assert err.count("\n") == 1 and IMAGE in err
+    assert len(fetch.list_calls()) == 2
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        f"https://evil.example{LINE_PATH}?last=a",
+        f"//evil.example{LINE_PATH}",
+        "/v2/library/node/tags/list?last=a",
+        f"{LINE_PATH}ing",
+        f"{LINE_PATH}/../../x",
+        "tags/list?last=a",
+    ],
+    ids=["other_host", "protocol_relative", "other_repository", "longer_path", "path_suffix", "relative"],
+)
+def test_a_link_that_leaves_the_repository_is_unusable_and_never_followed(
+    link: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fetch = HubFetch({LINE_PATH: _tags_page([TAG, "1.32-alpine"], link)})
+
+    code, out, err = _run_line(tmp_path, fetch, capsys)
+
+    assert (code, out) == (0, "")
+    assert err.count("\n") == 1 and IMAGE in err
+    assert [c[1] for c in fetch.list_calls()] == [f"https://registry-1.docker.io{LINE_PATH}"]
+
+
+# -- an outage or unusable reply is quiet -------------------------------------
+
+_BIG = b'{"tags": ["' + b"a" * (check.MAX_BODY_BYTES + 1) + b'"]}'
+_LIST_OUTAGES: list[Response | Exception] = [
+    (401, {}, b""),
+    (404, {}, b""),
+    (429, {}, b""),
+    (500, {}, b""),
+    (503, {}, b""),
+    TimeoutError("timed out"),
+    ConnectionError("refused"),
+    (200, {}, b"<html>"),
+    (200, {}, b"{}"),
+    (200, {}, b'{"tags": null}'),
+    (200, {}, b'{"tags": []}'),
+    (200, {}, b'{"tags": "1.30-alpine"}'),
+    (200, {}, b'{"tags": [1, 2]}'),
+    (200, {}, b"[]"),
+    (200, {}, _BIG),
+]
+
+
+@pytest.mark.parametrize("answer", _LIST_OUTAGES)
+def test_a_tag_list_outage_gives_no_annotation_one_stderr_line_and_exit_0(
+    answer: Response | Exception, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, out, err = _run_line(tmp_path, HubFetch({LINE_PATH: answer}), capsys)
+
+    assert (code, out) == (0, "")
+    assert err.count("\n") == 1 and IMAGE in err and "::error" not in err
+
+
+@pytest.mark.parametrize(
+    "token",
+    [(503, {}, b""), (200, {}, b"{}"), (200, {}, b'{"token": 5}'), TimeoutError("timed out")],
+)
+def test_a_token_failure_for_the_list_is_a_quiet_outage(
+    token: Response | Exception, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fetch = _hub([TAG, "1.32-alpine"], token=token)
+
+    code, out, err = _run_line(tmp_path, fetch, capsys)
+
+    assert (code, out) == (0, "")
+    assert fetch.list_calls() == []
+    assert "tag list" in err
+
+
+def test_a_bad_second_page_is_an_outage_even_after_a_good_first(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    second = f"{LINE_PATH}?last=a&n=2"
+    fetch = HubFetch({LINE_PATH: _tags_page([TAG, "1.32-alpine"], second), second: (500, {}, b"")})
+
+    code, out, err = _run_line(tmp_path, fetch, capsys)
+
+    assert (code, out) == (0, "") and err.count("\n") == 1
+
+
+# -- repository faults for --stable-line --------------------------------------
+
+_LINE_FAULTS = {
+    "repository_without_pin": (DOCKERFILE, ["--stable-line", "acme/widget"]),
+    "name_differs_from_the_one_written": (f"FROM docker.io/{IMAGE}:{TAG}@{PINNED}\n", LINE_FLAG),
+    "bare_minor": (f"FROM {IMAGE}:1.30@{PINNED}\n", LINE_FLAG),
+    "patch_level": (f"FROM {IMAGE}:1.30.6-alpine@{PINNED}\n", LINE_FLAG),
+    "alias": (f"FROM {IMAGE}:stable-alpine@{PINNED}\n", LINE_FLAG),
+    "odd_minor": (f"FROM {IMAGE}:1.31-alpine@{PINNED}\n", LINE_FLAG),
+    "digit_in_variant": (f"FROM {IMAGE}:1.30-alpine3.24@{PINNED}\n", LINE_FLAG),
+    "valid_flag_beside_bad_one": (DOCKERFILE, [*LINE_FLAG, "--stable-line", "acme/widget"]),
+}
+
+
+@pytest.mark.parametrize(("text", "flags"), list(_LINE_FAULTS.values()), ids=list(_LINE_FAULTS))
+def test_a_stable_line_fault_exits_2_before_any_network_call(
+    text: str, flags: list[str], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fetch = _hub([TAG, "1.32-alpine"])
+
+    code, out, err = _run_line(tmp_path, fetch, capsys, text=text, flags=flags)
+
+    assert (code, out) == (2, "")
+    assert err.count("\n") == 1 and "Traceback" not in err
+    assert fetch.calls == []
+
+
+def test_a_missing_flag_value_exits_2_with_a_usage_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fetch = _hub([TAG])
+
+    code, out, err = _run_line(tmp_path, fetch, capsys, flags=["--stable-line"])
+
+    assert (code, out) == (2, "")
+    assert err.count("\n") == 1 and "usage" in err.lower()
+    assert fetch.calls == []
+
+
+# -- independence from the digest check ---------------------------------------
+
+
+def test_digest_stale_and_line_superseded_give_both_annotations(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fetch = _hub([TAG, "1.32-alpine"], manifest=_manifest(UPSTREAM))
+
+    code, out, err = _run_line(tmp_path, fetch, capsys)
+
+    assert (code, err) == (1, "")
+    assert out.count("::error") == 2
+    _one(out, "Base image digest is behind")
+    _one(out, "Base image stable line superseded")
+
+
+def test_digest_outage_and_line_superseded_give_the_annotation_and_a_stderr_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fetch = _hub([TAG, "1.32-alpine"], manifest=_manifest(None, 503))
+
+    code, out, err = _run_line(tmp_path, fetch, capsys)
+
+    assert code == 1
+    assert out.count("::error") == 1
+    _one(out, "Base image stable line superseded")
+    assert err.count("\n") == 1 and f"{IMAGE}:{TAG}" in err
+
+
+def test_digest_stale_and_unusable_tag_list_give_the_annotation_and_a_stderr_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fetch = HubFetch({LINE_PATH: (503, {}, b"")}, manifest=_manifest(UPSTREAM))
+
+    code, out, err = _run_line(tmp_path, fetch, capsys)
+
+    assert code == 1
+    assert out.count("::error") == 1
+    _one(out, "Base image digest is behind")
+    assert err.count("\n") == 1 and "tag list" in err
+
+
+def test_digest_current_and_line_current_are_silent(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert _run_line(tmp_path, _hub([TAG, *NOISE]), capsys) == (0, "", "")

@@ -1406,7 +1406,15 @@ replacement reference. It only reports; a human bumps the pin, as for yt-dlp
 (§16.11). To bump an image: run `docker buildx imagetools inspect <name>:<tag>`,
 replace every copy of that digest in the Dockerfiles, the compose files and the
 listings in this document, open a PR, and deploy. One PR can refresh every stale
-pin. A side benefit is build-cache correctness: a changed digest changes the
+pin. The same workflow also reports, through `--stable-line nginx/nginx-unprivileged`
+(#250), when a newer nginx stable line (an even minor, such as `1.32-alpine`) is
+published or the pinned `1.30-alpine` tag is withdrawn. A digest check alone is
+not enough: once a line reaches end of life its tag stops moving, and is
+eventually deleted, which is the unmaintained-nginx problem #140 fixed. To move
+the line, change the tag and the digest in `ops/Dockerfile.frontend` and in the
+listing above, update the `nginx 1.30.x` expectation in
+`tests/test_frontend_image.py`, run `pytest -m image`, open a PR and deploy. A
+side benefit is build-cache correctness: a changed digest changes the
 `FROM` line, so the next `docker compose -f compose.yml up -d --build` on the
 host is guaranteed to fetch the new base, which a tag-only `FROM` does not
 guarantee without `--pull`.
