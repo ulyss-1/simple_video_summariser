@@ -371,24 +371,17 @@ def delete_unused_backfill_video(conn: psycopg.Connection[Any], video_id: str) -
 # The one definition of a video's processing status (#42). Both list_videos and
 # get_video select from this, so the rules cannot drift apart. ``v`` is the
 # videos row; the LATERAL joins see only that video's jobs and analyses.
-_VIDEO_READ = """
-    SELECT v.video_id, v.title, v.channel_id, c.title AS channel_title,
-           v.published_at, v.duration_sec, v.origin, v.unavailable,
-           CASE
-               WHEN la.created_at IS NOT NULL THEN 'done'
-               WHEN aj.id IS NOT NULL THEN 'processing'
-               WHEN v.unavailable IS NOT NULL THEN 'unavailable'
-               WHEN nj.state = 'dead' THEN 'failed'
-               ELSE 'idle'
-           END AS status,
-           aj.id AS aj_id, aj.kind AS aj_kind, aj.state AS aj_state,
-           lf.id AS lf_id, lf.kind AS lf_kind, lf.error_class AS lf_error_class,
-           lf.finished_at AS lf_finished_at,
-           la.created_at AS latest_analysis_at,
-           v.discovered_at,
-           EXISTS (SELECT 1 FROM transcripts t WHERE t.video_id = v.video_id) AS has_transcript
-    FROM videos v
-    LEFT JOIN channels c ON c.channel_id = v.channel_id
+_VIDEO_STATUS_SQL = """
+    CASE
+        WHEN la.created_at IS NOT NULL THEN 'done'
+        WHEN aj.id IS NOT NULL THEN 'processing'
+        WHEN v.unavailable IS NOT NULL THEN 'unavailable'
+        WHEN nj.state = 'dead' THEN 'failed'
+        ELSE 'idle'
+    END
+"""
+
+_VIDEO_STATUS_JOINS = """
     LEFT JOIN LATERAL (
         SELECT a.created_at FROM analyses a
         WHERE a.video_id = v.video_id
@@ -412,6 +405,21 @@ _VIDEO_READ = """
         WHERE j.video_id = v.video_id AND j.state = 'dead'
         ORDER BY j.created_at DESC, j.id DESC LIMIT 1
     ) lf ON true
+"""
+
+_VIDEO_READ = f"""
+    SELECT v.video_id, v.title, v.channel_id, c.title AS channel_title,
+           v.published_at, v.duration_sec, v.origin, v.unavailable,
+           {_VIDEO_STATUS_SQL} AS status,
+           aj.id AS aj_id, aj.kind AS aj_kind, aj.state AS aj_state,
+           lf.id AS lf_id, lf.kind AS lf_kind, lf.error_class AS lf_error_class,
+           lf.finished_at AS lf_finished_at,
+           la.created_at AS latest_analysis_at,
+           v.discovered_at,
+           EXISTS (SELECT 1 FROM transcripts t WHERE t.video_id = v.video_id) AS has_transcript
+    FROM videos v
+    LEFT JOIN channels c ON c.channel_id = v.channel_id
+    {_VIDEO_STATUS_JOINS}
 """
 
 
