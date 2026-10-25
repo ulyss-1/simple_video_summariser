@@ -99,6 +99,8 @@ def test_default_config_attaches_db_to_the_dev_network(
 def _resolved(
     monkeypatch: pytest.MonkeyPatch, **env: str
 ) -> dict[str, dict[str, object]]:
+    for name in ("WEB_HOST_PORT", "DB_HOST_PORT", "WEB_DEV_PORT"):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("POSTGRES_PASSWORD", "integration-test-password")
     for key, value in env.items():
         monkeypatch.setenv(key, value)
@@ -158,6 +160,17 @@ def test_web_is_the_only_published_port_and_on_loopback(
     assert ports[0]["host_ip"] == "127.0.0.1"
     assert str(ports[0]["published"]) == "8080"
     assert ports[0]["target"] == 8080
+
+
+def test_web_host_port_is_overridable_and_empty_lets_docker_pick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A demo deploy may hold 8080: another project must be able to start (#58).
+    chosen = _resolved(monkeypatch, WEB_HOST_PORT="18080")["web"]["ports"]
+    assert str(chosen[0]["published"]) == "18080"  # type: ignore[index]
+    picked = _resolved(monkeypatch, WEB_HOST_PORT="")["web"]["ports"]
+    assert str(picked[0].get("published", "")) in ("", "0")  # type: ignore[index]
+    assert picked[0]["target"] == 8080  # type: ignore[index]
 
 
 def test_planner_has_one_replica_and_worker_healthcheck_keeps_its_dollars(
@@ -224,6 +237,9 @@ def _hermetic(monkeypatch: pytest.MonkeyPatch, **env: str) -> None:
         "COMPOSE_PROFILES",
         "COMPOSE_PATH_SEPARATOR",
         "COMPOSE_PROJECT_NAME",
+        "WEB_HOST_PORT",
+        "DB_HOST_PORT",
+        "WEB_DEV_PORT",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("POSTGRES_PASSWORD", "integration-test-password")
@@ -381,6 +397,19 @@ def test_dev_config_web_is_the_vite_dev_server_without_a_build(
         for n in WEB_SOURCE_FILES
     }
     assert _volumes(web) == {f"/home/node/app/{n}": "bind" for n in WEB_SOURCE_FILES}
+
+
+def test_dev_host_ports_are_overridable_and_empty_lets_docker_pick(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fixed = _dev(monkeypatch, tmp_path, DB_HOST_PORT="15432", WEB_DEV_PORT="15173")
+    assert str(fixed["db"]["ports"][0]["published"]) == "15432"  # type: ignore[index]
+    assert str(fixed["web"]["ports"][0]["published"]) == "15173"  # type: ignore[index]
+    picked = _dev(monkeypatch, tmp_path, DB_HOST_PORT="", WEB_DEV_PORT="")
+    for name, target in (("db", 5432), ("web", 5173)):
+        port = picked[name]["ports"][0]  # type: ignore[index]
+        assert str(port.get("published", "")) in ("", "0")
+        assert port["target"] == target
 
 
 def test_dev_config_publishes_exactly_db_5432_and_web_5173_on_loopback(

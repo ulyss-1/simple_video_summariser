@@ -332,7 +332,7 @@ def test_ports_only_on_web_bound_to_loopback() -> None:
     for name in SERVICES:
         block = _block(name)
         if name == "web":
-            assert 'ports: ["127.0.0.1:8080:8080"]' in block
+            assert 'ports: ["127.0.0.1:${WEB_HOST_PORT-8080}:8080"]' in block
         else:
             assert "ports:" not in block
     assert COMPOSE_YML.read_text().count("ports:") == 1
@@ -458,7 +458,7 @@ def test_compose_yml_db_service_publishes_no_ports() -> None:
 
 def test_compose_override_publishes_db_on_loopback_only() -> None:
     block = _service_block(COMPOSE_OVERRIDE_YML.read_text(), "db")
-    assert '"127.0.0.1:5432:5432"' in block
+    assert '"127.0.0.1:${DB_HOST_PORT-5432}:5432"' in block
 
 
 def test_compose_yml_db_service_is_only_on_the_internal_network() -> None:
@@ -651,7 +651,7 @@ def test_overlay_web_drops_the_nginx_build_with_reset() -> None:
 def test_overlay_web_replaces_the_8080_publish_with_loopback_5173() -> None:
     block = _override_block("web")
     assert "ports: !override" in block
-    assert '- "127.0.0.1:5173:5173"' in block
+    assert '- "127.0.0.1:${WEB_DEV_PORT-5173}:5173"' in block
     assert "8080" not in block
     assert block.count("127.0.0.1:") == 1
 
@@ -745,15 +745,18 @@ def test_the_nested_volume_check_catches_the_old_web_layout() -> None:
 
 def test_overlay_publishes_exactly_two_loopback_ports() -> None:
     text = COMPOSE_OVERRIDE_YML.read_text()
-    ports = re.findall(r'^\s+- "([\d.:]+)"$', text, flags=re.MULTILINE)
-    assert sorted(ports) == ["127.0.0.1:5173:5173", "127.0.0.1:5432:5432"]
+    ports = re.findall(r'^\s+- "([\w.:${}-]+)"', text, flags=re.MULTILINE)
+    assert sorted(ports) == [
+        "127.0.0.1:${DB_HOST_PORT-5432}:5432",
+        "127.0.0.1:${WEB_DEV_PORT-5173}:5173",
+    ]
     assert all(p.startswith("127.0.0.1:") for p in ports)
 
 
 def test_overlay_db_publish_and_network_are_unchanged_from_7() -> None:
     block = _override_block("db")
     assert "networks: [internal, devhost]" in block
-    assert '"127.0.0.1:5432:5432"' in block
+    assert '"127.0.0.1:${DB_HOST_PORT-5432}:5432"' in block
 
 
 def test_overlay_transcriber_whisper_model_defaults_to_tiny() -> None:

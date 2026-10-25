@@ -10,8 +10,8 @@ Everything runs under a unique `-p` project name, so the developer's
 `ytdigest` project and its volumes are never touched, and `down -v` runs in a
 `finally`, even on failure. There is no fixed sleep: waits go through
 `--wait --wait-timeout`. The only shared resources are the three `ytdigest-*`
-image tags and host port 8080 (the one published port), so stop any other
-stack that holds 8080 first.
+image tags; its one published port (web) is picked by Docker, so a running
+stack that holds 8080 does not get in the way.
 """
 
 from __future__ import annotations
@@ -97,8 +97,11 @@ def test_scale_transcriber_and_analyzer_has_no_port_or_name_clash(stack: Stack) 
 
 
 def test_web_serves_healthz_through_nginx_on_loopback(stack: Stack) -> None:
+    published = stack.compose("port", "web", "8080", timeout=60).stdout.strip()
+    host_port = published.rsplit(":", 1)[-1]
+    assert host_port.isdigit(), published
     result = subprocess.run(
-        ["curl", "-fsS", "http://127.0.0.1:8080/api/healthz"],
+        ["curl", "-fsS", f"http://127.0.0.1:{host_port}/api/healthz"],
         capture_output=True,
         text=True,
         timeout=30,
