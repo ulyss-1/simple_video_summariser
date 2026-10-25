@@ -1,0 +1,34 @@
+# Layer for tests/test_pipeline_whisper_smoke_docker.py (issue #262). Used as
+# `-f compose.yml -f tests/fixtures/smoke/compose.smoke.yml
+#  -f tests/fixtures/smoke/compose.whisper.yml`; never merged with
+# compose.override.yml.
+#
+# Everything the run depends on is a literal, not `${...}`, so an exported
+# shell variable cannot change it.
+
+services:
+  transcriber:
+    environment:
+      WHISPER_MODEL: tiny
+      WHISPER_COMPUTE: int8
+      WHISPER_THREADS: "2"
+      AUDIO_KEEP: "1"
+      # Test layer only: a model missing from the cache fails the first
+      # transcribe at once instead of reaching for the network.
+      HF_HUB_OFFLINE: "1"
+    volumes:
+      - ./tests/adapters/youtube/fixtures/metadata/no_captions.json:/smoke/fixtures/no_captions.json:ro
+      - ./tests/fixtures/smoke/speech.opus:/smoke/fixtures/speech.opus:ro
+  # One-shot model seed, the only step with network access. Never started by
+  # `up` (profile `seed`); the test runs it once, before the video is submitted.
+  whisper-seed:
+    image: ytdigest-whisper:latest
+    pull_policy: never    # built as `transcriber` in the same `up --build`
+    profiles: [seed]
+    command:
+      - python
+      - -c
+      - "from faster_whisper import download_model; print(download_model('tiny'))"
+    volumes:
+      - whisper-models:/models
+    networks: [egress]

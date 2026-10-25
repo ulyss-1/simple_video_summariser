@@ -36,8 +36,6 @@ from __future__ import annotations
 import json
 import subprocess
 import time
-import urllib.error
-import urllib.request
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -45,7 +43,15 @@ from typing import Any
 
 import pytest
 
-from tests.compose_stack import REPO_ROOT, Stack
+from tests.compose_stack import (
+    REPO_ROOT,
+    SmokeStack,
+    _all_jobs,
+    _http,
+    _leftovers,
+    _video_jobs,
+    _wait_until_done,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.image]
 
@@ -67,29 +73,6 @@ PINNED_ON = ("api", "planner", "analyzer", "transcriber")
 INTERNAL_ONLY = ("transcriber", "analyzer", "planner", "fake-ollama")
 
 
-class SmokeStack(Stack):
-    """#58's `Stack` with the smoke override merged on every call."""
-
-    def compose(
-        self,
-        *args: str,
-        env: dict[str, str] | None = None,
-        files: tuple[str, ...] = ("compose.yml", SMOKE_OVERRIDE),
-        timeout: int = 1800,
-    ) -> subprocess.CompletedProcess[str]:
-        return super().compose(*args, env=env, files=files, timeout=timeout)
-
-    def logs_tail(self, service: str, lines: int = 50) -> str:
-        return self.compose(
-            "logs", "--no-log-prefix", "--tail", str(lines), service, timeout=120
-        ).stdout
-
-    def web_port(self) -> int:
-        out = self.compose("port", "web", "8080", timeout=60).stdout.strip()
-        assert out.startswith("127.0.0.1:"), f"web is not on loopback: {out!r}"
-        return int(out.rpartition(":")[2])
-
-
 @dataclass
 class Run:
     stack: SmokeStack
@@ -104,103 +87,12 @@ class Run:
     ollama_model: str
 
 
-def _http(method: str, url: str, body: dict[str, Any] | None = None) -> tuple[int, Any]:
-    data = None if body is None else json.dumps(body).encode()
-    request = urllib.request.Request(
-        url, data=data, method=method, headers={"Content-Type": "application/json"}
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return response.status, json.loads(response.read())
-    except urllib.error.HTTPError as err:
-        with err:
-            raw = err.read()
-        try:
-            return err.code, json.loads(raw)
-        except ValueError:
-            return err.code, raw.decode("utf-8", "replace")
-
-
-def _video_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [j for j in jobs if j["video_id"] == VIDEO_ID]
-
-
-def _all_jobs(base: str) -> list[dict[str, Any]]:
-    status, doc = _http("GET", f"{base}/api/ops/jobs?limit=100")
-    assert status == 200, doc
-    items: list[dict[str, Any]] = doc["items"]
-    return items
-
-
-def _diagnostics(stack: SmokeStack, base: str, last_status: object) -> str:
-    try:
-        rows = [
-            f"  {j['kind']} state={j['state']} attempts={j['attempts']} "
-            f"error_class={j['error_class']} last_error={j['last_error']}"
-            for j in _all_jobs(base)
-        ]
-    except Exception as err:  # noqa: BLE001 - diagnostics must not hide the failure
-        rows = [f"  (jobs unavailable: {err!r})"]
-    return (
-        f"last observed status: {last_status!r}\n"
-        "jobs:\n" + "\n".join(rows) + "\n"
-        f"--- transcriber (last 50 lines) ---\n{stack.logs_tail('transcriber')}\n"
-        f"--- analyzer (last 50 lines) ---\n{stack.logs_tail('analyzer')}"
-    )
-
-
-def _wait_until_done(stack: SmokeStack, base: str, started: float) -> dict[str, Any]:
-    """Poll once a second until `done`; fail fast on `failed`, `unavailable` or an error."""
-    last: object = None
-    while True:
-        status, doc = _http("GET", f"{base}/api/videos/{VIDEO_ID}")
-        if status == 200:
-            last = doc["status"]
-            if last == "done":
-                assert isinstance(doc, dict)
-                return doc
-            if last in ("failed", "unavailable"):
-                pytest.fail(
-                    f"video ended as {last!r}\n{_diagnostics(stack, base, last)}"
-                )
-            errors = [
-                j for j in _video_jobs(_all_jobs(base)) if j["last_error"] is not None
-            ]
-            if errors:
-                pytest.fail(
-                    f"a job reported last_error (status {last!r})\n"
-                    f"{_diagnostics(stack, base, last)}"
-                )
-        elif status != 404:
-            pytest.fail(
-                f"GET video returned {status}: {doc}\n{_diagnostics(stack, base, last)}"
-            )
-        if time.monotonic() - started > DEADLINE_SEC:
-            pytest.fail(
-                f"timeout: video not done within {DEADLINE_SEC:.0f} s\n"
-                f"{_diagnostics(stack, base, last)}"
-            )
-        time.sleep(POLL_SEC)
-
-
-def _leftovers(project: str) -> tuple[str, str]:
-    label = f"label=com.docker.compose.project={project}"
-
-    def lines(*cmd: str) -> str:
-        return subprocess.run(
-            ["docker", *cmd], capture_output=True, text=True, timeout=120, check=True
-        ).stdout.strip()
-
-    return (
-        lines("ps", "-a", "--filter", label, "-q"),
-        lines("volume", "ls", "--filter", label, "-q"),
-    )
-
-
 @pytest.fixture(scope="module")
 def run(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Run]:
     project = f"ytdigest-t137-{uuid.uuid4().hex[:8]}"
-    stack = SmokeStack(project, tmp_path_factory.mktemp("smoke"))
+    stack = SmokeStack(
+        project, tmp_path_factory.mktemp("smoke"), ("compose.yml", SMOKE_OVERRIDE)
+    )
     # Exported variables must not leak in: the override pins what matters.
     with pytest.MonkeyPatch.context() as env:
         env.setenv("ANTHROPIC_API_KEY", LEAKY_KEY)
@@ -214,7 +106,13 @@ def run(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Run]:
 
             started = time.monotonic()
             status, body = _http("POST", f"{base}/api/videos", {"url": URL})
-            video = _wait_until_done(stack, base, started) if status == 202 else {}
+            video = (
+                _wait_until_done(
+                    stack, base, started, video_id=VIDEO_ID, deadline_sec=DEADLINE_SEC
+                )
+                if status == 202
+                else {}
+            )
             jobs = _all_jobs(base)
             again_status, again_body = _http("POST", f"{base}/api/videos", {"url": URL})
             yield Run(
@@ -357,7 +255,7 @@ def test_stub_claims_keep_roster_speakers_and_coerce_invented_ones(run: Run) -> 
 def test_jobs_are_one_done_ingest_and_one_done_analyze_and_no_transcribe(
     run: Run,
 ) -> None:
-    jobs = _video_jobs(run.jobs)
+    jobs = _video_jobs(run.jobs, VIDEO_ID)
     assert sorted(j["kind"] for j in jobs) == ["analyze", "ingest"]
     for job in jobs:
         assert job["state"] == "done", job
@@ -374,5 +272,5 @@ def test_resubmitting_a_done_video_returns_200_with_the_same_job_and_no_new_job(
     assert run.resubmit_status == 200, run.resubmit_body
     assert run.resubmit_body["created"] is False
     assert run.resubmit_body["job_id"] == run.submit_body["job_id"]
-    assert len(_video_jobs(run.jobs_after_resubmit)) == 2
+    assert len(_video_jobs(run.jobs_after_resubmit, VIDEO_ID)) == 2
     assert len(run.jobs_after_resubmit) == 2
