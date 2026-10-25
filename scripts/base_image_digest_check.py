@@ -1,24 +1,29 @@
-"""Compare digest-pinned base images with what Docker Hub serves today (issue #241).
+"""Compare digest-pinned base images with what Docker Hub serves today (#241, #249).
 
 Run by the scheduled workflow ``.github/workflows/base-image-digest-check.yml``.
-Usage: ``base_image_digest_check.py <Dockerfile>``. Every ``FROM`` that carries
-both a tag and an ``@sha256:`` digest is checked; a ``FROM`` without a digest
-is skipped. Nothing about the images is hard-coded here.
+Usage: ``base_image_digest_check.py <file> [<file> ...]``. A path ending in
+``.yml`` or ``.yaml`` is read as a Compose file (line-based, no YAML parser: the
+``!reset`` / ``!override`` tags of the overlay defeat a plain loader), any other
+path as a Dockerfile. Every ``FROM`` or ``image:`` that carries both a tag and
+an ``@sha256:`` digest is checked; one without a digest is skipped. Every file
+is parsed before the registry is contacted, and each distinct (repository, tag)
+is looked up once. Nothing about the images is hard-coded here.
 
-It only reports; it never edits the Dockerfile (a human bumps the pin, as with
+It only reports; it never edits a file (a human bumps the pin, as with
 yt-dlp, #68). Standard library only.
 
 Exit codes:
 
 - ``0`` and no stdout: every pin equals the registry's digest for its tag.
 - ``1`` and one GitHub Actions ``::error`` line per stale reference, naming
-  the pinned and upstream digest and the replacement ``FROM`` reference.
+  the file, the line, the pinned and upstream digest and the replacement
+  reference (a ``FROM`` reference, or the full Compose ``image:`` value).
 - ``0`` and one stderr line per reference whose lookup failed: the registry
   could not be reached or answered with something unusable; the check runs
   again next time. A real staleness elsewhere still gives exit ``1``.
-- ``2``: a repository fault (file unreadable, no pin, malformed pin, an
-  ``ARG`` in the reference, a registry other than Docker Hub, a one-component
-  official-image name). The registry is never contacted.
+- ``2``: a repository fault (no file given, file unreadable, no pin,
+  malformed pin, an ``ARG`` or ``${}`` in the reference, a registry other than
+  Docker Hub). The registry is never contacted.
 
 The network is one injectable seam (``Fetch``), so tests make no network call.
 """
@@ -32,7 +37,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 TOKEN_URL = "https://auth.docker.io/token"
@@ -63,12 +68,15 @@ class RepositoryFault(Exception):
 
 @dataclass(frozen=True)
 class Reference:
-    name: str  # repository path on Docker Hub, e.g. ``nginx/nginx-unprivileged``
+    name: str  # repository path on Docker Hub, e.g. ``library/node``
     tag: str
     digest: str
+    written: str = ""  # the name as written in the file, e.g. ``node``
+    line: int = 0  # 1-based line in the file
+    compose: bool = False
 
     def pinned(self, digest: str | None = None) -> str:
-        return f"{self.name}:{self.tag}@{digest or self.digest}"
+        return f"{self.written or self.name}:{self.tag}@{digest or self.digest}"
 
 
 def urllib_fetch(
@@ -105,30 +113,56 @@ def _parse_reference(image: str) -> Reference:
         raise RepositoryFault(f"{image!r} has a digest but no tag")
     if not _TAG.fullmatch(tag):
         raise RepositoryFault(f"{image!r} has an unusable tag")
+    written = name
     head, slash, tail = name.partition("/")
     if slash and (head == "docker.io" or "." in head or ":" in head or head == "localhost"):
         if head != "docker.io":
             raise RepositoryFault(f"{image!r} names registry {head}; only Docker Hub is supported")
         name = tail
-    if "/" not in name:
-        raise RepositoryFault(f"{image!r} is a one-component official image name; not supported yet (#249)")
     if not _NAME.fullmatch(name):
         raise RepositoryFault(f"{image!r} has an unusable image name")
-    return Reference(name, tag, digest)
+    if "/" not in name:
+        name = f"library/{name}"  # Docker official images live under library/
+    return Reference(name, tag, digest, written)
 
 
 def pinned_references(dockerfile: str) -> list[Reference]:
     """Every ``FROM`` with a digest, validated; raises ``RepositoryFault``."""
     refs = []
-    for line in dockerfile.splitlines():
+    for number, line in enumerate(dockerfile.splitlines(), start=1):
         image = _from_image(line)
         if image is not None and "@" in image:
-            refs.append(_parse_reference(image))
+            refs.append(replace(_parse_reference(image), line=number))
         elif image is not None and "$" in image:
             raise RepositoryFault(f"{image!r} is built from an ARG; pin a literal reference")
     if not refs:
         raise RepositoryFault("no FROM carries a tag and an @sha256: digest")
     return refs
+
+
+_COMPOSE_IMAGE = re.compile(r"""^\s*image:\s*(?:"([^"]*)"|'([^']*)'|([^\s#]+))\s*(?:#.*)?$""")
+
+
+def pinned_compose_references(text: str) -> list[Reference]:
+    """Every ``image:`` with a digest, found line by line; raises ``RepositoryFault``."""
+    refs = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        match = _COMPOSE_IMAGE.match(line)
+        if match is None:
+            continue
+        image = next(g for g in match.groups() if g is not None)
+        if "@" in image:
+            refs.append(replace(_parse_reference(image), line=number, compose=True))
+    if not refs:
+        raise RepositoryFault("no image: carries a tag and an @sha256: digest")
+    return refs
+
+
+def _read_pins(path: Path) -> list[Reference]:
+    text = path.read_text()
+    if path.suffix in (".yml", ".yaml"):
+        return pinned_compose_references(text)
+    return pinned_references(text)
 
 
 def _header(headers: Mapping[str, str], name: str) -> str | None:
@@ -168,33 +202,44 @@ def upstream_digest(ref: Reference, fetch: Fetch) -> str:
 
 def main(argv: Sequence[str] | None = None, *, fetch: Fetch = urllib_fetch) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    if len(args) != 1:
-        print("base-image-digest-check: usage: base_image_digest_check.py <Dockerfile>", file=sys.stderr)
+    if not args:
+        print(
+            "base-image-digest-check: usage: base_image_digest_check.py <file> [<file> ...]",
+            file=sys.stderr,
+        )
         return 2
-    path = Path(args[0])
-    try:
-        refs = pinned_references(path.read_text())
-    except (RepositoryFault, OSError, UnicodeDecodeError) as err:
-        print(f"base-image-digest-check: cannot read the pins from {path}: {err}", file=sys.stderr)
-        return 2
-    stale = False
-    for ref in refs:
+    found: list[tuple[Path, Reference]] = []
+    for arg in args:  # every file is parsed before the registry is contacted
+        path = Path(arg)
         try:
-            latest = upstream_digest(ref, fetch)
-        except Exception as err:  # noqa: BLE001 - any outage must end quietly with exit 0
-            print(
-                f"base-image-digest-check: Docker Hub unavailable for {ref.name}:{ref.tag} "
-                f"({type(err).__name__}: {err}); will retry on the next run",
-                file=sys.stderr,
-            )
+            found.extend((path, ref) for ref in _read_pins(path))
+        except (RepositoryFault, OSError, UnicodeDecodeError) as err:
+            print(f"base-image-digest-check: cannot read the pins from {path}: {err}", file=sys.stderr)
+            return 2
+    lookups: dict[tuple[str, str], str | Exception] = {}
+    stale = False
+    for path, ref in found:
+        key = (ref.name, ref.tag)
+        if key not in lookups:
+            try:
+                lookups[key] = upstream_digest(ref, fetch)
+            except Exception as err:  # noqa: BLE001 - any outage must end quietly with exit 0
+                lookups[key] = err
+                print(
+                    f"base-image-digest-check: Docker Hub unavailable for {ref.name}:{ref.tag} "
+                    f"({type(err).__name__}: {err}); will retry on the next run",
+                    file=sys.stderr,
+                )
+        latest = lookups[key]
+        if isinstance(latest, Exception) or latest == ref.digest:
             continue
-        if latest != ref.digest:
-            stale = True
-            print(
-                f"::error title=Base image digest is behind::{ref.name}:{ref.tag} is pinned to "
-                f"{ref.digest} but upstream is {latest}. Replace the FROM reference with "
-                f"{ref.pinned(latest)} and redeploy (architecture.md 11.3)."
-            )
+        stale = True
+        replacement = f"image: {ref.pinned(latest)}" if ref.compose else ref.pinned(latest)
+        print(
+            f"::error file={path},line={ref.line},title=Base image digest is behind::"
+            f"{ref.written}:{ref.tag} is pinned to {ref.digest} but upstream is {latest}. "
+            f"Replace the reference with {replacement} and redeploy (architecture.md 11.3)."
+        )
     return 1 if stale else 0
 
 

@@ -361,8 +361,11 @@ on container port 8080 and is published on `127.0.0.1:8080` only
 proxy (#141) for TLS. Updates are `git pull` of `master`, then
 `docker compose run --rm migrate` (if there is a new revision) and
 `docker compose -f compose.yml up -d --build`. A red "base image digest check"
-run means bump the frontend base-image digest per architecture.md §11.3, then
-follow the usual update steps. After an update, re-run §12.
+run means bump the stale base-image digest (nginx, node, python or postgres)
+per architecture.md §11.3, then follow the usual update steps. A `postgres`
+digest bump recreates `db` on the next `docker compose -f compose.yml up -d
+--build`: a short database restart on the same major version, with the data
+staying in the `pgdata` volume. After an update, re-run §12.
 
 ---
 

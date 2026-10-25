@@ -63,8 +63,12 @@ def _copy_sources(args: str) -> list[str]:
 def test_both_stages_are_python_3_14_slim() -> None:
     froms = [args for name, args in _instructions() if name == "FROM"]
     assert len(froms) == 2
-    assert froms[0].split()[0] == "python:3.14-slim"
-    assert froms[1].split()[0] == "python:3.14-slim"
+    # Digest-pinned (#249); the builder's venv runs in the runtime stage, so
+    # both stages must be the same interpreter build.
+    pins = [re.fullmatch(r"python:3\.14-slim@(sha256:[0-9a-f]{64})(?: AS builder)?", f) for f in froms]
+    assert all(pins), froms
+    assert pins[0] is not None and pins[1] is not None
+    assert pins[0].group(1) == pins[1].group(1)
 
 
 def test_requirements_are_copied_before_any_application_code() -> None:

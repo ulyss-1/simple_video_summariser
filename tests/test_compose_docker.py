@@ -10,6 +10,7 @@ marked integration: Docker Desktop must be running.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -334,7 +335,7 @@ def test_dev_config_web_is_the_vite_dev_server_without_a_build(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     web = _dev(monkeypatch, tmp_path)["web"]
-    assert web["image"] == "node:24-alpine"
+    assert re.fullmatch(r"node:24-alpine@sha256:[0-9a-f]{64}", str(web["image"]))
     assert "build" not in web
     command = " ".join(web["command"])  # type: ignore[arg-type]
     assert "npm ci" in command and "npm run dev" in command
