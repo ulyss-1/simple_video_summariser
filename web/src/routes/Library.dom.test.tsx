@@ -1,9 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { setupUser } from '../test/user'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { components } from '../api'
 import { Library } from './Library'
+
+const user = setupUser
 
 type VideoItem = components['schemas']['VideoItem']
 type VideoList = components['schemas']['VideoList']
@@ -290,7 +293,7 @@ describe('request construction', () => {
     )
     const router = await mount()
     await act(async () => {
-      fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'idle' } })
+      await user().selectOptions(screen.getByLabelText('Status'), 'idle')
     })
     await settle()
     expect(screen.getByRole('link', { name: 'Idle one' })).toBeTruthy()
@@ -558,7 +561,7 @@ describe('rows', () => {
     stubFetch(() => list(1, [vid(1)]))
     const router = await mount()
     await act(async () => {
-      fireEvent.click(screen.getByRole('link', { name: 'Title 1' }))
+      await user().click(screen.getByRole('link', { name: 'Title 1' }))
     })
     expect(router.state.location.pathname).toBe('/videos/v0000000001')
   })
@@ -569,7 +572,7 @@ describe('filters', () => {
     stubFetch(serverWith(120))
     const router = await mount('/?page=2')
     await act(async () => {
-      fireEvent.click(screen.getAllByRole('button', { name: 'Chan A' })[0] as HTMLElement)
+      await user().click(screen.getAllByRole('button', { name: 'Chan A' })[0] as HTMLElement)
     })
     await settle()
     expect(search(router)).toBe(`?channel=${UC}`)
@@ -583,7 +586,7 @@ describe('filters', () => {
     const filter = screen.getByRole('group', { name: 'Active filters' })
     expect(within(filter).getByText('Chan A')).toBeTruthy()
     await act(async () => {
-      fireEvent.click(within(filter).getByRole('button', { name: 'Clear' }))
+      await user().click(within(filter).getByRole('button', { name: 'Clear' }))
     })
     await settle()
     expect(search(router)).toBe('')
@@ -615,7 +618,7 @@ describe('filters', () => {
     stubFetch(serverWith(500))
     const router = await mount('/?page=4')
     await act(async () => {
-      fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'done' } })
+      await user().selectOptions(screen.getByLabelText('Status'), 'done')
     })
     await settle()
     expect(search(router)).toBe('?status=done')
@@ -632,10 +635,10 @@ describe('filters', () => {
     stubFetch(serverWith(1))
     const router = await mount(`/?status=idle`)
     await act(async () => {
-      fireEvent.change(screen.getByLabelText('From'), { target: { value: '2026-09-01' } })
+      await user().type(screen.getByLabelText('From'), '2026-09-01')
     })
     await act(async () => {
-      fireEvent.change(screen.getByLabelText('To'), { target: { value: '2026-09-01' } })
+      await user().type(screen.getByLabelText('To'), '2026-09-01')
     })
     await settle()
     expect(search(router)).toBe('?from=2026-09-01&to=2026-09-01&status=idle')
@@ -648,7 +651,7 @@ describe('filters', () => {
     stubFetch(serverWith(1))
     const router = await mount('/?from=2026-09-01')
     await act(async () => {
-      fireEvent.change(screen.getByLabelText('From'), { target: { value: '' } })
+      await user().clear(screen.getByLabelText('From'))
     })
     await settle()
     expect(search(router)).toBe('')
@@ -661,7 +664,7 @@ describe('filters', () => {
     cleanup()
     const r2 = await mount(`/?channel=${UC}&from=2026-01-01&to=2026-02-02&status=done&page=2`)
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Clear all filters' }))
+      await user().click(screen.getByRole('button', { name: 'Clear all filters' }))
     })
     await settle()
     expect(search(r2)).toBe('')
@@ -679,7 +682,7 @@ describe('filters', () => {
     const router = await mount('/?to=2026-09-01')
     expect(requests).toHaveLength(1)
     await act(async () => {
-      fireEvent.change(screen.getByLabelText('From'), { target: { value: '2026-09-02' } })
+      await user().type(screen.getByLabelText('From'), '2026-09-02')
     })
     await settle()
     expect(screen.getByText("'From' is after 'To'")).toBeTruthy()
@@ -763,13 +766,13 @@ describe('pagination', () => {
     stubFetch(serverWith(234))
     const router = await mount()
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+      await user().click(screen.getByRole('button', { name: 'Next' }))
     })
     await settle()
     expect(search(router)).toBe('?page=2')
     expect(status().textContent).toBe('51–100 of 234')
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Previous' }))
+      await user().click(screen.getByRole('button', { name: 'Previous' }))
     })
     await settle()
     expect(search(router)).toBe('')
@@ -809,7 +812,7 @@ describe('pagination', () => {
     expect(screen.queryByRole('table')).toBeNull()
     const link = screen.getByRole('link', { name: /last page/i })
     await act(async () => {
-      fireEvent.click(link)
+      await user().click(link)
     })
     await settle()
     expect(search(router)).toBe('?status=done&page=5')
@@ -826,7 +829,7 @@ describe('pagination', () => {
     })
     await mount()
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+      await user().click(screen.getByRole('button', { name: 'Next' }))
     })
     await settle()
     expect(screen.getByRole('link', { name: 'Title 1' })).toBeTruthy()
@@ -884,7 +887,7 @@ describe('states', () => {
     expect(screen.getByText('No videos match these filters')).toBeTruthy()
     expect(screen.queryByText('Nothing has been processed yet')).toBeNull()
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Clear all filters' }))
+      await user().click(screen.getByRole('button', { name: 'Clear all filters' }))
     })
     await settle()
     expect(search(router)).toBe('')
@@ -899,7 +902,7 @@ describe('states', () => {
     expect(document.body.textContent).not.toContain('/api/videos')
     healthy = true
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+      await user().click(screen.getByRole('button', { name: 'Retry' }))
     })
     await settle()
     expect(screen.getByRole('link', { name: 'Title 1' })).toBeTruthy()

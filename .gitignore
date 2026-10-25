@@ -19,6 +19,7 @@ node_modules/
 # Frontend build output (task #47)
 web/dist/
 web/tsconfig.tsbuildinfo
+web/coverage/
 
 # Bake-off reports, transcripts and references (issue #76)
 data/bakeoff/

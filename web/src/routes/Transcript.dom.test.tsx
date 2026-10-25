@@ -1,10 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
+import { setupUser } from "../test/user";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { components } from "../api";
 import { FakePlayerProvider } from "../components/FakePlayerProvider";
 import { Transcript } from "./Transcript";
+
+const user = setupUser;
 
 type TranscriptOut = components["schemas"]["TranscriptOut"];
 type SegmentOut = components["schemas"]["SegmentOut"];
@@ -147,7 +150,7 @@ async function mount(entry = `/videos/${ID}/transcript`) {
 }
 
 async function click(el: HTMLElement) {
-  fireEvent.click(el);
+  await user().click(el);
   await settle();
 }
 
@@ -606,7 +609,7 @@ describe("pagination", () => {
     stubApi(serverWith(200));
     const { router } = await mount();
     expect(next().disabled).toBe(true);
-    fireEvent.click(next());
+    await user().click(next());
     expect(router.state.location.search).toBe("");
   });
 
@@ -676,7 +679,7 @@ describe("pagination", () => {
       });
     });
     await mount();
-    fireEvent.click(next());
+    await user().click(next());
     await settle();
     expect(items()[0]?.textContent).toContain("Segment 0");
     expect(screen.getByText(/loading/i)).toBeTruthy();
