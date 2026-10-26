@@ -307,6 +307,7 @@ def test_rel_path_matches_the_storage_rule(tmp_path: Path) -> None:
 
 
 def test_a_ten_minute_fixture_is_at_most_11mb_per_hour(tmp_path: Path) -> None:
+    """Keeps the real wait: real ffmpeg encodes a 10-minute fixture, and its size is the subject."""
     ytdlp_runner = FakeDownloader(duration_sec=600.0)
     audio = YouTubeAudio(ytdlp_runner=ytdlp_runner)
 

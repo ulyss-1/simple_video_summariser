@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from common.errors import MAX_ERROR_BYTES, format_error
+from common.errors import format_error
 from common.safe_url import REDACTED, make_redactor, redact
 from services.planner.scheduler import MAX_RECORDED_ERROR_CHARS, Scheduler, Task
 from tests.services.planner.test_scheduler import FakeLocks
@@ -107,9 +107,11 @@ def test_secret_straddling_the_truncation_cut_does_not_survive() -> None:
     # Sweep the distance from the secret to the end of the text across the
     # whole neighbourhood of the kept-tail budget, so some placement has the
     # cut inside the secret.
+    # A small injected byte budget keeps each text tiny; the cut logic is the same.
     secret = f"Authorization: Bearer {BEARER}"
-    for tail_len in range(MAX_ERROR_BYTES - 150, MAX_ERROR_BYTES + 50):
-        out = format_error(RuntimeError("x" * 100 + secret + "y" * tail_len))
+    limit = 512
+    for tail_len in range(limit - 150, limit + 50):
+        out = format_error(RuntimeError("x" * 100 + secret + "y" * tail_len), max_bytes=limit)
         assert BEARER not in out
         assert BEARER[:10] not in out
         assert BEARER[-10:] not in out

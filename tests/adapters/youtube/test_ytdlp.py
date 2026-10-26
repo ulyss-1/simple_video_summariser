@@ -164,6 +164,7 @@ def test_is_running_is_false_when_the_proc_entry_vanishes_mid_read(
 def test_a_timeout_raises_transient_network_and_leaves_no_process_running(
     tmp_path: pathlib.Path,
 ) -> None:
+    """Keeps the real wait: 1.5 s must outlast the real child's startup, then really expire."""
     pids_file = tmp_path / "pids"
 
     def hanging(
