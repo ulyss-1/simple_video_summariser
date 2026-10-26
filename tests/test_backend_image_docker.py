@@ -86,10 +86,10 @@ def test_app_directory_holds_only_the_application() -> None:
         ("ffmpeg", "-version"),
         ("ffprobe", "-version"),
         ("curl", "--version"),
-        ("yt-dlp", "--version"),
         ("alembic", "--version"),
     ],
 )
+# yt-dlp is covered by test_yt_dlp_is_the_pinned_version (same command, exact version).
 def test_runtime_tools_are_installed(command: tuple[str, ...]) -> None:
     assert _run(*command).returncode == 0
 
