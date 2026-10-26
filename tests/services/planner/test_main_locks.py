@@ -8,12 +8,17 @@ second connection and disappears with its connection, so these are
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from typing import Any
 
 import psycopg
 import pytest
 
 from services.planner.main import LOCK_KEYS, PostgresAdvisoryLocks
 from services.planner.scheduler import Scheduler, Task
+from tests.advisory_lock_wait import (
+    granted_advisory_pids,
+    wait_until_advisory_lock_released,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -86,14 +91,38 @@ def test_the_lock_is_free_again_after_a_task_raises(make_locks: MakeLocks, postg
     assert _can_take(postgres_dsn, "reap")
 
 
-def test_the_lock_is_freed_when_the_holding_connection_closes(make_locks: MakeLocks) -> None:
-    holder, other = make_locks(), make_locks()
-    assert holder.try_lock("reap") is True
-    assert other.try_lock("reap") is False
+def test_the_lock_is_freed_when_the_holding_connection_closes(postgres_dsn: str) -> None:
+    namespace, task_id = LOCK_KEYS["reap"]
+    holder_pids: list[int] = []
 
-    holder.close()  # what a dying process does to its connection
+    def connect_holder() -> psycopg.Connection[Any]:
+        conn = psycopg.connect(postgres_dsn)
+        holder_pids.append(conn.info.backend_pid)
+        return conn
 
-    assert other.try_lock("reap") is True
+    holder = PostgresAdvisoryLocks(connect_holder)
+    other = PostgresAdvisoryLocks(lambda: psycopg.connect(postgres_dsn))
+    try:
+        with psycopg.connect(postgres_dsn, autocommit=True) as observer:
+
+            def holders() -> list[int]:
+                return granted_advisory_pids(observer, namespace, task_id)
+
+            assert holder.try_lock("reap") is True
+            # Positive control: the observer query sees the lock, and it is the holder's.
+            assert holders() == holder_pids
+            assert other.try_lock("reap") is False
+
+            holder.close()  # what a dying process does to its connection; returns before the server frees the lock
+
+            wait_until_advisory_lock_released(
+                holders, namespace=namespace, task_id=task_id, holder_pid=holder_pids[0]
+            )
+
+            assert other.try_lock("reap") is True
+    finally:
+        holder.close()
+        other.close()
 
 
 def test_distinct_tasks_do_not_block_each_other(make_locks: MakeLocks) -> None:

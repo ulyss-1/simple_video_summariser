@@ -117,6 +117,22 @@ def _wait_for_postgres(
     ) from last_exc
 
 
+@pytest.fixture(autouse=True)
+def _isolate_database_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """No ambient ``DATABASE_URL`` and no cached ``Settings`` in any test (#305).
+
+    ``get_settings()`` is ``lru_cache``'d, so a test that reached it would leave
+    a ``Settings`` behind for the next one, and a developer's exported
+    ``DATABASE_URL`` would hide a test that forgot its own settings. Fixtures
+    that need a database (``head_dsn`` and the per-directory conftests) set the
+    variable again themselves, after this one has run.
+    """
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 @pytest.fixture(scope="session")
 def postgres_container() -> Iterator[PostgresContainer]:
     """One Postgres container for the whole test session.
