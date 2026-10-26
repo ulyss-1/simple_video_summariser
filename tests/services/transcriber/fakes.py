@@ -150,3 +150,19 @@ class RecordedLogs:
 def make_ctx() -> tuple[JobContext, RecordedLogs]:
     logs = RecordedLogs()
     return JobContext(logs.logger), logs
+
+
+def mark_running(conn: Any, job_id: int, video_id: str, origin: str = "adhoc") -> None:
+    """Make a freshly enqueued ingest job look claimed by worker ``w`` (#303's guard needs it).
+
+    The video row exists in production by the time its ingest job runs (the submit, the feed
+    poll or the backfill inserted it), so a missing one is created here with the job's origin.
+    """
+    conn.execute(
+        "INSERT INTO videos (video_id, origin) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+        (video_id, origin),
+    )
+    conn.execute(
+        "UPDATE jobs SET state = 'running', locked_by = 'w' WHERE id = %s", (job_id,)
+    )
+    conn.commit()

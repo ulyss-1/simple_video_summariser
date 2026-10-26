@@ -147,6 +147,8 @@ def db(head_dsn: str) -> Iterator[psycopg.Connection[Any]]:
 
 
 def enqueue(db: psycopg.Connection[Any], kind: str, video_id: str) -> int:
+    # The video row exists by the time a job runs (the submit or the poll inserted it).
+    db.execute("INSERT INTO videos (video_id) VALUES (%s) ON CONFLICT DO NOTHING", (video_id,))
     job_id = PostgresQueue(db, settings=make_settings()).enqueue(kind, video_id)
     assert job_id is not None
     return job_id

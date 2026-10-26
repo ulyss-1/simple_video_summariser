@@ -16,7 +16,10 @@ from psycopg.types.json import Jsonb
 
 from common.errors import CANCELLED_LAST_ERROR, log_job_cancelled
 from common.metrics import DURATION_BUCKETS, DurationHistogram
-from common.repo.deleted_videos import VideoNotFound
+
+
+class VideoNotFound(Exception):
+    """No ``videos`` row: unknown, or deleted (#231). Re-exported by ``deleted_videos``."""
 
 
 class _Unset:
@@ -351,16 +354,31 @@ def cancel_video(conn: psycopg.Connection[Any], video_id: str) -> list[VideoCanc
         ).fetchone()
         if video is None:
             raise VideoNotFound(video_id)
-        rows = conn.execute(
-            _CANCEL_VIDEO_SQL, {"video_id": video_id, "message": CANCELLED_LAST_ERROR}
-        ).fetchall()
-    entries = [
+        entries = apply_video_cancel(conn, video_id)
+    log_cancelled_entries(video_id, entries)
+    return entries
+
+
+def apply_video_cancel(conn: psycopg.Connection[Any], video_id: str) -> list[VideoCancelEntry]:
+    """The cancel write of ``cancel_video`` and ``delete_video`` (#237, #303).
+
+    The caller holds the video's job locks (and the ``videos`` row lock) in its
+    open transaction; this is the one statement that ends the ``pending`` jobs and
+    stores the request on the ``running`` ones. Returns the touched jobs in ``id`` order.
+    """
+    rows = conn.execute(
+        _CANCEL_VIDEO_SQL, {"video_id": video_id, "message": CANCELLED_LAST_ERROR}
+    ).fetchall()
+    return [
         VideoCancelEntry(
             int(row[0]), str(row[1]), "cancelled" if row[2] == "dead" else "cancel_requested"
         )
         for row in sorted(rows)
     ]
+
+
+def log_cancelled_entries(video_id: str, entries: list[VideoCancelEntry]) -> None:
+    """One ``job.cancelled`` line per job a cancel ended at once; call after the commit."""
     for entry in entries:
         if entry.outcome == "cancelled":
             log_job_cancelled(job_id=entry.job_id, video_id=video_id, kind=entry.kind)
-    return entries

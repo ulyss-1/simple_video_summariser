@@ -22,6 +22,7 @@ from tests.services.transcriber.fakes import (
     fixture_meta,
     make_ctx,
     make_job,
+    mark_running,
     make_settings,
     manual_segments,
 )
@@ -79,8 +80,7 @@ class Rig:
         built = make_job(video_id)
         parent_id = self.queue.enqueue("ingest", video_id, priority=built.priority)
         assert parent_id is not None
-        self.conn.execute("UPDATE jobs SET state = 'running' WHERE id = %s", (parent_id,))
-        self.conn.commit()
+        mark_running(self.conn, parent_id, video_id, built.payload.get("origin", "adhoc"))
         try:
             self.handler(replace(built, id=parent_id), self.ctx)
         finally:

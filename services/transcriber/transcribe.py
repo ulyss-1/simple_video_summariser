@@ -15,7 +15,8 @@ Retry safety, step by step:
   see the audio in use, and no transaction is open while the model runs.
 * The transcript and its chunks are one transaction.
 * With ``AUDIO_KEEP=0`` the file is deleted first and the row second, on every
-  exit path once audio was fetched.
+  exit path once audio was fetched. A video deleted meanwhile (#303) is treated
+  the same way whatever ``AUDIO_KEEP`` is.
 
 The attempt cap is the queue's business (#11), not the handler's.
 """
@@ -271,6 +272,13 @@ def make_transcribe_handler(
         delete_media(conn, job.video_id)
         conn.commit()
 
+    def video_gone(conn: psycopg.Connection[Any], job: Job) -> bool:
+        """Whether the video's row is gone (deleted, #303), read in a fresh transaction."""
+        conn.rollback()
+        found = video_exists(conn, job.video_id)
+        conn.commit()
+        return not found
+
     def handler(job: Job, ctx: JobContext) -> None:
         video_id = _validate(job)
         with connect() as conn:
@@ -324,11 +332,13 @@ def make_transcribe_handler(
         try:
             process(conn, job, ctx, audio, ticker)
         except BaseException:
-            if not settings.AUDIO_KEEP:
-                try:
+            # A deleted video's audio goes whatever AUDIO_KEEP says (#303): nobody can
+            # ever see its row again, and the API only removed the files it knew of.
+            try:
+                if not settings.AUDIO_KEEP or video_gone(conn, job):
                     discard_audio(conn, job, ctx, audio)
-                except Exception:
-                    ctx.logger.warning("could not discard audio after a failure", exc_info=True)
+            except Exception:
+                ctx.logger.warning("could not discard audio after a failure", exc_info=True)
             raise
         if not settings.AUDIO_KEEP:
             discard_audio(conn, job, ctx, audio)

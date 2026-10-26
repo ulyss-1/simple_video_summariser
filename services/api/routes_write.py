@@ -61,12 +61,7 @@ from common.queue import (
 from common.repo.backfill_requests import create_request
 from common.repo.channel_catalog import get_enrichment_state, retry_enrichment
 from common.repo.channels import channel_exists, fill_channel_title, register_channel
-from common.repo.deleted_videos import (
-    VideoCancelling,
-    VideoNotFound,
-    VideoRunning,
-    delete_video,
-)
+from common.repo.deleted_videos import VideoNotFound, delete_video
 from common.repo.jobs import active_job, cancel_video, latest_job
 from common.repo.media import UnsafeMediaPath, resolve_media_path
 from common.repo.transcripts import get_best_transcript
@@ -144,8 +139,7 @@ BACKFILL_REQUEST_ACTIVE = "a backfill request is already pending or running for 
 LISTING_UNAVAILABLE = "YouTube listing unavailable, try again later"
 LISTING_FAILED = "YouTube listing failed"
 VIDEO_NOT_FOUND = "video not found"
-VIDEO_RUNNING = "video is currently processing"
-VIDEO_CANCELLING = "cancellation in progress"
+CANCELLATION_IN_PROGRESS = "cancellation in progress"
 NO_TRANSCRIPT = "no transcript yet"
 ANALYSIS_RUNNING = "an analysis is already running for this video"
 REANALYSIS_CONTENDED = "the analysis job kept changing, try again"
@@ -293,6 +287,10 @@ def _require_idle(conn: psycopg.Connection[Any]) -> None:
         raise RuntimeError("write route expects a connection with no open transaction")
 
 
+class CancellationInProgress(Exception):
+    """A deleted video still has a running job winding down (#303): resubmit later."""
+
+
 def submit_video(
     conn: psycopg.Connection[Any], video_id: str, *, queue: JobQueue
 ) -> SubmitResult:
@@ -306,8 +304,32 @@ def submit_video(
     are also raised so their successors inherit it (#155). Otherwise one job
     is enqueued at ``PRIORITY_INTERACTIVE``. A concurrent submission that loses the enqueue
     race returns the winner's job.
+
+    A deleted video (#303) is resubmitted under the lock order jobs by id, then the
+    ``videos`` row: a ``running`` job still carrying a cancel request makes the call
+    raise ``CancellationInProgress`` before anything is written (its ``ingest`` key
+    would otherwise absorb the new submission while the old job dies); otherwise the
+    job rows left over from the deleted video go with its tombstone, so the "latest
+    ingest" lookup below cannot find a ``CANCELLED`` row.
     """
     with conn.transaction():
+        conn.execute(
+            "SELECT id FROM jobs WHERE video_id = %s ORDER BY id FOR UPDATE", (video_id,)
+        ).fetchall()
+        # Serializes with delete_video, which holds this row from its job locks to its commit.
+        conn.execute("SELECT 1 FROM videos WHERE video_id = %s FOR UPDATE", (video_id,)).fetchall()
+        tombstoned = conn.execute(
+            "SELECT 1 FROM deleted_videos WHERE video_id = %s", (video_id,)
+        ).fetchone()
+        if tombstoned is not None:
+            winding_down = conn.execute(
+                "SELECT 1 FROM jobs WHERE video_id = %s AND state = 'running'"
+                " AND cancel_requested_at IS NOT NULL LIMIT 1",
+                (video_id,),
+            ).fetchone()
+            if winding_down is not None:
+                raise CancellationInProgress(video_id)
+            conn.execute("DELETE FROM jobs WHERE video_id = %s AND state <> 'running'", (video_id,))
         insert_submitted_video(conn, video_id)
         existing = latest_job(conn, video_id, "ingest")
         if existing is None:
@@ -338,7 +360,12 @@ def _require_json_content_type(request: Request) -> None:
     "/videos",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(_require_json_content_type)],
-    responses={200: {"model": VideoSubmission, "description": "Already submitted"}},
+    responses={
+        200: {"model": VideoSubmission, "description": "Already submitted"},
+        409: {
+            "description": "The video was deleted and its running job is still being cancelled"
+        },
+    },
 )
 def post_videos(
     body: SubmitRef,
@@ -352,7 +379,10 @@ def post_videos(
             status.HTTP_422_UNPROCESSABLE_CONTENT, BAD_VIDEO_REF
         ) from None
     _require_idle(conn)
-    result = submit_video(conn, video_id, queue=PostgresQueue(conn))
+    try:
+        result = submit_video(conn, video_id, queue=PostgresQueue(conn))
+    except CancellationInProgress:
+        raise HTTPException(status.HTTP_409_CONFLICT, CANCELLATION_IN_PROGRESS) from None
     if not result.created:
         response.status_code = status.HTTP_200_OK
     return VideoSubmission(
@@ -558,9 +588,6 @@ def _resolve_channel_name(resolve: ChannelResolver, ref: NameRef) -> ResolvedCha
     status_code=status.HTTP_204_NO_CONTENT,
     responses={
         404: {"description": "No such video"},
-        409: {
-            "description": "The video has a running job, or its running jobs are being cancelled"
-        },
         422: {"description": "Malformed video ID"},
     },
 )
@@ -573,10 +600,6 @@ def delete_stored_video(
         deleted = delete_video(conn, video_id)
     except VideoNotFound:
         raise HTTPException(status.HTTP_404_NOT_FOUND, VIDEO_NOT_FOUND) from None
-    except VideoCancelling:
-        raise HTTPException(status.HTTP_409_CONFLICT, VIDEO_CANCELLING) from None
-    except VideoRunning:
-        raise HTTPException(status.HTTP_409_CONFLICT, VIDEO_RUNNING) from None
     except psycopg.OperationalError as exc:
         raise DatabaseUnavailable from exc
     audio_dir = get_settings().AUDIO_DIR

@@ -24,6 +24,7 @@ from tests.services.transcriber.fakes import (
     fixture_meta,
     make_ctx,
     make_job,
+    mark_running,
     make_settings,
     manual_segments,
 )
@@ -67,12 +68,12 @@ class UnitRig:
         self.subtitles = FakeSubtitles()
         events = self.events
         monkeypatch.setattr(
-            ingest_module, "upsert_video", lambda conn, m, origin: events.append(("upsert", origin))
+            ingest_module, "upsert_video", lambda conn, m, origin, *, guard=None: events.append(("upsert", origin))
         )
         monkeypatch.setattr(
             ingest_module,
             "record_unavailable",
-            lambda conn, vid, reason, *, origin: events.append(("record", vid, reason, origin)),
+            lambda conn, vid, reason, *, origin, guard=None: events.append(("record", vid, reason, origin)),
         )
         monkeypatch.setattr(
             ingest_module, "clear_unavailable", lambda conn, vid: events.append(("clear", vid))
@@ -199,8 +200,7 @@ class Rig:
         built = make_job(video_id, payload={"origin": origin})
         parent_id = self.queue.enqueue("ingest", video_id, priority=built.priority)
         assert parent_id is not None
-        self.conn.execute("UPDATE jobs SET state = 'running' WHERE id = %s", (parent_id,))
-        self.conn.commit()
+        mark_running(self.conn, parent_id, video_id, built.payload.get("origin", "adhoc"))
         try:
             self.handler(replace(built, id=parent_id), self.ctx)
         finally:

@@ -37,6 +37,7 @@ from tests.services.transcriber.fakes import (
     fixture_meta,
     make_ctx,
     make_job,
+    mark_running,
     make_settings,
     manual_segments,
 )
@@ -75,8 +76,7 @@ class Rig:
         built = make_job(video_id, **job)
         parent_id = self.queue.enqueue("ingest", video_id, priority=built.priority)
         assert parent_id is not None
-        self.conn.execute("UPDATE jobs SET state = 'running' WHERE id = %s", (parent_id,))
-        self.conn.commit()
+        mark_running(self.conn, parent_id, video_id, built.payload.get("origin", "adhoc"))
         try:
             self.handler(replace(built, id=parent_id), self.ctx)
         finally:
@@ -488,7 +488,7 @@ def test_an_invalid_video_id_writes_no_video_row(conn: psycopg.Connection[Any]) 
 
     assert rig.metadata.calls == []
     assert rig.subtitles.fetch_calls == []
-    assert rig.scalar("SELECT count(*) FROM videos") == 0
+    assert rig.scalar("SELECT count(*) FROM videos WHERE title IS NOT NULL") == 0  # the bare row mark_running seeded is untouched
 
 
 def test_origin_defaults_to_adhoc_and_other_payload_keys_are_ignored(
@@ -546,7 +546,7 @@ def test_a_metadata_video_id_mismatch_raises_tool_failure_and_writes_nothing(
     with pytest.raises(ToolFailureError):
         rig.run(MANUAL_ID)
 
-    assert rig.scalar("SELECT count(*) FROM videos") == 0
+    assert rig.scalar("SELECT count(*) FROM videos WHERE title IS NOT NULL") == 0  # the bare row mark_running seeded is untouched
     assert rig.subtitles.fetch_calls == []
     assert rig.nothing_written()
 
@@ -627,7 +627,7 @@ def test_any_other_metadata_error_propagates_unchanged_and_writes_nothing(
         rig.run(MANUAL_ID)
 
     assert info.value is error
-    assert rig.scalar("SELECT count(*) FROM videos") == 0
+    assert rig.scalar("SELECT count(*) FROM videos WHERE title IS NOT NULL") == 0  # the bare row mark_running seeded is untouched
     assert rig.nothing_written()
 
 

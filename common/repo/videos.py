@@ -9,6 +9,7 @@ from typing import Any
 
 import psycopg
 
+from common.errors import Cancelled, PermanentSourceError, UnavailableReason
 from common.models import (
     ActiveJob,
     CatalogEntry,
@@ -40,7 +41,51 @@ _SORT_ORDERS = {
 }
 
 
-def upsert_video(conn: psycopg.Connection[Any], meta: VideoMeta, origin: str) -> None:
+@dataclass(frozen=True, slots=True)
+class JobGuard:
+    """The queue job a ``videos`` write is made for (#303): its id and the worker holding it."""
+
+    job_id: int
+    worker: str | None
+
+
+def guard_video_write(conn: psycopg.Connection[Any], video_id: str, guard: JobGuard) -> None:
+    """Lock the caller's own job row, then refuse to write for a cancelled job or a deleted video.
+
+    ``upsert_video`` and ``record_unavailable`` are ``INSERT ... ON CONFLICT DO UPDATE``:
+    after a concurrent ``delete_video`` they would insert a new row and bring the video
+    back. ``delete_video`` locks the video's jobs before it deletes anything, so this
+    transaction either commits first (the delete then cascades what it wrote) or waits
+    for the delete and reads the cancel request it stored. The lock is kept until the
+    caller's commit.
+
+    Raises ``Cancelled`` for a job with a cancel request, or one this worker no longer
+    holds (reaped), and ``PermanentSourceError`` (non-retryable, raises no alert) when
+    the job has no request but its video is gone (a job enqueued after the delete).
+    The open transaction is rolled back first, so the lock is not held while the
+    exception travels to the queue's outcome write.
+    """
+    row = conn.execute(
+        "SELECT cancel_requested_at IS NOT NULL FROM jobs"
+        " WHERE id = %s AND locked_by IS NOT DISTINCT FROM %s AND state = 'running'"
+        " FOR UPDATE",
+        (guard.job_id, guard.worker),
+    ).fetchone()
+    if row is None or row[0]:
+        conn.rollback()
+        raise Cancelled()
+    if not video_exists(conn, video_id):
+        conn.rollback()
+        raise PermanentSourceError(UnavailableReason.REMOVED, f"video {video_id} was deleted")
+
+
+def upsert_video(
+    conn: psycopg.Connection[Any],
+    meta: VideoMeta,
+    origin: str,
+    *,
+    guard: JobGuard | None = None,
+) -> None:
     """Insert ``meta`` as a video, or update its mutable fields on a later call.
 
     ``title``, ``duration_sec``, ``published_at`` and ``description`` are
@@ -55,7 +100,12 @@ def upsert_video(conn: psycopg.Connection[Any], meta: VideoMeta, origin: str) ->
     with ``active = false`` so the foreign key holds without starting
     monitoring for an ad-hoc submission. An existing channel row, active or
     not, is left untouched.
+
+    With ``guard`` (a queue job, #303) the write first passes ``guard_video_write``;
+    without it (the CLI path) nothing changes.
     """
+    if guard is not None:
+        guard_video_write(conn, meta.video_id, guard)
     conn.execute(
         """
         INSERT INTO channels (channel_id, active)
@@ -125,16 +175,23 @@ def clear_unavailable(conn: psycopg.Connection[Any], video_id: str) -> None:
 
 
 def record_unavailable(
-    conn: psycopg.Connection[Any], video_id: str, reason: str, *, origin: str
+    conn: psycopg.Connection[Any],
+    video_id: str,
+    reason: str,
+    *,
+    origin: str,
+    guard: JobGuard | None = None,
 ) -> None:
     """Mark ``video_id`` unavailable, creating a stub row if it has none.
 
     The stub has a NULL ``channel_id`` and the given ``origin`` (first
     ingest of an already-removed video). An existing row keeps its
     ``origin`` and metadata; only ``unavailable`` changes. ``reason`` is
-    validated like ``mark_unavailable``.
+    validated like ``mark_unavailable``. ``guard`` as for ``upsert_video`` (#303).
     """
     _check_reason(reason)
+    if guard is not None:
+        guard_video_write(conn, video_id, guard)
     conn.execute(
         """
         INSERT INTO videos (video_id, origin, unavailable)
