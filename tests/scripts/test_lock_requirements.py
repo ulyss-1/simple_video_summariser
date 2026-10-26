@@ -9,6 +9,7 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 from types import ModuleType
+from typing import Self
 
 import pytest
 
@@ -794,9 +795,36 @@ def _snapshot(root: Path) -> dict[str, bytes]:
     return {name: (root / name).read_bytes() for name in (*LOCK_FILES, *INPUT_FILES)}
 
 
-def _report_run(root: Path, pip: ScriptedPip, *, pypi: FakePyPI | None = None, **kw: int) -> int:
+class LatestPyPI:
+    """Stands in for `/pypi/<name>/json`: newest `info.version` per canonical name."""
+
+    def __init__(self, latest: Mapping[str, object]) -> None:
+        self.latest = dict(latest)
+        self.requested: list[str] = []
+
+    def __call__(self, url: str) -> bytes:
+        self.requested.append(url)
+        answer = self.latest[url.split("/")[-2]]
+        if isinstance(answer, BaseException):
+            raise answer
+        if isinstance(answer, bytes):
+            return answer
+        return json.dumps({"info": {"version": answer}}).encode()
+
+
+#: What the fixture repo pins (BACKEND_TXT, WHISPER_TXT, PYPROJECT): every pin is current.
+CURRENT_PINS = {
+    "foo": "1.0", "bar": "2.0", "w": "3.0", "pytest": "9.0", "testcontainers": "4.0",
+    "my-tool": "1.0", "setuptools": "80.0.0",
+}
+
+
+def _report_run(
+    root: Path, pip: ScriptedPip, *, pypi: FakePyPI | LatestPyPI | None = None, **kw: int
+) -> int:
     code: int = lock.main(
-        ["--report-outdated"], root=root, run_pip=pip, fetch=pypi or _fetch_for({}), platform=LINUX, **kw
+        ["--report-outdated"], root=root, run_pip=pip, fetch=pypi or LatestPyPI(CURRENT_PINS),
+        platform=LINUX, **kw,
     )
     return code
 
@@ -820,13 +848,14 @@ def test_current_locks_exit_zero_silently_and_write_nothing(
     root = _locked_repo(tmp_path)
     before = _snapshot(root)
     before_names = {p.name for p in root.iterdir()}
-    pip, pypi = ScriptedPip(*_tree(_backend_items())), _fetch_for({})
+    pip, pypi = ScriptedPip(*_tree(_backend_items())), LatestPyPI(CURRENT_PINS)
     assert _report_run(root, pip, pypi=pypi) == 0
     out = capsys.readouterr()
     assert out.out == "" and out.err == ""
     assert _snapshot(root) == before
     assert {p.name for p in root.iterdir()} == before_names
-    assert pypi.requested == []  # no hashes from PyPI
+    # exactly one version-list call per checked direct pin, no per-version (hash) URL
+    assert sorted(pypi.requested) == sorted(f"https://pypi.org/pypi/{n}/json" for n in CURRENT_PINS)
     assert len(pip.calls) == 3 and all(not d.exists() for d in pip.temp_dirs)
 
 
@@ -1087,3 +1116,476 @@ def test_report_outdated_takes_no_other_argument(capsys: pytest.CaptureFixture[s
     with pytest.raises(SystemExit):
         lock.main(["--report-outdated", "--upgrade"])
     assert "--report-outdated" in capsys.readouterr().err
+
+
+# ---- direct pins behind PyPI (issue #278) ----
+
+DIRECT = "Direct Python pins are behind PyPI"
+HELD = "Held Python pins"
+
+
+def _inputs(root: Path, *, backend: str | None = None, whisper: str | None = None,
+            pyproject: str | None = None) -> Path:
+    for name, text in (("requirements.backend.txt", backend), ("requirements.whisper.txt", whisper),
+                       ("pyproject.toml", pyproject)):
+        if text is not None:
+            (root / name).write_text(text)
+    return root
+
+
+def _direct_run(
+    root: Path, latest: Mapping[str, object], *, pip: ScriptedPip | None = None, **kw: int
+) -> tuple[int, LatestPyPI, ScriptedPip]:
+    pip = pip or ScriptedPip(*_tree(_backend_items()))
+    pypi = LatestPyPI({**CURRENT_PINS, **latest})
+    return _report_run(root, pip, pypi=pypi, **kw), pypi, pip
+
+
+def _annotations(out: str, level: str) -> list[str]:
+    return [ln for ln in out.splitlines() if ln.startswith(f"::{level} ")]
+
+
+def test_requirement_pins_drop_extras_and_markers_and_use_canonical_names() -> None:
+    pins = lock.requirements_direct_pins(
+        "r.txt", "# c\npsycopg[binary]==3.3.6\nPyYAML==6.0\nfaster_whisper==1.2.1\nfoo==1.0 ; python_version>'3'\n"
+    )
+    assert [(p.name, p.version, p.line) for p in pins] == [
+        ("psycopg", "3.3.6", 2), ("pyyaml", "6.0", 3), ("faster-whisper", "1.2.1", 4), ("foo", "1.0", 5),
+    ]
+
+
+def test_pyproject_pins_come_from_the_dev_extra_and_build_requires_with_extras_dropped() -> None:
+    pins = lock.pyproject_direct_pins("pyproject.toml", PYPROJECT)
+    assert [(p.name, p.version) for p in pins] == [
+        ("setuptools", "80.0.0"), ("pytest", "9.0"), ("testcontainers", "4.0"), ("my-tool", "1.0"),
+    ]
+
+
+def test_a_non_exact_entry_is_skipped_without_a_fetch_or_a_report_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _inputs(_locked_repo(tmp_path), pyproject=PYPROJECT.replace("==80.0.0", ">=77"))
+    rc, pypi, _ = _direct_run(root, {})
+    assert rc == 0 and capsys.readouterr().out == ""
+    assert "https://pypi.org/pypi/setuptools/json" not in pypi.requested
+
+
+@pytest.mark.parametrize("spelling", ["yt-dlp", "yt_dlp", "YT-DLP"])
+def test_yt_dlp_is_never_checked_or_mentioned(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], spelling: str
+) -> None:
+    root = _inputs(_locked_repo(tmp_path), backend=f"{BACKEND_TXT}{spelling}==2024.1.1\n")
+    pip = ScriptedPip(*_tree([*_backend_items(), _item("yt-dlp", "2024.1.1", A)]))
+    lock_path = root / "requirements.backend.lock"
+    lock_path.write_text(lock_path.read_text() + f"yt-dlp==2024.1.1 --hash=sha256:{A}\n")
+    rc, pypi, _ = _direct_run(root, {"yt-dlp": "2099.1.1"}, pip=pip)
+    out = capsys.readouterr()
+    assert not any("yt-dlp" in u or "yt_dlp" in u.lower() for u in pypi.requested)
+    assert "yt" not in out.out.lower() and "yt" not in out.err.lower()
+    assert rc == 0 and "https://pypi.org/pypi/foo/json" in pypi.requested
+
+
+def test_the_exclusion_is_one_named_constant() -> None:
+    assert lock.YTDLP_EXCLUDED == "yt-dlp"
+
+
+@pytest.mark.parametrize(
+    ("pinned", "newest"),
+    [("1.0", "1.0.0"), ("1.0.0", "1.0"), ("2.0", "2.0"), ("2.1", "2.0"), ("10.0", "9.9")],
+)
+def test_a_pin_equal_to_or_newer_than_pypi_is_not_reported(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], pinned: str, newest: str
+) -> None:
+    root = _inputs(_locked_repo(tmp_path), backend=BACKEND_TXT.replace("foo==1.0", f"foo=={pinned}"))
+    rc, _, _ = _direct_run(root, {"foo": newest})
+    assert rc == 0 and capsys.readouterr().out == ""
+
+
+def test_a_pin_behind_pypi_is_reported_with_file_name_and_both_versions(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _locked_repo(tmp_path)
+    before = _snapshot(root)
+    rc, pypi, pip = _direct_run(root, {"foo": "1.1", "pytest": "9.1"})
+    out = capsys.readouterr()
+    assert rc == 1 and out.err == ""
+    lines = out.out.splitlines()
+    assert len(_annotations(out.out, "error")) == 1 and lines[0].startswith(f"::error title={DIRECT}::")
+    assert lines[1:] == [
+        "pyproject.toml pytest 9.0 -> 9.1",
+        "requirements.backend.txt foo 1.0 -> 1.1",
+    ]
+    assert "2 direct pins are behind PyPI (0 major)" in lines[0]
+    assert "python scripts/lock_requirements.py backend or whisper" in lines[0]
+    assert "pytest -m image" in lines[0] and "AGENTS.md" in lines[0]
+    assert _snapshot(root) == before and len(pip.calls) == 3
+    assert pypi.requested.count("https://pypi.org/pypi/foo/json") == 1
+
+
+def test_major_pins_come_first_then_by_file_and_name_and_the_cap_is_injectable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _locked_repo(tmp_path)
+    rc, _, _ = _direct_run(root, {"foo": "1.1", "bar": "2.1", "pytest": "10.0"}, inline_limit=2)
+    lines = capsys.readouterr().out.splitlines()
+    assert rc == 1
+    assert lines[1:] == [
+        "pyproject.toml pytest 9.0 -> 10.0 (major)",
+        "requirements.backend.txt bar 2.0 -> 2.1",
+        "requirements.backend.txt foo 1.0 -> 1.1",
+    ]
+    assert "3 direct pins are behind PyPI (1 major)" in lines[0]
+    assert "pyproject.toml pytest 9.0 -> 10.0 (major); requirements.backend.txt bar 2.0 -> 2.1; and 1 more" in lines[0]
+    assert "foo 1.0 -> 1.1." not in lines[0]
+
+
+@pytest.mark.parametrize("newest", ["1.0.post1", "2!1.0", "1.0rc1"])
+def test_a_non_numeric_version_that_differs_is_reported_unordered(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], newest: str
+) -> None:
+    root = _locked_repo(tmp_path)
+    rc, _, _ = _direct_run(root, {"foo": newest})
+    assert rc == 1
+    assert f"requirements.backend.txt foo 1.0 -> {newest} (unordered)" in capsys.readouterr().out
+
+
+def test_a_non_numeric_pin_equal_to_pypi_is_not_reported(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _inputs(_locked_repo(tmp_path), backend=BACKEND_TXT.replace("foo==1.0", "foo==1.0rc1"))
+    rc, _, _ = _direct_run(root, {"foo": "1.0rc1"})
+    assert rc == 0 and capsys.readouterr().out == ""
+
+
+def test_a_prerelease_label_can_be_major_and_unordered(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _inputs(_locked_repo(tmp_path), backend=BACKEND_TXT.replace("foo==1.0", "foo==26.1.0rc1"))
+    rc, _, _ = _direct_run(root, {"foo": "27.0"})
+    assert rc == 1 and "foo 26.1.0rc1 -> 27.0 (major, unordered)" in capsys.readouterr().out
+
+
+def test_a_name_pinned_in_two_inputs_is_reported_per_file_and_fetched_once(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _inputs(_locked_repo(tmp_path), whisper="w==3.0\nFoo==1.0.1\n")
+    rc, pypi, _ = _direct_run(root, {"foo": "1.1"})
+    lines = capsys.readouterr().out.splitlines()
+    assert rc == 1
+    assert lines[1:] == [
+        "requirements.backend.txt foo 1.0 -> 1.1",
+        "requirements.whisper.txt foo 1.0.1 -> 1.1",
+    ]
+    assert pypi.requested.count("https://pypi.org/pypi/foo/json") == 1
+
+
+# -- holds --
+
+
+def test_a_hold_is_read_from_a_trailing_comment_in_a_requirements_file_and_in_the_dev_array() -> None:
+    (pin,) = lock.requirements_direct_pins("r.txt", "av==18.1.0  # hold: PyAV 19 breaks it (#76)\n")
+    assert pin.hold == "PyAV 19 breaks it (#76)"
+    text = PYPROJECT.replace('"pytest==9.0",', '"pytest==9.0",  # hold:  pinned for #99  ')
+    pins = {p.name: p for p in lock.pyproject_direct_pins("pyproject.toml", text)}
+    assert pins["pytest"].hold == "pinned for #99" and pins["setuptools"].hold is None
+    text = PYPROJECT.replace('requires = ["setuptools==80.0.0"]  # build',
+                             'requires = ["setuptools==80.0.0"]  # hold: build pin (#1)')
+    assert lock.pyproject_direct_pins("pyproject.toml", text)[0].hold == "build pin (#1)"
+
+
+def test_the_shipped_av_pin_is_held_with_a_reason_citing_76() -> None:
+    text = (REPO_ROOT / "requirements.whisper.txt").read_text()
+    pins = {p.name: p for p in lock.requirements_direct_pins("requirements.whisper.txt", text)}
+    assert pins["av"].hold is not None and "#76" in pins["av"].hold
+    assert pins["faster-whisper"].hold is None
+    assert "PyAV 19 removed that argument" in text  # the explanatory comment stays
+
+
+def test_a_hold_does_not_change_the_input_digests() -> None:
+    plain, held = "foo==1.0\nbar==2.0\n", "foo==1.0  # hold: x (#1)\nbar==2.0\n"
+    assert lock.input_digest(plain) == lock.input_digest(held)
+    assert lock.dev_input_digest(PYPROJECT) == lock.dev_input_digest(
+        PYPROJECT.replace('"pytest==9.0",', '"pytest==9.0",  # hold: x (#1)')
+    )
+    assert lock.dev_input_digest(PYPROJECT) == lock.dev_input_digest(
+        PYPROJECT.replace('requires = ["setuptools==80.0.0"]  # build', 'requires = ["setuptools==80.0.0"]  # hold: y')
+    )
+
+
+HELD_BACKEND = "foo==1.0  # hold: compat (#7)\nbar[x]==2.0\n"
+
+
+def test_a_held_pin_that_is_behind_is_a_notice_and_the_run_stays_green(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _inputs(_locked_repo(tmp_path), backend=HELD_BACKEND)
+    before = _snapshot(root)
+    rc, _, _ = _direct_run(root, {"foo": "2.0"})
+    out = capsys.readouterr()
+    lines = out.out.splitlines()
+    assert rc == 0 and out.err == ""
+    assert _annotations(out.out, "error") == []
+    assert len(_annotations(out.out, "notice")) == 1
+    assert lines[0].startswith(f"::notice title={HELD}::") and "foo 1.0 (latest 2.0): compat (#7)" in lines[0]
+    assert lines[1:] == ["foo 1.0 (latest 2.0): compat (#7)"]
+    assert _snapshot(root) == before
+
+
+def test_a_held_pin_that_is_current_is_not_mentioned(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _inputs(_locked_repo(tmp_path), backend=HELD_BACKEND)
+    rc, _, _ = _direct_run(root, {})
+    assert rc == 0 and capsys.readouterr().out == ""
+
+
+def test_the_notice_is_printed_next_to_a_red_run_without_being_its_cause(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _inputs(_locked_repo(tmp_path), backend=HELD_BACKEND)
+    rc, _, _ = _direct_run(root, {"foo": "2.0", "bar": "2.1"})
+    out = capsys.readouterr().out
+    assert rc == 1 and len(_annotations(out, "error")) == 1 and len(_annotations(out, "notice")) == 1
+    assert out.index("::error") < out.index("::notice")
+    assert "bar" in _annotations(out, "error")[0] and "foo" not in _annotations(out, "error")[0]
+
+
+def test_annotation_text_escapes_percent_cr_and_lf_and_keeps_commas(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _inputs(_locked_repo(tmp_path), backend="foo==1.0  # hold: 100% sure, really (#7)\nbar[x]==2.0\n")
+    rc, _, _ = _direct_run(root, {"foo": "2.0"})
+    lines = capsys.readouterr().out.splitlines()
+    assert rc == 0
+    assert "100%25 sure, really (#7)" in lines[0]
+    assert lines[1] == "foo 1.0 (latest 2.0): 100% sure, really (#7)"
+    assert lock.workflow_escape("a%b\r\nc") == "a%25b%0D%0Ac"
+
+
+@pytest.mark.parametrize(
+    "comment", ["# Hold: x (#1)", "# hold x (#1)", "# held: x (#1)", "#hold x"]
+)
+def test_a_misspelled_hold_is_an_ordinary_comment_so_the_pin_is_reported(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], comment: str
+) -> None:
+    root = _inputs(_locked_repo(tmp_path), backend=f"foo==1.0  {comment}\nbar[x]==2.0\n")
+    rc, _, _ = _direct_run(root, {"foo": "2.0"})
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "requirements.backend.txt foo 1.0 -> 2.0 (major)" in out and "::notice" not in out
+
+
+FAULTS = [
+    ("requirements.backend.txt", "foo==1.0  # hold:\nbar[x]==2.0\n", 1),
+    ("requirements.backend.txt", "foo==1.0  # hold:    \nbar[x]==2.0\n", 1),
+    ("requirements.backend.txt", "foo==1.0\n# hold: above the pin (#1)\nbar[x]==2.0\n", 2),
+    ("requirements.backend.txt", "foo==1.0 bar==2.0  # hold: two (#1)\n", 1),
+    ("requirements.backend.txt", "-r other.txt  # hold: option (#1)\nfoo==1.0\n", 1),
+    ("requirements.backend.txt", "foo==1.0\nbar>=2  # hold: not exact (#1)\n", 2),
+    ("requirements.backend.txt", "foo==1.0\nyt-dlp==2024.1.1  # hold: stale (#1)\n", 2),
+    ("requirements.whisper.txt", "w==3.0\nyt_dlp==2024.1.1  # hold: stale (#1)\n", 2),
+]
+
+
+@pytest.mark.parametrize(("name", "text", "line"), FAULTS)
+def test_a_malformed_or_misplaced_hold_is_a_repository_fault_before_any_pip_or_pypi_call(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], name: str, text: str, line: int
+) -> None:
+    root = _locked_repo(tmp_path)
+    (root / name).write_text(text)
+    rc, pypi, pip = _direct_run(root, {})
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert len(err.strip().splitlines()) == 1 and f"{name}:{line}:" in err
+    assert pip.calls == [] and pypi.requested == []
+
+
+def test_a_hold_on_yt_dlp_says_68_checks_it_daily(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _inputs(_locked_repo(tmp_path), backend="foo==1.0\nyt-dlp==2024.1.1  # hold: x (#1)\n")
+    assert _direct_run(root, {})[0] == 2
+    assert "#68" in capsys.readouterr().err
+
+
+PYPROJECT_FAULTS = [
+    '"pytest==9.0",  # hold:',
+    '"pytest==9.0", "x==1",  # hold: two (#1)',
+    '"pytest>=9",  # hold: not exact (#1)',
+]
+
+
+@pytest.mark.parametrize("entry", PYPROJECT_FAULTS)
+def test_a_bad_hold_in_the_dev_array_is_a_repository_fault(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], entry: str
+) -> None:
+    root = _inputs(_locked_repo(tmp_path), pyproject=PYPROJECT.replace('"pytest==9.0",', entry))
+    rc, pypi, pip = _direct_run(root, {})
+    assert rc == 2 and "pyproject.toml:11:" in capsys.readouterr().err
+    assert pip.calls == [] and pypi.requested == []
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    ["[tool.ruff]  # hold: nope (#1)", "# hold: a comment-only line (#1)\n[tool.ruff]"],
+)
+def test_a_hold_outside_the_dev_and_build_arrays_is_a_repository_fault(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], replacement: str
+) -> None:
+    root = _inputs(_locked_repo(tmp_path), pyproject=PYPROJECT.replace("[tool.ruff]", replacement))
+    rc, pypi, pip = _direct_run(root, {})
+    assert rc == 2 and "pyproject.toml:" in capsys.readouterr().err
+    assert pip.calls == [] and pypi.requested == []
+
+
+# -- exit codes and sections --
+
+
+def test_locks_current_and_a_pin_behind_exits_one_with_only_the_direct_pin_annotation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc, _, _ = _direct_run(_locked_repo(tmp_path), {"w": "4.0"})
+    out = capsys.readouterr().out
+    assert rc == 1 and f"title={DIRECT}" in out and "Python locks are behind PyPI" not in out
+
+
+def test_locks_behind_and_pins_current_exits_one_with_only_the_lock_annotation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pip = ScriptedPip(*_tree(_bump(_backend_items(), "foo", "1.1")))
+    rc, _, _ = _direct_run(_locked_repo(tmp_path), {}, pip=pip)
+    out = capsys.readouterr().out
+    assert rc == 1 and "title=Python locks are behind PyPI" in out and DIRECT not in out
+
+
+def test_both_sections_behind_print_the_lock_section_first(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pip = ScriptedPip(*_tree(_bump(_backend_items(), "foo", "1.1")))
+    rc, _, _ = _direct_run(_locked_repo(tmp_path), {"w": "4.0"}, pip=pip)
+    out = capsys.readouterr().out
+    assert rc == 1 and out.index("Python locks are behind") < out.index(DIRECT)
+    assert len(_annotations(out, "error")) == 2
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        OSError("connection refused"),
+        TimeoutError("timed out"),
+        OSError("PyPI answered HTTP 503"),
+        b"not json",
+        json.dumps({"info": {}}).encode(),
+        json.dumps({"info": {"version": 3}}).encode(),
+        json.dumps([]).encode(),
+    ],
+)
+def test_a_pypi_outage_reports_nothing_names_the_package_and_leaves_the_lock_result(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], failure: object
+) -> None:
+    root = _locked_repo(tmp_path)
+    pip = ScriptedPip(*_tree(_bump(_backend_items(), "foo", "1.1")))
+    pypi = LatestPyPI({**CURRENT_PINS, "bar": failure})
+    rc = _report_run(root, pip, pypi=pypi)
+    out = capsys.readouterr()
+    assert rc == 1
+    assert len(_annotations(out.out, "error")) == 1 and "title=Python locks are behind" in out.out
+    assert DIRECT not in out.out and "::notice" not in out.out
+    assert len(out.err.strip().splitlines()) == 1
+    assert "bar" in out.err and out.err.strip().endswith("will retry on the next run")
+
+
+def test_an_oversized_answer_counts_as_an_outage(tmp_path: Path) -> None:
+    root = _locked_repo(tmp_path)
+    big = json.dumps({"info": {"version": "9" * 200}}).encode()
+    pypi = LatestPyPI({**CURRENT_PINS, "foo": big})
+    code, out, err = lock.report_outdated(
+        root=root, run_pip=ScriptedPip(*_tree(_backend_items())), fetch=pypi, max_body=100
+    )
+    assert code == 0 and out == "" and "foo" in err and err.endswith("will retry on the next run\n")
+
+
+def test_an_outage_with_nothing_else_is_green(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    root = _locked_repo(tmp_path)
+    pypi = LatestPyPI({**CURRENT_PINS, "w": OSError("down")})
+    assert _report_run(root, ScriptedPip(*_tree(_backend_items())), pypi=pypi) == 0
+    out = capsys.readouterr()
+    assert out.out == "" and "w:" in out.err
+
+
+def test_a_pip_outage_does_not_stop_the_direct_pin_section(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _locked_repo(tmp_path)
+    pip = ScriptedPip((1, "ERROR: Could not reach pypi.org\n"))
+    rc, _, _ = _direct_run(root, {"foo": "1.5"}, pip=pip)
+    out = capsys.readouterr()
+    assert rc == 1 and f"title={DIRECT}" in out.out and "Python locks are behind" not in out.out
+    assert "backend resolve" in out.err and "will retry on the next run" in out.err
+
+
+def test_a_pip_outage_with_current_pins_stays_green(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pip = ScriptedPip((1, "ERROR: down\n"))
+    rc, _, _ = _direct_run(_locked_repo(tmp_path), {}, pip=pip)
+    assert rc == 0 and capsys.readouterr().out == ""
+
+
+def test_the_default_fetch_seam_applies_the_timeout_and_the_body_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    class Response:
+        def __init__(self, status: int, body: bytes) -> None:
+            self.status, self.body = status, body
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def read(self, n: int) -> bytes:
+            seen["read"] = n
+            return self.body[:n]
+
+    answer = Response(200, b"x" * 10)
+
+    def fake_urlopen(url: str, timeout: float) -> Response:
+        seen["timeout"] = timeout
+        return answer
+
+    monkeypatch.setattr(lock.urllib.request, "urlopen", fake_urlopen)
+    assert lock.make_fetch(7.5, 20)("u") == b"x" * 10
+    assert seen == {"timeout": 7.5, "read": 21}
+    with pytest.raises(OSError, match="larger"):
+        lock.make_fetch(7.5, 5)("u")
+    answer.status = 503
+    with pytest.raises(OSError, match="503"):
+        lock.make_fetch(7.5)("u")
+    assert lock.FETCH_TIMEOUT == 20.0
+
+
+def test_main_builds_the_fetch_seam_with_the_injected_timeout_when_none_is_given(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    made: list[float] = []
+
+    def fake_make_fetch(timeout: float, max_bytes: int = 0) -> LatestPyPI:
+        made.append(timeout)
+        return LatestPyPI(CURRENT_PINS)
+
+    monkeypatch.setattr(lock, "make_fetch", fake_make_fetch)
+    root = _locked_repo(tmp_path)
+    pip = ScriptedPip(*_tree(_backend_items()))
+    assert lock.main(["--report-outdated"], root=root, run_pip=pip, platform=LINUX, fetch_timeout=3.0) == 0
+    assert made == [3.0]
+
+
+def test_the_workflow_header_names_this_issue_and_the_run_line_is_unchanged() -> None:
+    text = (REPO_ROOT / ".github" / "workflows" / "lock-update-check.yml").read_text()
+    header = text.split("name:", 1)[0]
+    assert "#278" in header and "hold" in header and "#68" in header
+    assert "run: python scripts/lock_requirements.py --report-outdated" in text

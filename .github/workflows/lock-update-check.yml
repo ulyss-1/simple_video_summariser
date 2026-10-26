@@ -3,9 +3,10 @@
 # Report-only: it goes red with one ::error annotation when regenerating the
 # locks with --upgrade would change any entry, and names the entries. It never
 # edits a file, opens a PR or gates a deploy, and a PyPI or pip outage ends
-# green and retries next week. Direct == pins are not covered here (#278;
-# yt-dlp has its own daily check, ytdlp-update-check.yml). CI proper lives in
-# ci.yml (#61).
+# green and retries next week. It also reports direct == pins that are behind
+# PyPI (#278): a pin held back on purpose carries `# hold: <reason>` and shows
+# as a ::notice instead of turning the run red; yt-dlp is left to its own daily
+# check (#68, ytdlp-update-check.yml). CI proper lives in ci.yml (#61).
 name: Python lock update check
 
 on:

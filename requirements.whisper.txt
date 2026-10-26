@@ -12,4 +12,4 @@
 # PyAV dependency: faster-whisper 1.2.1 passes metadata_errors to av.open, and
 # PyAV 19 removed that argument.
 faster-whisper==1.2.1
-av==18.1.0
+av==18.1.0  # hold: faster-whisper 1.2.1 passes metadata_errors to av.open, which PyAV 19 removed (#76)
