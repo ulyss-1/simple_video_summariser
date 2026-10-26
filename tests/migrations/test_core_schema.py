@@ -33,13 +33,6 @@ def _config_for(dsn: str, monkeypatch: pytest.MonkeyPatch) -> Config:
     return config
 
 
-@pytest.fixture
-def head_dsn(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch) -> str:
-    """A DSN for a database migrated all the way to head (0002)."""
-    command.upgrade(_config_for(postgres_dsn, monkeypatch), "head")
-    return postgres_dsn
-
-
 def _insert_video(cur: psycopg.Cursor, video_id: str, channel_id: str | None = None) -> None:
     cur.execute(
         "INSERT INTO videos (video_id, channel_id) VALUES (%s, %s)",

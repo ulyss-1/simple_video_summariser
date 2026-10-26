@@ -23,9 +23,6 @@ from common.channel_catalog import (
 from common.errors import PermanentSourceError, ToolFailureError, UnavailableReason
 from common.models import CatalogEntry, ChannelCatalog
 from common.queue import PRIORITY_BACKFILL, PostgresQueue
-from tests.common.repo.conftest import head_dsn
-
-__all__ = ["head_dsn"]
 
 pytestmark = pytest.mark.integration
 

@@ -16,11 +16,9 @@ from fastapi.testclient import TestClient
 from common.config import get_settings
 from services.api import deps
 from services.api.main import create_app
-from tests.services.api.conftest import LogSink, head_dsn
+from tests.services.api.conftest import LogSink
 
 pytestmark = pytest.mark.integration
-
-__all__ = ["head_dsn"]
 
 
 def _env(monkeypatch: pytest.MonkeyPatch, dsn: str, **extra: str) -> None:

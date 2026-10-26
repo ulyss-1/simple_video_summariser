@@ -6,6 +6,6 @@ so there is one place that knows how to bring a fresh Postgres to head.
 
 from __future__ import annotations
 
-from tests.common.repo.conftest import conn, head_dsn
+from tests.common.repo.conftest import conn
 
-__all__ = ["conn", "head_dsn"]
+__all__ = ["conn"]

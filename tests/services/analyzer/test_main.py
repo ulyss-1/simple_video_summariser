@@ -738,6 +738,7 @@ def _closed_loopback_port() -> int:
 
 
 def test_sigterm_during_a_database_outage_exits_0_within_the_grace_period() -> None:
+    """Keeps the real wait: a real process must survive its real 1 s backoff, then honour SIGTERM."""
     port = _closed_loopback_port()
     grace = 5
     env = _clean_env(

@@ -41,8 +41,6 @@ from typing import Any
 import psycopg
 import pytest
 import structlog
-from alembic import command
-from alembic.config import Config
 from psycopg.rows import dict_row
 from structlog.testing import capture_logs
 
@@ -1151,16 +1149,6 @@ def test_real_sigterm_stops_an_idle_worker(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Against a real PostgresQueue (integration)
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def head_dsn(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch) -> str:
-    monkeypatch.setenv("DATABASE_URL", postgres_dsn)
-    get_settings.cache_clear()
-    config = Config(str(REPO_ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(REPO_ROOT / "migrations"))
-    command.upgrade(config, "head")
-    return postgres_dsn
 
 
 @pytest.fixture

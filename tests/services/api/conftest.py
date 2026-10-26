@@ -22,9 +22,6 @@ from fastapi.testclient import TestClient
 import services.api.main as api_main
 from common.config import Settings, get_settings
 from common.logging import configure_logging
-from tests.common.repo.conftest import head_dsn
-
-__all__ = ["head_dsn"]
 
 UNREACHABLE_DSN = "postgresql://user:SECRETPW@127.0.0.1:1/db"
 
@@ -45,6 +42,9 @@ class LogSink:
 def _settings_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("DATABASE_URL", UNREACHABLE_DSN)
     monkeypatch.setenv("LOG_FORMAT", "json")
+    # The unreachable database is waited on for the pool timeout; a short bound
+    # keeps each such test fast instead of waiting the 2 s default (#290).
+    monkeypatch.setenv("DB_POOL_TIMEOUT_SEC", "0.2")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

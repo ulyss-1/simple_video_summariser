@@ -21,9 +21,6 @@ from common.models import CatalogEntry, ChannelCatalog, VideoMeta
 from common.repo.channel_catalog import replace_catalog_snapshot
 from services.planner import main as planner_main
 from services.planner.catalog_enrichment import run_catalog_enrichment
-from tests.services.planner.conftest import head_dsn
-
-__all__ = ["head_dsn"]
 
 pytestmark = pytest.mark.integration
 

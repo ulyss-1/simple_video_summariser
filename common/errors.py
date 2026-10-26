@@ -203,21 +203,23 @@ def classify(exc: BaseException) -> ErrorClass:
     return ErrorClass.BUG
 
 
-def format_error(exc: BaseException) -> str:
-    """Redacted traceback text for ``jobs.last_error``, at most ``MAX_ERROR_BYTES``.
+def format_error(exc: BaseException, *, max_bytes: int = MAX_ERROR_BYTES) -> str:
+    """Redacted traceback text for ``jobs.last_error``, at most ``max_bytes``
+    (default ``MAX_ERROR_BYTES``).
 
     Secrets are redacted (``common.safe_url.redact``, issue #196) before the
     text is truncated.
 
     When it is longer, the start is dropped: the end holds the failing frame
-    and the exception message.
+    and the exception message. ``max_bytes`` is injectable so a test can reach
+    the cut with a small text (#290); production always uses the default.
     """
     # Redact the whole text first: a secret straddling the cut must not survive.
     text = redact("".join(traceback.format_exception(exc)))
     data = text.encode("utf-8", "backslashreplace")
-    if len(data) <= MAX_ERROR_BYTES:
+    if len(data) <= max_bytes:
         return text
-    budget = MAX_ERROR_BYTES - len(_TRUNCATED_MARKER.encode())
+    budget = max_bytes - len(_TRUNCATED_MARKER.encode())
     # A cut inside a multi-byte character leaves a partial lead; drop it.
     tail = data[-budget:].decode("utf-8", "ignore")
     return _TRUNCATED_MARKER + tail

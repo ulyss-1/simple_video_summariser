@@ -20,11 +20,9 @@ from common.models import CatalogEntry, ChannelCatalog
 from services.api import deps, routes_write
 from services.api.backfill import SubtitleProbe
 from services.api.main import create_app
-from tests.services.api.conftest import LogSink, head_dsn
+from tests.services.api.conftest import LogSink
 
 pytestmark = pytest.mark.integration
-
-__all__ = ["head_dsn"]
 
 CHANNEL = "UCuAXFkgsw1L7xaCfnd5JJOw"
 ENTRIES = (CatalogEntry("pd0000000001", "t", 100),)

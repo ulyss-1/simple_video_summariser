@@ -11,9 +11,9 @@ from pydantic import SecretStr
 from common import queue as queue_module
 from common.config import Settings
 from common.queue import PostgresQueue
-from tests.common.repo.conftest import conn, head_dsn
+from tests.common.repo.conftest import conn
 
-__all__ = ["conn", "head_dsn"]
+__all__ = ["conn"]
 
 pytestmark = pytest.mark.integration
 

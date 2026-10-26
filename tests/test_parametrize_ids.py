@@ -26,6 +26,7 @@ _ADDRESS_IN_ID = re.compile(r" at 0x[0-9A-Fa-f]+")
 
 
 def test_no_collected_node_id_embeds_a_memory_address() -> None:
+    """Keeps the real wait: only a real pytest collection of the whole suite shows the node ids."""
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"],
         capture_output=True,

@@ -11,14 +11,12 @@ import psycopg
 import pytest
 from psycopg.rows import dict_row
 
+from common.config import Settings
 from common.errors import ErrorClass
 from common.queue import MAX_BULK_RETRY, PostgresQueue
 from common.repo.jobs import UNSET
-from tests.common.repo.conftest import head_dsn
 
 pytestmark = pytest.mark.integration
-__all__ = ["head_dsn"]
-
 
 @pytest.fixture
 def conn(head_dsn: str) -> Iterator[psycopg.Connection[Any]]:
@@ -239,8 +237,11 @@ class _NoSql:
 
 @pytest.mark.parametrize("limit", [0, -1, MAX_BULK_RETRY + 1, 10**9, True, False, "5", 1.5, None])
 def test_an_out_of_range_limit_is_refused_before_any_sql(limit: Any) -> None:
+    # Explicit settings: the queue must not read DATABASE_URL from a process
+    # environment or a cache that an earlier shuffled test left behind (#305).
+    settings = Settings(DATABASE_URL="postgresql://user:pw@127.0.0.1:1/db")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="limit"):
-        PostgresQueue(_NoSql()).retry_dead_matching(limit=limit)  # type: ignore[arg-type]
+        PostgresQueue(_NoSql(), settings=settings).retry_dead_matching(limit=limit)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("limit", [1, MAX_BULK_RETRY])
