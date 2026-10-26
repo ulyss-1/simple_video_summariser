@@ -27,12 +27,12 @@ from psycopg.rows import dict_row
 
 from common.config import Settings, get_settings
 from common.errors import Cancelled, TransientNetworkError
+from common.models import Chunk, Segment, VideoMeta
 from common.queue import _CLAIM_SQL, HeartbeatResult, Job, PostgresQueue
 from common.repo.deleted_videos import (
     VideoNotFound,
     delete_video,
 )
-from common.models import Chunk, Segment, VideoMeta
 from common.repo.jobs import cancel_video
 from common.repo.transcripts import save_chunks, save_transcript
 from common.repo.videos import JobGuard, guard_video_write, upsert_video
@@ -968,7 +968,7 @@ def test_a_guarded_write_behind_a_delete_sees_the_request_and_writes_nothing(
         title="t",
         duration_sec=1,
         published_at=None,
-        description=None,
+        description="",
         language=None,
         live_status="not_live",
         manual_subtitle_langs=(),

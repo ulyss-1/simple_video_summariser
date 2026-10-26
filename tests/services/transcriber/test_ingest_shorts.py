@@ -24,9 +24,9 @@ from tests.services.transcriber.fakes import (
     fixture_meta,
     make_ctx,
     make_job,
-    mark_running,
     make_settings,
     manual_segments,
+    mark_running,
 )
 
 SHORT_ID = "VV_JW4iCni0"  # short.json: media_type == "short", 32 s, manual "en" track

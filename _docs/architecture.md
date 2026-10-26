@@ -278,7 +278,9 @@ sweeps and lifecycle) stay off it.
   a handler that is winding down. `handoff`, which enqueues a successor, refuses
   atomically when the parent job has a cancel request: it inserts nothing and
   raises `Cancelled`, so a cancelled `ingest` never leaves a `transcribe` or
-  `analyze` job. `InProcessQueue` (CLI) has no cancel and keeps its behaviour.
+  `analyze` job. It reads the parent's request before it checks that the video
+  exists (#303): a delete keeps the running parent with its request and removes
+  the video, so a deleted video's parent gets `Cancelled`, not a `ValueError`. `InProcessQueue` (CLI) has no cancel and keeps its behaviour.
 - `fail_job` is on the port: the worker's runtime-limit watchdog (#66) calls it
   through a `JobQueue` reference, so the former `getattr` fallback is gone.
   `InProcessQueue.fail_job` is a no-op, matching its no-retry contract.
@@ -317,7 +319,9 @@ first. A row older than 24 h is deleted with no API call, since Anthropic has
 expired the batch. For any other row it calls `cancel_orphan_batch`, and
 deletes the row on `cancelled` or `not_cancellable` and keeps it on
 `retry_later`. Rows of `pending` and `running` jobs are never touched, because
-resume depends on them. A row whose job was deleted (`DELETE /videos/{id}`,
+resume depends on them. A `running` analyze job of a deleted video (#303) keeps
+its row, with a cancel request, until its worker ends it `dead` / `CANCELLED`;
+from then on its batches are handled as a `dead` job's. A row whose job was deleted (`DELETE /videos/{id}`,
 #251) keeps `job_id` NULL (`ON DELETE SET NULL`, migration 0019) and `submitted_at`,
 and the pass handles it like a `dead` / `done` row: cancel once, or expire after
 24 h, then delete. This is why the API, which has no `ANTHROPIC_API_KEY`, never
@@ -468,6 +472,17 @@ cancelled outcome: a raised `Cancelled`, any other exception, `Defer`, the
 watchdog's `fail_job` and the reaper all end `CANCELLED`, never `pending`. A
 handler that returns normally ends `done`, with `cancel_requested_at` still set.
 A cancel is logged once at INFO as `job.cancelled`, not as a dead letter.
+
+`DELETE /videos/{id}` (#303) applies the same cancellation, in its own
+transaction, to the jobs it keeps: it locks the video's jobs by id and then the
+`videos` row, ends the `pending` jobs `CANCELLED` and stores the request on the
+`running` ones, deletes every job row that is not `running`, and keeps each
+`running` row. Heartbeat, checkpoint and outcome write then work as above: the
+row ends `dead` / `CANCELLED`, the worker carries on, and the reaper ends a killed
+worker's row `CANCELLED`. The kept row is a record for a video that no longer
+exists; `retry_dead` and `retry_dead_matching` skip it, and it stays visible in
+`/ops/jobs` until a resubmission clears the tombstone (the follow-up #327 purges
+it after a retention period).
 
 ### Claim query
 
@@ -794,7 +809,9 @@ CREATE TABLE planner_task_runs (
 -- instead of submitting and paying for it again. Rows go when the analysis is
 -- saved, or, for a dead / done job whose row survived, when the analyzer's
 -- orphan pass (#160) has cancelled its batch (a job a user cancelled, #237, is
--- dead / CANCELLED and its handler keeps its rows). A row does not go with its job:
+-- dead / CANCELLED and its handler keeps its rows; so is the running job of a deleted
+-- video, #303, whose row is kept until its worker ends it, and its batches are handled
+-- as a dead job's). A row does not go with its job:
 -- deleting the job sets job_id to NULL (ON DELETE SET NULL, #251) and the same
 -- pass cancels the batch and deletes the row. Migration 0013; nullable job_id
 -- and SET NULL from migration 0019.
@@ -824,7 +841,7 @@ CREATE TABLE llm_batches (
 ```
 1. yt-dlp --dump-json                       → VideoMeta
    ├─ error → classify (§8.4); mark videos.unavailable; dead-letter
-2. upsert videos
+2. upsert videos            (under the job-row guard, see below)
 3. evaluate subtitle availability:
      manual EN present?        → fetch, parse VTT, speaker_source per labels
      PREFER_WHISPER=1?         → skip to (5)
@@ -833,6 +850,21 @@ CREATE TABLE llm_batches (
 4. if transcript obtained: persist, chunk (§7.3), enqueue analyze
 5. else: enqueue transcribe (same priority as this job)
 ```
+
+**Writes under the job-row guard (#303).** `upsert_video` and `record_unavailable`
+are `INSERT ... ON CONFLICT DO UPDATE`, so after a concurrent delete they would
+insert a new row and bring the video back (a tombstone check in the same statement
+does not help under READ COMMITTED). When ingest runs them for a queue job it first
+locks its own job row `FOR UPDATE` (matched on `id`, `locked_by` and
+`state = 'running'`), reads `cancel_requested_at` and only then writes, in that
+transaction. `delete_video` locks the video's jobs before it deletes anything, so
+either the worker's transaction commits first (the delete then cascades what it
+wrote) or it waits for the delete, sees the request, rolls back and raises
+`Cancelled`, writing nothing. A job with no request whose video row is missing (a
+job enqueued after the delete) ends `PERMANENT_SOURCE`, non-retryable and without
+an alert, and writes no `videos` row. The CLI path passes no job and is unguarded.
+Writes to `transcripts`, `transcript_chunks`, `analyses` and `media` need no guard:
+they fail on their foreign key once the video is gone.
 
 **Premieres and live streams (#65).** After step 1, `live_status` of
 `is_upcoming`, `is_live` or `post_live` (or yt-dlp's "Premieres in ..." error)
@@ -899,7 +931,14 @@ enqueues one `ingest` for a video whose newest `transcribe` job is `dead`.
 5. chunk (§7.3)
 6. enqueue analyze
 7. if AUDIO_KEEP=0: delete audio + media row
+   (also when the video was deleted meanwhile, whatever AUDIO_KEEP is, #303)
 ```
+
+A `transcribe` job that ends because its video was deleted (a delete before the
+`media` row exists, during Whisper, or just before the transcript save) removes the
+audio file and the `media` row on its exception path whatever `AUDIO_KEEP` says:
+nobody can ever see that row again, and the API unlinked only the files it knew of
+at delete time. A file the API already removed is not an error.
 
 Recording measured RTF in `engine_meta` turns §11's one-off benchmark into
 continuous data — the D3 revisit trigger ("backlog grows monotonically")
@@ -992,9 +1031,9 @@ separated per D13.
 
 | Method | Path | Notes |
 |---|---|---|
-| `POST` | `/videos` | body `{url}`; priority `+10`; returns job id; clears a matching deletion tombstone atomically |
-| `DELETE` | `/videos/{id}` | permanently deletes the video and derived data; `409` while any job is running (`video is currently processing`, or `cancellation in progress` once every running job has a cancel request, #237); records a tombstone so only explicit `POST /videos` can restore it |
-| `POST` | `/videos/{id}/cancel` | body `{}`, JSON only (`415` otherwise); stores a cancel request for every `pending` or `running` job of the video (#237). Pending jobs end `CANCELLED` at once; running ones get `cancel_requested_at` and stop at their next checkpoint. Answers `{video_id, jobs: [{job_id, kind, outcome}]}` with `outcome` `cancelled` or `cancel_requested`: `202` if any is `cancel_requested`, else `200` (`jobs: []` when nothing was active); `404` for an unknown or deleted video, `422` for a malformed ID. Deletes nothing |
+| `POST` | `/videos` | body `{url}`; priority `+10`; returns job id; clears a matching deletion tombstone atomically and, in the same transaction, deletes the video's remaining job rows (locks: jobs by id, then the `videos` row), so a fresh `ingest` is enqueued. `409 cancellation in progress` (nothing written, tombstone kept) while the deleted video still has a `running` job carrying a cancel request (#303) |
+| `DELETE` | `/videos/{id}` | permanently deletes the video and derived data, at once and also with a running job (#303, owner decision: delete has priority over a running job): `204`, never `409`. In one transaction it cancels the video's jobs with the #237 rules, deletes every job row that is not `running`, keeps each `running` row as a `CANCELLED` record (its worker ends it at the next checkpoint and carries on), and records a tombstone so only explicit `POST /videos` can restore it. `404` for an unknown or already deleted video, `422` for a malformed ID |
+| `POST` | `/videos/{id}/cancel` | body `{}`, JSON only (`415` otherwise); stores a cancel request for every `pending` or `running` job of the video (#237). Pending jobs end `CANCELLED` at once; running ones get `cancel_requested_at` and stop at their next checkpoint. Answers `{video_id, jobs: [{job_id, kind, outcome}]}` with `outcome` `cancelled` or `cancel_requested`: `202` if any is `cancel_requested`, else `200` (`jobs: []` when nothing was active); `404` for an unknown or deleted video (so a cancel after `DELETE` is `404`, #303), `422` for a malformed ID. Deletes nothing |
 | `POST` | `/channels` | forward-only; sets `monitor_from`. Accepts a channel ID, `youtube.com/channel/` URL, or `@handle`, `/c/` or `/user/` reference; a name is resolved synchronously with one bounded yt-dlp call (at most 20 s, #81, an exception to the no-processing rule in §1): `404` if it does not exist, `503` on timeout or rate limit, `502` on bad output |
 | `GET` | `/channels` | paginated channel list (id, title, active, video count), powers the Library channel filter |
 | `POST` | `/channels/{id}/backfill` | `{limit, dry_run}`; priority `-10` (D9b) |
@@ -1110,7 +1149,7 @@ between a fast dead-letter and four wasted Whisper runs.
 | `LLM_UNAVAILABLE` | provider 5xx, connection refused | retry with backoff |
 | `RESOURCE` | disk full, OOM | dead-letter; alert — retrying makes it worse |
 | `BUG` | unhandled exception | dead-letter with traceback in `last_error` |
-| `CANCELLED` | a user's cancel request (#237) | not a failure: `dead`, no retry, no alert, logged at INFO. `classify()` never returns it. Unlike a reaped job, whose class is NULL, a cancelled job always carries it |
+| `CANCELLED` | a user's cancel request or a delete of the video (#237, #303) | not a failure: `dead`, no retry, no alert, logged at INFO. `classify()` never returns it. Unlike a reaped job, whose class is NULL, a cancelled job always carries it |
 
 `error_class` is stored on the job so the Ops view can distinguish "YouTube
 changed something" from "my LLM is down" at a glance.
@@ -1837,7 +1876,10 @@ status 70 so Docker restarts it.
 **User cancel versus shutdown (#237).** A shutdown signal raises `Cancelled` so
 the job goes back to `pending` with its attempt refunded, and the worker stops
 claiming. A user's cancel is terminal and does not stop the worker: the job ends
-`dead` / `CANCELLED` and the same process claims the next job. If a request is
+`dead` / `CANCELLED` and the same process claims the next job. A delete of the
+video is a cancel (#303): its running job keeps its row and the request, ends the
+same way, and the worker carries on (deleting the running row instead would make the
+heartbeat answer `LOST` and stop the process on every delete). If a request is
 stored when the shutdown signal arrives, the job still ends `CANCELLED` and the
 worker then exits as for any shutdown. The watchdog's exit with status 70 on a
 job with a request records `CANCELLED`, not `TOOL_FAILURE`, and schedules no

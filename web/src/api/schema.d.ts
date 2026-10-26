@@ -469,9 +469,10 @@ export interface paths {
          * @description Stop all processing of one video (#237).
          *
          *     Pending jobs end at once as ``CANCELLED``. A running job is asked to stop and
-         *     ends at its next checkpoint (``cancel_requested``, status 202); until then
-         *     ``DELETE /videos/{id}`` answers 409. Repeating the request is safe. Nothing is
-         *     deleted. Resume a cancelled job with ``POST /ops/jobs/{id}/retry``.
+         *     ends at its next checkpoint (``cancel_requested``, status 202). Repeating the
+         *     request is safe. Nothing is deleted (``DELETE /videos/{id}`` works with a running
+         *     job too, #303; a cancel after it is 404). Resume a cancelled job with
+         *     ``POST /ops/jobs/{id}/retry``.
          */
         post: operations["post_video_cancel_videos__video_id__cancel_post"];
         delete?: never;
@@ -2106,6 +2107,13 @@ export interface operations {
                     "application/json": components["schemas"]["VideoSubmission"];
                 };
             };
+            /** @description The video was deleted and its running job is still being cancelled */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -2168,13 +2176,6 @@ export interface operations {
             };
             /** @description No such video */
             404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The video has a running job, or its running jobs are being cancelled */
-            409: {
                 headers: {
                     [name: string]: unknown;
                 };

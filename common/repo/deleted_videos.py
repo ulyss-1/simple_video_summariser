@@ -6,8 +6,9 @@ from typing import Any
 
 import psycopg
 
-from common.repo.jobs import VideoNotFound as VideoNotFound
-from common.repo.jobs import apply_video_cancel, log_cancelled_entries
+from common.repo.jobs import VideoNotFound, apply_video_cancel, log_cancelled_entries
+
+__all__ = ["DeletedVideo", "VideoNotFound", "delete_video"]
 
 
 @dataclass(frozen=True, slots=True)

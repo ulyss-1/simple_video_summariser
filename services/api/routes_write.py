@@ -655,9 +655,10 @@ def post_video_cancel(
     """Stop all processing of one video (#237).
 
     Pending jobs end at once as ``CANCELLED``. A running job is asked to stop and
-    ends at its next checkpoint (``cancel_requested``, status 202); until then
-    ``DELETE /videos/{id}`` answers 409. Repeating the request is safe. Nothing is
-    deleted. Resume a cancelled job with ``POST /ops/jobs/{id}/retry``.
+    ends at its next checkpoint (``cancel_requested``, status 202). Repeating the
+    request is safe. Nothing is deleted (``DELETE /videos/{id}`` works with a running
+    job too, #303; a cancel after it is 404). Resume a cancelled job with
+    ``POST /ops/jobs/{id}/retry``.
     """
     _require_idle(conn)
     try:
