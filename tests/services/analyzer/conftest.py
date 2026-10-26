@@ -11,9 +11,9 @@ import pytest
 
 from adapters.summarize.ollama import HttpResponse
 from services.analyzer import main as analyzer_main
-from tests.common.repo.conftest import conn, head_dsn
+from tests.common.repo.conftest import conn
 
-__all__ = ["conn", "head_dsn"]
+__all__ = ["conn"]
 
 
 @pytest.fixture(autouse=True)

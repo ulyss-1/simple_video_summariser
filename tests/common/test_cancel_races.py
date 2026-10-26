@@ -35,11 +35,8 @@ from common.repo.deleted_videos import (
 )
 from common.repo.jobs import cancel_video
 from common.worker import EXIT_HUNG_HANDLER, JobContext, Worker
-from tests.common.repo.conftest import head_dsn
 
 pytestmark = pytest.mark.integration
-
-__all__ = ["head_dsn"]
 
 VID = "dQw4w9WgXcQ"
 DEADLINE_SEC = 8.0

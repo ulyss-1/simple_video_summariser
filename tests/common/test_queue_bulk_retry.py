@@ -14,11 +14,8 @@ from psycopg.rows import dict_row
 from common.errors import ErrorClass
 from common.queue import MAX_BULK_RETRY, PostgresQueue
 from common.repo.jobs import UNSET
-from tests.common.repo.conftest import head_dsn
 
 pytestmark = pytest.mark.integration
-__all__ = ["head_dsn"]
-
 
 @pytest.fixture
 def conn(head_dsn: str) -> Iterator[psycopg.Connection[Any]]:

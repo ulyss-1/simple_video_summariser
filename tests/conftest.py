@@ -14,15 +14,20 @@ import os
 import time
 import uuid
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
 import pytest
+from alembic import command
+from alembic.config import Config
 from docker.errors import DockerException  # type: ignore[import-untyped]
 from psycopg import sql
 from testcontainers.community.postgres import PostgresContainer
 from testcontainers.core.config import testcontainers_config
 from testcontainers.core.docker_client import DockerClient
+
+from common.config import get_settings
 
 # ``pytester`` is a built-in pytest plugin (no dependency); the shuffle plugin
 # is registered here so every run is shuffled (issue #72).
@@ -46,6 +51,7 @@ testcontainers_config.ryuk_disabled = True
 # tests/test_base_image_copies.py fails until the two agree.
 _POSTGRES_IMAGE = "postgres:18-alpine@sha256:898c60cb390d1085bc97bdd6a1ae968757421df394b071848b52b1c09c89d6a5"
 _DEFAULT_DOCKER_ENDPOINT = "unix:///var/run/docker.sock"
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _require_docker_daemon[T](factory: Callable[[], T], *, docker_host: str | None) -> T:
@@ -148,6 +154,114 @@ def postgres_dsn(postgres_container: PostgresContainer) -> Iterator[str]:
     finally:
         with psycopg.connect(admin_dsn, autocommit=True) as admin_conn:
             admin_conn.execute(
+                sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(db_name))
+            )
+
+
+def _alembic_config() -> Config:
+    config = Config(str(_REPO_ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(_REPO_ROOT / "migrations"))
+    # The template build must not reconfigure the process's logging (#71).
+    config.attributes["configure_logger"] = False
+    return config
+
+
+def _run_template_step(statement: str, template: str, action: Callable[[], object]) -> None:
+    try:
+        action()
+    except Exception as exc:  # noqa: BLE001 - re-raised naming template and statement
+        pytest.fail(
+            f"migrated-schema template database {template!r} failed at {statement!r}: "
+            f"{type(exc).__name__}: {exc}",
+            pytrace=False,
+        )
+
+
+@pytest.fixture(scope="session")
+def migrated_template(postgres_container: PostgresContainer) -> Iterator[str]:
+    """Name of a template database migrated to head by the real migrations (#290).
+
+    Built once per session inside this session's container, so it is never
+    reused from an earlier session and a new migration is picked up with no
+    manual step. Once built it accepts no connections, so a clone can never
+    fail with "source database is being accessed by other users".
+    """
+    admin_dsn = postgres_container.get_connection_url()
+    template = f"template_{uuid.uuid4().hex}"
+    template_dsn = _with_dbname(admin_dsn, template)
+
+    def create() -> None:
+        with psycopg.connect(admin_dsn, autocommit=True) as conn:
+            conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(template)))
+
+    def upgrade() -> None:
+        # env.py reads DATABASE_URL through the lru_cache'd get_settings().
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("DATABASE_URL", template_dsn)
+            get_settings.cache_clear()
+            try:
+                command.upgrade(_alembic_config(), "head")
+            finally:
+                get_settings.cache_clear()
+
+    def seal() -> None:
+        with psycopg.connect(admin_dsn, autocommit=True) as conn:
+            conn.execute(
+                sql.SQL("ALTER DATABASE {} WITH IS_TEMPLATE true ALLOW_CONNECTIONS false").format(
+                    sql.Identifier(template)
+                )
+            )
+
+    _run_template_step(f"CREATE DATABASE {template}", template, create)
+    try:
+        _run_template_step("alembic upgrade head", template, upgrade)
+        _run_template_step(f"ALTER DATABASE {template} ALLOW_CONNECTIONS false", template, seal)
+        yield template
+    finally:
+        with psycopg.connect(admin_dsn, autocommit=True) as conn:
+            conn.execute(
+                sql.SQL("ALTER DATABASE {} WITH IS_TEMPLATE false").format(sql.Identifier(template))
+            )
+            conn.execute(
+                sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(template))
+            )
+
+
+@pytest.fixture
+def head_dsn(
+    postgres_container: PostgresContainer,
+    migrated_template: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[str]:
+    """A DSN for a fresh database cloned from the migrated template (#290).
+
+    Each test gets its own database, dropped afterwards. ``DATABASE_URL`` points
+    at it and the settings cache is cleared, as the per-file fixtures did.
+    """
+    admin_dsn = postgres_container.get_connection_url()
+    db_name = f"test_{uuid.uuid4().hex}"
+    statement = f"CREATE DATABASE {db_name} TEMPLATE {migrated_template}"
+    try:
+        with psycopg.connect(admin_dsn, autocommit=True) as conn:
+            conn.execute(
+                sql.SQL("CREATE DATABASE {} TEMPLATE {}").format(
+                    sql.Identifier(db_name), sql.Identifier(migrated_template)
+                )
+            )
+    except psycopg.Error as exc:
+        pytest.fail(
+            f"cloning template database {migrated_template!r} failed at {statement!r}: "
+            f"{type(exc).__name__}: {exc}",
+            pytrace=False,
+        )
+    dsn = _with_dbname(admin_dsn, db_name)
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    get_settings.cache_clear()
+    try:
+        yield dsn
+    finally:
+        with psycopg.connect(admin_dsn, autocommit=True) as conn:
+            conn.execute(
                 sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(db_name))
             )
 

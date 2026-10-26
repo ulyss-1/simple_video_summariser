@@ -13,9 +13,9 @@ from collections.abc import Iterator
 import pytest
 import structlog
 
-from tests.common.repo.conftest import conn, head_dsn
+from tests.common.repo.conftest import conn
 
-__all__ = ["conn", "head_dsn"]
+__all__ = ["conn"]
 
 
 @pytest.fixture(autouse=True)

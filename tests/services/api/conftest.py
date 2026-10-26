@@ -22,9 +22,6 @@ from fastapi.testclient import TestClient
 import services.api.main as api_main
 from common.config import Settings, get_settings
 from common.logging import configure_logging
-from tests.common.repo.conftest import head_dsn
-
-__all__ = ["head_dsn"]
 
 UNREACHABLE_DSN = "postgresql://user:SECRETPW@127.0.0.1:1/db"
 

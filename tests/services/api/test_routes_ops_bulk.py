@@ -19,9 +19,7 @@ from common.queue import MAX_BULK_RETRY, BulkRetriedJob, BulkRetryResult, Postgr
 from common.repo.jobs import UNSET
 from services.api import deps, routes_ops
 from services.api.main import create_app
-from tests.services.api.conftest import LogSink, head_dsn
-
-__all__ = ["head_dsn"]
+from tests.services.api.conftest import LogSink
 
 MARKER = "ZZMARKER42"
 JSON = {"Content-Type": "application/json"}

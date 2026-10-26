@@ -29,11 +29,8 @@ from common.errors import (
 from common.queue import HeartbeatResult, Job, PostgresQueue
 from common.repo.deleted_videos import VideoNotFound
 from common.repo.jobs import cancel_video, get_job, list_jobs
-from tests.common.repo.conftest import head_dsn
 
 pytestmark = pytest.mark.integration
-
-__all__ = ["head_dsn"]
 
 VID = "dQw4w9WgXcQ"
 OTHER = "abcdefghijk"

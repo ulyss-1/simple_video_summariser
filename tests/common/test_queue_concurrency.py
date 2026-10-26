@@ -37,7 +37,6 @@ from typing import Any
 
 import psycopg
 import pytest
-from alembic import command
 from alembic.config import Config
 from psycopg.rows import dict_row
 
@@ -61,13 +60,6 @@ def _config_for(dsn: str, monkeypatch: pytest.MonkeyPatch) -> Config:
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "migrations"))
     return config
-
-
-@pytest.fixture
-def head_dsn(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch) -> str:
-    """A DSN for a database migrated all the way to head."""
-    command.upgrade(_config_for(postgres_dsn, monkeypatch), "head")
-    return postgres_dsn
 
 
 @pytest.fixture

@@ -23,9 +23,6 @@ from common.channel_catalog import (
 )
 from common.models import CatalogEntry, ChannelCatalog
 from common.queue import PostgresQueue
-from tests.common.repo.conftest import head_dsn
-
-__all__ = ["head_dsn"]
 
 pytestmark = pytest.mark.integration
 
