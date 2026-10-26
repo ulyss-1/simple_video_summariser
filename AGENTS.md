@@ -113,6 +113,9 @@ Activate `.venv` first; all Python commands assume it.
   `--upgrade` re-resolves everything. A failure leaves the lock untouched.
   `python scripts/lock_requirements.py --check-installed requirements.backend.lock requirements.dev.lock`
   fails when an installed package differs from the locks or is in neither
+  `python scripts/lock_requirements.py --report-outdated` - report-only: exit 1 with one
+  annotation when an `--upgrade` regeneration would change a lock (what the weekly
+  `lock-update-check.yml` runs; needs network access, never writes a file)
 - `npm ci && npm run build` - in `web/`, frontend only
 - `npm run lint` - in `web/`; ESLint (react-hooks + React Compiler rules),
   fails on any warning; `bash -lc 'cd web && npm run lint'`

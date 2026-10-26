@@ -2,6 +2,7 @@
 
     python scripts/lock_requirements.py backend|whisper|dev [--upgrade | --upgrade-package NAME]
     python scripts/lock_requirements.py --check-installed requirements.backend.lock requirements.dev.lock
+    python scripts/lock_requirements.py --report-outdated
 
 ``requirements.backend.lock`` and ``requirements.whisper.lock`` are generated
 from ``requirements.backend.txt`` and ``requirements.whisper.txt``, and
@@ -27,6 +28,14 @@ An offline test (``tests/test_requirements_lock.py``) compares it, so a lock
 that no longer matches its input fails CI, while a new upstream release never
 does. Install-time enforcement is pip's ``--require-hashes``.
 
+``--report-outdated`` (issue #266) is the report-only weekly check: it resolves what
+``backend --upgrade``, ``whisper --upgrade`` and ``dev --upgrade`` would resolve (each
+against the upgraded results before it), compares that with the committed locks and
+never writes a file or asks PyPI for hashes. Exit ``0`` and no stdout when nothing would
+change; ``1`` and one ``::error`` annotation plus one line per entry when something
+would; ``0`` with one stderr line when pip fails or times out (an outage); ``2`` when a
+file is missing or unparseable or the platform is refused.
+
 Standard library only; pip is invoked as a subprocess.
 """
 
@@ -45,6 +54,7 @@ import tempfile
 import tomllib
 import urllib.request
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -367,6 +377,35 @@ def _write_atomically(path: Path, text: str) -> None:
             os.unlink(tmp_name)
 
 
+def _resolve(
+    target: str, root: Path, own_text: str, constraints: Sequence[str], run_pip: RunPip
+) -> tuple[dict[str, object] | None, str]:
+    """Run pip's dry-run resolve for `target`; (report, "") or (None, pip's stderr)."""
+    input_name = TARGETS[target][0]
+    with tempfile.TemporaryDirectory() as tmp:
+        report_path = Path(tmp) / "report.json"
+        args = [sys.executable, "-m", "pip", "install", "--dry-run", "--ignore-installed", "--quiet",
+                "--report", str(report_path)]
+        if target == "whisper":
+            args += ["--only-binary=:all:", "-r", str(root / TARGETS["backend"][0])]
+        if target == "dev":
+            args += ["-r", str(root / TARGETS["backend"][0])]
+            own_path = Path(tmp) / "dev-requirements.txt"
+            own_path.write_text(own_text)
+            args += ["-r", str(own_path)]
+        else:
+            args += ["-r", str(root / input_name)]
+        if constraints:
+            constraint_path = Path(tmp) / "constraints.txt"
+            constraint_path.write_text("\n".join(constraints) + "\n")
+            args += ["-c", str(constraint_path)]
+        returncode, stderr = run_pip(args)
+        if returncode != 0:
+            return None, stderr
+        report: dict[str, object] = json.loads(report_path.read_text())
+    return report, ""
+
+
 def generate(
     target: str,
     *,
@@ -392,27 +431,9 @@ def generate(
     command = f"python scripts/lock_requirements.py {target}"
     base_locks = [TARGETS[b][1] for b in BASES[target]] if target == "dev" else []
 
-    with tempfile.TemporaryDirectory() as tmp:
-        report_path = Path(tmp) / "report.json"
-        args = [sys.executable, "-m", "pip", "install", "--dry-run", "--ignore-installed", "--quiet",
-                "--report", str(report_path)]
-        if target == "whisper":
-            args += ["--only-binary=:all:", "-r", str(root / TARGETS["backend"][0])]
-        if target == "dev":
-            args += ["-r", str(root / TARGETS["backend"][0])]
-            own_path = Path(tmp) / "dev-requirements.txt"
-            own_path.write_text(own_text)
-            args += ["-r", str(own_path)]
-        else:
-            args += ["-r", str(root / input_name)]
-        if constraints:
-            constraint_path = Path(tmp) / "constraints.txt"
-            constraint_path.write_text("\n".join(constraints) + "\n")
-            args += ["-c", str(constraint_path)]
-        returncode, stderr = run_pip(args)
-        if returncode != 0:
-            raise LockError(conflict_message(input_name, stderr, base_locks))
-        report = json.loads(report_path.read_text())
+    report, stderr = _resolve(target, root, own_text, constraints, run_pip)
+    if report is None:
+        raise LockError(conflict_message(input_name, stderr, base_locks))
 
     exclude: set[str] = set()
     if target != "backend":
@@ -430,6 +451,177 @@ def generate(
     return path
 
 
+# ---- --report-outdated (issue #266) ----
+
+#: How many changed entries the annotation lists inline.
+INLINE_LIMIT = 10
+#: Seconds one pip resolve may take in --report-outdated mode.
+PIP_TIMEOUT = 240.0
+REPORT_TITLE = "Python locks are behind PyPI"
+REGENERATE_STEPS = (
+    "python scripts/lock_requirements.py backend --upgrade",
+    "python scripts/lock_requirements.py whisper --upgrade",
+    "python scripts/lock_requirements.py dev --upgrade",
+    "pytest -m image",
+    "then open a PR (architecture.md 11.3)",
+)
+_LEADING_INT = re.compile(r"(\d+)(?![\d!])")
+
+
+@dataclass(frozen=True)
+class Change:
+    """One lock entry an upgrade would move: `old`/`new` is None when added/removed."""
+
+    lock: str
+    name: str
+    old: str | None
+    new: str | None
+
+    @property
+    def major(self) -> bool:
+        return self.old is not None and self.new is not None and is_major(self.old, self.new)
+
+    def text(self) -> str:
+        if self.old is None:
+            return f"{self.lock} {self.name} added {self.new}"
+        if self.new is None:
+            return f"{self.lock} {self.name} removed (was {self.old})"
+        label = " (major)" if self.major else ""
+        return f"{self.lock} {self.name} {self.old} -> {self.new}{label}"
+
+
+def leading_int(version: str) -> int | None:
+    """The first integer of the release segment, or None (epoch, no digits)."""
+    match = _LEADING_INT.match(version)
+    return int(match.group(1)) if match else None
+
+
+def is_major(old: str, new: str) -> bool:
+    before, after = leading_int(old), leading_int(new)
+    return before is not None and after is not None and before != after
+
+
+def order_changes(changes: Iterable[Change]) -> list[Change]:
+    """`major` entries first, then by name (then lock)."""
+    return sorted(changes, key=lambda c: (not c.major, c.name, c.lock))
+
+
+def inline_summary(changes: Sequence[Change], limit: int) -> str:
+    """The first `limit` entries (already ordered) joined, and `and N more` for the rest."""
+    shown = "; ".join(c.text() for c in changes[:limit])
+    rest = len(changes) - limit
+    return f"{shown}; and {rest} more" if rest > 0 else shown
+
+
+def compare_locks(lock_name: str, old: Mapping[str, str], new: Mapping[str, str]) -> list[Change]:
+    """The entries that differ between a committed lock and an upgraded resolution."""
+    return [
+        Change(lock_name, name, old.get(name), new.get(name))
+        for name in sorted(set(old) | set(new))
+        if old.get(name) != new.get(name)
+    ]
+
+
+def behind_annotation(changes: Sequence[Change], limit: int) -> str:
+    """The single `::error` line; `changes` must be ordered."""
+    majors = sum(1 for c in changes if c.major)
+    steps = ", ".join(REGENERATE_STEPS)
+    return (
+        f"::error title={REPORT_TITLE}::{len(changes)} lock entries would change on --upgrade "
+        f"({majors} major): {inline_summary(changes, limit)}. Run: {steps}"
+    )
+
+
+def reported_versions(report: Mapping[str, object]) -> dict[str, str]:
+    """{canonical name: version} of a pip report (no hashes needed)."""
+    items = report.get("install")
+    if not isinstance(items, list):
+        raise LockError("pip report has no 'install' list")
+    return {canonical_name(i["metadata"]["name"]): i["metadata"]["version"] for i in items}
+
+
+def make_run_pip(timeout: float) -> RunPip:
+    def run(args: list[str]) -> tuple[int, str]:
+        done = subprocess.run(args, capture_output=True, text=True, check=False, timeout=timeout)
+        return done.returncode, done.stderr
+
+    return run
+
+
+def _last_line(text: str) -> str:
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return lines[-1] if lines else "no error output"
+
+
+class _Outage(Exception):
+    """A resolve step failed in a way that is likely transient."""
+
+
+def _read(root: Path, name: str) -> str:
+    try:
+        return (root / name).read_text()
+    except (OSError, UnicodeDecodeError) as err:
+        raise LockError(f"{name}: cannot read ({err})") from err
+
+
+def report_outdated(
+    *, root: Path = ROOT, run_pip: RunPip, inline_limit: int = INLINE_LIMIT
+) -> tuple[int, str, str]:
+    """(exit code, stdout, stderr) of the weekly report. Never writes a file."""
+    try:
+        inputs = {
+            "backend": _read(root, TARGETS["backend"][0]),
+            "whisper": _read(root, TARGETS["whisper"][0]),
+        }
+        try:
+            inputs["dev"] = dev_requirements_text(_read(root, "pyproject.toml"))
+        except (tomllib.TOMLDecodeError, TypeError) as err:
+            raise LockError(f"pyproject.toml: cannot parse ({err})") from err
+        for text in inputs.values():
+            direct_pins(text)  # raises naming a requirement that is not an exact pin
+        committed: dict[str, dict[str, str]] = {}
+        for target in TARGETS:
+            lock_name = TARGETS[target][1]
+            try:
+                parsed = parse_lock(_read(root, lock_name))
+            except LockError as err:
+                if str(err).startswith(lock_name):
+                    raise
+                raise LockError(f"{lock_name}: {err}") from err
+            committed[target] = {n: v for n, (v, _) in parsed.items()}
+    except LockError as err:
+        return 2, "", f"lock_requirements: {err}\n"
+
+    upgraded: dict[str, dict[str, str]] = {}
+    constraints: list[str] = []
+    changes: list[Change] = []
+    try:
+        for target in TARGETS:
+            try:
+                report, stderr = _resolve(target, root, inputs[target], constraints, run_pip)
+            except (subprocess.TimeoutExpired, OSError) as err:
+                raise _Outage(f"{target} resolve: pip did not finish ({type(err).__name__})") from err
+            if report is None:
+                raise _Outage(f"{target} resolve: pip failed: {_last_line(stderr)}")
+            versions = reported_versions(report)
+            if target != "backend":
+                for name in upgraded["backend"]:
+                    versions.pop(name, None)
+            upgraded[target] = versions
+            constraints += [f"{n}=={v}" for n, v in versions.items()]
+            changes += compare_locks(TARGETS[target][1], committed[target], versions)
+    except _Outage as err:
+        return 0, "", f"lock_requirements: {err}; will retry on the next run\n"
+    except (LockError, ValueError, KeyError, TypeError) as err:
+        return 2, "", f"lock_requirements: unusable pip report: {err}\n"
+
+    if not changes:
+        return 0, "", ""
+    ordered = order_changes(changes)
+    lines = [behind_annotation(ordered, inline_limit), *(c.text() for c in ordered)]
+    return 1, "\n".join(lines) + "\n", ""
+
+
 def _installed() -> dict[str, str]:
     return {
         canonical_name(d.metadata["Name"]): d.version for d in importlib.metadata.distributions()
@@ -440,10 +632,12 @@ def main(
     argv: Sequence[str] | None = None,
     *,
     root: Path = ROOT,
-    run_pip: RunPip = default_run_pip,
+    run_pip: RunPip | None = None,
     fetch: Fetch = default_fetch,
     platform: tuple[str, str, str, tuple[int, int]] | None = None,
     installed: Mapping[str, str] | None = None,
+    inline_limit: int = INLINE_LIMIT,
+    pip_timeout: float = PIP_TIMEOUT,
 ) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0] if __doc__ else None)
     parser.add_argument("target", nargs="?", choices=sorted(TARGETS))
@@ -453,7 +647,28 @@ def main(
                        help="drop this package's old pin (repeatable)")
     parser.add_argument("--check-installed", nargs="+", metavar="LOCK",
                         help="fail when an installed package differs from the locks or is in none")
+    parser.add_argument("--report-outdated", action="store_true",
+                        help="report-only: exit 1 when an --upgrade regeneration would change a lock")
     args = parser.parse_args(argv)
+    if args.report_outdated and (args.target or args.upgrade or args.upgrade_package
+                                 or args.check_installed):
+        parser.error("--report-outdated takes no other argument")
+
+    if args.report_outdated:
+        system, machine, impl, version = platform or (
+            sys.platform, _platform.machine(), sys.implementation.name, sys.version_info[:2]
+        )
+        refused = platform_problem(system, machine, impl, version)
+        if refused:
+            print(f"lock_requirements: {refused}", file=sys.stderr)
+            return 2
+        code, out, err = report_outdated(
+            root=root, run_pip=run_pip or make_run_pip(pip_timeout), inline_limit=inline_limit
+        )
+        sys.stdout.write(out)
+        sys.stderr.write(err)
+        return code
+    run_pip = run_pip or default_run_pip
 
     try:
         if args.check_installed:

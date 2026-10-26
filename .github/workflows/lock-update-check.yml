@@ -1,0 +1,29 @@
+# Weekly Python lock staleness report (issue #266, architecture.md 11.3).
+#
+# Report-only: it goes red with one ::error annotation when regenerating the
+# locks with --upgrade would change any entry, and names the entries. It never
+# edits a file, opens a PR or gates a deploy, and a PyPI or pip outage ends
+# green and retries next week. Direct == pins are not covered here (#278;
+# yt-dlp has its own daily check, ytdlp-update-check.yml). CI proper lives in
+# ci.yml (#61).
+name: Python lock update check
+
+on:
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lock-update-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Report locks that an --upgrade regeneration would change
+        run: python scripts/lock_requirements.py --report-outdated
