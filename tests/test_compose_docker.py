@@ -235,6 +235,18 @@ def test_planner_has_one_replica_and_worker_healthcheck_keeps_its_dollars(
     assert services["planner"]["healthcheck"] == services["transcriber"]["healthcheck"]
 
 
+def test_db_and_api_healthchecks_resolve_with_the_startup_probe_timing(
+    compose_config: ConfigResolver,
+) -> None:
+    """#316: Compose resolves the new keys."""
+    services = _resolved(compose_config)
+    db = services["db"]["healthcheck"]
+    api = services["api"]["healthcheck"]
+    assert isinstance(db, dict) and isinstance(api, dict)
+    assert (db["interval"], db["start_period"], db["start_interval"]) == ("10s", "30s", "1s")
+    assert (api["interval"], api["start_period"], api["start_interval"]) == ("30s", "20s", "1s")
+
+
 @pytest.mark.parametrize("populated_default_env", [False, True])
 def test_config_fails_naming_postgres_password_when_unset(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, populated_default_env: bool

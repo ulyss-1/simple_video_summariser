@@ -47,6 +47,7 @@ jobs:
       python: ${{ steps.c.outputs.python }}
       frontend: ${{ steps.c.outputs.frontend }}
       images: ${{ steps.c.outputs.images }}
+      bakeoff: ${{ steps.c.outputs.bakeoff }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -60,7 +61,7 @@ jobs:
           if [ "$EVENT" = pull_request ]; then
             git diff --name-only "$BASE...$HEAD" | scripts/ci_changes.sh >> "$GITHUB_OUTPUT"
           else
-            printf 'python=true\nfrontend=true\nimages=true\n' >> "$GITHUB_OUTPUT"
+            printf 'python=true\nfrontend=true\nimages=true\nbakeoff=true\n' >> "$GITHUB_OUTPUT"
           fi
           cat "$GITHUB_OUTPUT"
 
@@ -159,8 +160,39 @@ jobs:
           python scripts/lock_requirements.py --check-installed requirements.backend.lock requirements.dev.lock
       # Builds ytdigest-backend:latest before the whisper image (which is
       # FROM that tag), then the frontend image, and runs their runtime checks.
-      - name: pytest -m image
-        run: pytest -m image
+      # The bake-off image tests run in the `bakeoff` job instead (#316).
+      - name: pytest -m "image and not bakeoff"
+        run: pytest -m "image and not bakeoff"
+
+  # The bake-off image tests (#76), split out by #316: they run only when a
+  # bake-off path changes. The path set lives in scripts/ci_changes.sh. The
+  # job-level `if:` makes a skipped job show as Skipped, not as missing, and
+  # the run still concludes success. Pushes to master run it, as the safety net.
+  bakeoff:
+    needs: changes
+    if: needs.changes.outputs.bakeoff == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      # Hash-checking mode covers a whole pip command and refuses editables, so
+      # the locks and the editable install are two commands (#145, #264). With
+      # --no-build-isolation pip builds the editable with the setuptools from
+      # requirements.dev.lock, not an unpinned one.
+      - name: Install runtime and dev dependencies from the locks
+        run: pip install --require-hashes --no-deps -r requirements.backend.lock -r requirements.dev.lock
+      - name: Install the project
+        run: pip install --no-deps --no-build-isolation --check-build-dependencies -e .
+      # Every installed distribution must be in a lock at the locked version.
+      - name: Check the installed set against the locks
+        run: |
+          pip check
+          python scripts/lock_requirements.py --check-installed requirements.backend.lock requirements.dev.lock
+      - name: pytest -m "image and bakeoff"
+        run: pytest -m "image and bakeoff"
 
   # Browser-level suite (#177). Gated: it does nothing until web/package.json
   # has a `test:e2e` script, so it needs no workflow change when #177 lands.

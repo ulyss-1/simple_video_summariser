@@ -21,9 +21,9 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_backend_image import REPO_ROOT
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
-pytestmark = [pytest.mark.integration, pytest.mark.image]
+pytestmark = [pytest.mark.integration, pytest.mark.image, pytest.mark.bakeoff]
 
 RUN_ID = uuid.uuid4().hex[:8]
 IMAGE = f"ytdigest-bakeoff-test:{RUN_ID}"
