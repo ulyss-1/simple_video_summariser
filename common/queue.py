@@ -1178,3 +1178,4 @@ class PostgresQueue:
         return StaleAnalyzeResult(
             rekeyed=int(row[0]), superseded=int(row[1]), dead=len(dead_ids), dead_ids=dead_ids
         )
+# t316 throwaway
