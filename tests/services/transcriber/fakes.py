@@ -84,7 +84,7 @@ class FakeMetadata:
         self.result = result
         self.calls: list[str] = []
 
-    def fetch(self, video_id: str) -> VideoMeta:
+    def fetch(self, video_id: str, **_kw: Any) -> VideoMeta:
         self.calls.append(video_id)
         if isinstance(self.result, BaseException):
             raise self.result
@@ -114,7 +114,7 @@ class FakeSubtitles:
     def available(self, meta: VideoMeta) -> SubtitleAvailability:
         return self._real.available(meta)
 
-    def fetch(self, video_id: str, lang: str, kind: str) -> list[Segment]:
+    def fetch(self, video_id: str, lang: str, kind: str, **_kw: Any) -> list[Segment]:
         self.fetch_calls.append((video_id, lang, kind))
         if self.on_fetch is not None:
             self.on_fetch(kind)

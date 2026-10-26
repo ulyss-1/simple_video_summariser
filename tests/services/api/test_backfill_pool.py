@@ -55,7 +55,7 @@ def test_no_connection_is_checked_out_while_listing_and_probing() -> None:
             return ChannelCatalog(channel_id, ENTRIES, None)
 
     class Meta:
-        def fetch(self, video_id: str) -> str:
+        def fetch(self, video_id: str, **_kw: Any) -> str:
             during["probe"] = _checked_out(pool)
             return video_id
 

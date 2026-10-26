@@ -21,6 +21,7 @@ import stat
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote, quote_plus
 
 import pytest

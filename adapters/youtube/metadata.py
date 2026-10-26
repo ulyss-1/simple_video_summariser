@@ -6,13 +6,18 @@ a ``VideoMeta``. Failures arrive already classified by the shared runner.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from collections.abc import Callable
 from typing import Any
 
 from adapters.youtube.errors import UpcomingVideoError, decode_ytdlp_json
-from adapters.youtube.ytdlp import DEFAULT_POLL_INTERVAL_SEC, ProcessRunner, run_process, run_ytdlp
+from adapters.youtube.ytdlp import (
+    DEFAULT_POLL_INTERVAL_SEC,
+    ProcessRunner,
+    run_process,
+    run_ytdlp,
+)
 from common.errors import ToolFailureError
 from common.models import VideoMeta
 from common.youtube_refs import VIDEO_ID_PATTERN

@@ -79,7 +79,7 @@ class FakeAudio:
         self.write = write
         self.calls: list[tuple[str, Path]] = []
 
-    def fetch_normalized(self, video_id: str, dest: Path) -> AudioRef:
+    def fetch_normalized(self, video_id: str, dest: Path, **_kw: Any) -> AudioRef:
         self.calls.append((video_id, dest))
         if self.exc is not None:
             raise self.exc
@@ -576,7 +576,7 @@ def test_cancellation_is_checked_after_the_fetch_before_speech_to_text(
     make_rig: Callable[..., Rig],
 ) -> None:
     class CancellingAudio(FakeAudio):
-        def fetch_normalized(self, video_id: str, dest: Path) -> AudioRef:
+        def fetch_normalized(self, video_id: str, dest: Path, **_kw: Any) -> AudioRef:
             ref = super().fetch_normalized(video_id, dest)
             rig.ctx._cancel()  # the request arrives while the download runs
             return ref

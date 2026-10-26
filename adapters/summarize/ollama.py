@@ -23,6 +23,13 @@ from dataclasses import dataclass, replace
 from typing import Any, Literal
 from urllib.parse import unquote, urlsplit
 
+from adapters.summarize.abortable import (
+    DEFAULT_POLL_INTERVAL_SEC,
+    CallHandle,
+    attach,
+    build_abortable_opener,
+    call_abortably,
+)
 from adapters.summarize.prompt_loader import (
     PromptSet,
     RenderedPrompt,
@@ -39,10 +46,16 @@ from adapters.summarize.schema import (
     parse_tldr,
 )
 from common.config import Settings, get_settings
-from common.errors import BugError, LLMInvalidOutputError, LLMUnavailableError
+from common.errors import (
+    BugError,
+    Cancelled,
+    LLMInvalidOutputError,
+    LLMUnavailableError,
+)
 from common.models import (
     Chunk,
     ChunkAnalysis,
+    JobScope,
     Roster,
     Topic,
     Usage,
@@ -70,16 +83,29 @@ class HttpResponse:
 type Transport = Callable[[str, bytes, float], HttpResponse]
 
 
-def urllib_transport(url: str, body: bytes, timeout: float) -> HttpResponse:
-    """POST ``body`` as JSON. HTTP error statuses are returned, not raised."""
+#: Like ``Transport``, plus the ``CallHandle`` a cancel fires to close the socket (#302).
+type AbortableTransport = Callable[..., HttpResponse]
+
+_opener = build_abortable_opener()
+
+
+def urllib_transport(
+    url: str, body: bytes, timeout: float, handle: CallHandle | None = None
+) -> HttpResponse:
+    """POST ``body`` as JSON. HTTP error statuses are returned, not raised.
+
+    With a ``handle``, ``handle.abort()`` closes the connection, so a read blocked
+    in another thread fails and Ollama stops generating (#302).
+    """
     request = urllib.request.Request(
         url,
         data=body,
         method="POST",
         headers={"Content-Type": "application/json", "Accept": "application/json"},
     )
+    attach(request, handle)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _opener.open(request, timeout=timeout) as response:
             return HttpResponse(response.status, response.read(MAX_RESPONSE_BYTES + 1))
     except urllib.error.HTTPError as err:
         with err:
@@ -444,6 +470,8 @@ class OllamaSummarizer:
         output_reserve_tokens: int = 2048,
         prompts: PromptSet,
         transport: Transport = urllib_transport,
+        abortable_transport: AbortableTransport | None = None,
+        cancel_poll_sec: float = DEFAULT_POLL_INTERVAL_SEC,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.model = model
@@ -454,6 +482,15 @@ class OllamaSummarizer:
         self._timeout = timeout_sec
         self._prompts = prompts
         self._transport = transport
+        # An injected plain transport has no socket to close; it still runs on the
+        # abortable path so a cancel is seen (the abort then has nothing to fire).
+        self._abortable_transport: AbortableTransport = abortable_transport or (
+            urllib_transport
+            if transport is urllib_transport
+            else lambda *args, handle=None: transport(*args)
+        )
+        self._cancel_poll_sec = cancel_poll_sec
+        self._scope: JobScope | None = None
         self._clock = clock
         self._input_tokens = 0
         self._output_tokens = 0
@@ -473,6 +510,15 @@ class OllamaSummarizer:
             prompts=load_prompt_set(s.PROMPT_VERSION),
             transport=transport,
         )
+
+    # --- per-job cancel signal (#302) -----------------------------------------------
+
+    def begin_job(self, scope: JobScope) -> None:
+        """Take the job's cancel signal. Ollama has no batches and stores no checkpoints."""
+        self._scope = scope
+
+    def end_job(self) -> None:
+        self._scope = None
 
     # --- port ---------------------------------------------------------------
 
@@ -759,7 +805,19 @@ class OllamaSummarizer:
 
         started = self._clock()
         try:
-            response = self._transport(self._url, request, self._timeout)
+            scope = self._scope
+            if scope is None:
+                response = self._transport(self._url, request, self._timeout)
+            else:
+                response = call_abortably(
+                    lambda handle: self._abortable_transport(
+                        self._url, request, self._timeout, handle=handle
+                    ),
+                    cancelled=scope.cancelled,
+                    poll_interval=self._cancel_poll_sec,
+                )
+        except Cancelled:
+            raise
         except Exception as err:
             self._log(method, started, 0, 0, None, is_repair, len(request), 0, error=type(err).__name__)
             raise LLMUnavailableError(

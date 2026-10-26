@@ -30,7 +30,7 @@ class Spy:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    def fetch_normalized(self, video_id: str, dest: Path) -> AudioRef:
+    def fetch_normalized(self, video_id: str, dest: Path, **_kw: Any) -> AudioRef:
         self.calls.append("fetch")
         raise AssertionError("audio must not be fetched")
 

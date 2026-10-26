@@ -17,7 +17,12 @@ from pathlib import Path
 
 from adapters.youtube.metadata import watch_url
 from adapters.youtube.vtt import parse_vtt
-from adapters.youtube.ytdlp import DEFAULT_POLL_INTERVAL_SEC, ProcessRunner, run_process, run_ytdlp
+from adapters.youtube.ytdlp import (
+    DEFAULT_POLL_INTERVAL_SEC,
+    ProcessRunner,
+    run_process,
+    run_ytdlp,
+)
 from common.errors import ToolFailureError
 from common.models import Segment, VideoMeta
 

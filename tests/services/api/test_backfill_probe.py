@@ -75,7 +75,7 @@ class FakeMeta:
             self.timeouts.append(timeout)
         return self
 
-    def fetch(self, video_id: str) -> Any:
+    def fetch(self, video_id: str, **_kw: Any) -> Any:
         with self._lock:
             self.calls.append(video_id)
             self.active += 1

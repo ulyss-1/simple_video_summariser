@@ -2,6 +2,7 @@
 
 import subprocess
 from collections.abc import Sequence
+from typing import Any
 
 
 class FakeRunner:

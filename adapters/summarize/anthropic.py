@@ -31,6 +31,13 @@ from fractions import Fraction
 from typing import Any
 from urllib.parse import urlsplit
 
+from adapters.summarize.abortable import (
+    DEFAULT_POLL_INTERVAL_SEC,
+    CallHandle,
+    attach,
+    build_abortable_opener,
+    call_abortably,
+)
 from adapters.summarize.ollama import _partials_json
 from adapters.summarize.prompt_loader import PromptSet, format_roster, load_prompt_set
 from adapters.summarize.repair import Message, call_with_repair, cap_feedback
@@ -127,7 +134,10 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_opener = urllib.request.build_opener(_NoRedirect)
+#: Like ``Transport``, plus the ``CallHandle`` a cancel fires to close the socket (#302).
+type AbortableTransport = Callable[..., Response]
+
+_opener = build_abortable_opener(_NoRedirect)
 
 
 def urllib_transport(
@@ -136,9 +146,15 @@ def urllib_transport(
     headers: Mapping[str, str],
     body: bytes | None,
     timeout: float,
+    handle: CallHandle | None = None,
 ) -> Response:
-    """Send one request. HTTP error statuses are returned, not raised."""
+    """Send one request. HTTP error statuses are returned, not raised.
+
+    With a ``handle``, ``handle.abort()`` closes the connection, so a read blocked
+    in another thread fails.
+    """
     request = urllib.request.Request(url, data=body, method=method, headers=dict(headers))
+    attach(request, handle)
     try:
         with _opener.open(request, timeout=timeout) as response:
             return Response(
@@ -237,6 +253,8 @@ class AnthropicSummarizer:
         *,
         batch: bool | None = None,
         transport: Transport = urllib_transport,
+        abortable_transport: AbortableTransport | None = None,
+        cancel_poll_sec: float = DEFAULT_POLL_INTERVAL_SEC,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -252,6 +270,14 @@ class AnthropicSummarizer:
         self._max_wait_sec = settings.ANTHROPIC_BATCH_MAX_WAIT_SEC
         self._prompts: PromptSet = load_prompt_set(settings.PROMPT_VERSION)
         self._transport = transport
+        # An injected plain transport has no socket to close; it still runs on the
+        # abortable path so a cancel is seen (the abort then has nothing to fire).
+        self._abortable_transport: AbortableTransport = abortable_transport or (
+            urllib_transport
+            if transport is urllib_transport
+            else lambda *args, handle=None: transport(*args)
+        )
+        self._cancel_poll_sec = cancel_poll_sec
         self._clock = clock
         self._sleep = sleep
         self._host = urlsplit(API_BASE).hostname
@@ -507,7 +533,14 @@ class AnthropicSummarizer:
     # --- sync mode ---------------------------------------------------------
 
     def _sync(self, params: dict[str, Any]) -> dict[str, Any]:
-        response = self._send("POST", "/v1/messages", self._dump(params), SYNC_TIMEOUT_SEC)
+        scope = self._scope
+        response = self._send(
+            "POST",
+            "/v1/messages",
+            self._dump(params),
+            SYNC_TIMEOUT_SEC,
+            cancelled=scope.cancelled if scope is not None else None,
+        )
         self._check_status(response)
         return self._message(self._json(response, "messages response"))
 
@@ -889,7 +922,15 @@ class AnthropicSummarizer:
     def _dump(payload: dict[str, Any]) -> bytes:
         return json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
-    def _send(self, method: str, target: str, body: bytes | None, timeout: float) -> Response:
+    def _send(
+        self,
+        method: str,
+        target: str,
+        body: bytes | None,
+        timeout: float,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> Response:
         url = target if target.startswith("https://") else API_BASE + target
         headers = {
             "x-api-key": self._key,
@@ -897,7 +938,18 @@ class AnthropicSummarizer:
             "content-type": "application/json",
         }
         try:
-            response = self._transport(method, url, headers, body, timeout)
+            if cancelled is None:
+                response = self._transport(method, url, headers, body, timeout)
+            else:
+                response = call_abortably(
+                    lambda handle: self._abortable_transport(
+                        method, url, headers, body, timeout, handle=handle
+                    ),
+                    cancelled=cancelled,
+                    poll_interval=self._cancel_poll_sec,
+                )
+        except Cancelled:
+            raise
         except Exception as err:  # noqa: BLE001 - any transport failure is classified below
             # ``from None``: the cause's text is not scrubbed and format_error()
             # prints chained exceptions.

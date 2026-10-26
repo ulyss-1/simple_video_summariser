@@ -14,7 +14,7 @@ import threading
 import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -30,7 +30,7 @@ DEADLINE_SEC = 5.0
 class FakePopen:
     """``communicate`` times out until ``finish_after`` slices, or until killed."""
 
-    instances: list[FakePopen] = []
+    instances: ClassVar[list[FakePopen]] = []
 
     def __init__(self, argv: Sequence[str], **_kwargs: Any) -> None:
         self.argv = list(argv)
@@ -51,7 +51,7 @@ class FakePopen:
 @pytest.fixture
 def popen(monkeypatch: pytest.MonkeyPatch) -> list[FakePopen]:
     FakePopen.instances = []
-    monkeypatch.setattr(ytdlp.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(subprocess, "Popen", FakePopen)
     return FakePopen.instances
 
 
@@ -85,7 +85,7 @@ def test_a_process_that_finished_in_the_slice_the_flag_was_set_is_returned(
         proc.finish_after = 0  # the first communicate returns
         return proc
 
-    monkeypatch.setattr(ytdlp.subprocess, "Popen", finishing_popen)
+    monkeypatch.setattr(subprocess, "Popen", finishing_popen)
 
     result = run_process(["x"], timeout=60, cancelled=lambda: True, poll_interval=POLL)
 
@@ -103,7 +103,7 @@ def test_cancel_wins_over_a_timeout_due_in_the_same_slice(
             now[0] += 100.0  # the slice ends far past the deadline
             return super().communicate(timeout)
 
-    monkeypatch.setattr(ytdlp.subprocess, "Popen", AdvancingPopen)
+    monkeypatch.setattr(subprocess, "Popen", AdvancingPopen)
 
     with pytest.raises(Cancelled):
         run_process(
@@ -122,7 +122,7 @@ def test_a_timeout_without_a_cancel_still_raises_timeout_expired(
             now[0] += 100.0
             return super().communicate(timeout)
 
-    monkeypatch.setattr(ytdlp.subprocess, "Popen", AdvancingPopen)
+    monkeypatch.setattr(subprocess, "Popen", AdvancingPopen)
 
     with pytest.raises(subprocess.TimeoutExpired):
         run_process(
@@ -139,7 +139,7 @@ def test_without_a_signal_run_process_waits_in_one_communicate_call(
         proc.finish_after = 0
         return proc
 
-    monkeypatch.setattr(ytdlp.subprocess, "Popen", one_shot)
+    monkeypatch.setattr(subprocess, "Popen", one_shot)
 
     run_process(["x"], timeout=60)
 
@@ -263,7 +263,7 @@ def test_a_cancel_kills_the_whole_group_including_a_grandchild(
         except BaseException as exc:  # noqa: BLE001 - handed to the test thread
             result.append(exc)
 
-    monkeypatch.setattr(ytdlp.subprocess, "Popen", recording_popen)
+    monkeypatch.setattr(subprocess, "Popen", recording_popen)
     worker = threading.Thread(target=run, daemon=True)
     worker.start()
     try:

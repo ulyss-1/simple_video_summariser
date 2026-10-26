@@ -54,7 +54,7 @@ class FakeMetadata:
         self.fetched: list[str] = []
         self.statuses: list[TransactionStatus] = []
 
-    def fetch(self, video_id: str) -> VideoMeta:
+    def fetch(self, video_id: str, **_kw: Any) -> VideoMeta:
         self.fetched.append(video_id)
         if self.conn is not None:
             self.statuses.append(self.conn.info.transaction_status)
@@ -127,9 +127,9 @@ def test_a_tick_starts_no_new_row_once_the_time_budget_is_spent(
     metadata = FakeMetadata({A: _meta(A), B: _meta(B), C: _meta(C)})
     real_fetch = metadata.fetch
 
-    def slow_fetch(video_id: str) -> VideoMeta:
+    def slow_fetch(video_id: str, **_kw: Any) -> VideoMeta:
         now[0] += 40.0  # each lookup takes 40 s of the injected clock
-        return real_fetch(video_id)
+        return real_fetch(video_id, **_kw)
 
     metadata.fetch = slow_fetch  # type: ignore[method-assign]
 
@@ -231,7 +231,7 @@ class RecordingMetadata:
         self.kwargs = kwargs
         RecordingMetadata.instances.append(self)
 
-    def fetch(self, video_id: str) -> VideoMeta:
+    def fetch(self, video_id: str, **_kw: Any) -> VideoMeta:
         return _meta(video_id)
 
 
