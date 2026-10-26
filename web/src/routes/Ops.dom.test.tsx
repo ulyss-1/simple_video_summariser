@@ -4,6 +4,7 @@ import { setupUser } from '../test/user'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { components } from '../api'
+import { PROGRESS_POLL_MS } from '../lib/progress'
 import { Ops } from './Ops'
 
 const user = setupUser
@@ -81,13 +82,16 @@ function stubFetch(h: Handler) {
 }
 
 /** Routes by path: healthz, ops/jobs (GET) and retry (POST). */
-function api(opts: { health?: Handler; channels?: Handler; jobs?: Handler; retry?: Handler; bulk?: Handler } = {}): Handler {
+function api(opts: { health?: Handler; channels?: Handler; jobs?: Handler; retry?: Handler; bulk?: Handler; cancel?: Handler } = {}): Handler {
   return (c) => {
     if (c.url.pathname === '/api/healthz') return (opts.health ?? (() => health()))(c)
     if (c.url.pathname === '/api/ops/channels') return (opts.channels ?? (() => channels()))(c)
     if (c.url.pathname === '/api/ops/jobs') return (opts.jobs ?? (() => list([])))(c)
     if (c.url.pathname === '/api/ops/jobs/retry') {
       return (opts.bulk ?? (() => json({ detail: 'unexpected' }, 500)))(c)
+    }
+    if (/^\/api\/videos\/[^/]+\/cancel$/.test(c.url.pathname)) {
+      return (opts.cancel ?? (() => json({ detail: 'video not found' }, 404)))(c)
     }
     if (/^\/api\/ops\/jobs\/\d+\/retry$/.test(c.url.pathname)) {
       return (opts.retry ?? (() => json({ detail: 'job not found' }, 404)))(c)
@@ -799,7 +803,7 @@ describe('retry', () => {
     await mount('/ops?state=done')
     expect(retryBtn(4)).not.toBeNull()
     for (const id of [1, 2, 3]) expect(retryBtn(id)).toBeNull()
-    for (const id of [1, 2, 3]) expect(within(rowFor(id)).queryByRole('button', { name: /confirm|cancel/i })).toBeNull()
+    for (const id of [1, 2, 3]) expect(within(rowFor(id)).queryByRole('button', { name: /confirm|^cancel$/i })).toBeNull()
   })
 
   it('Retry asks first, names job, kind and video, sends nothing, and moves focus to Confirm', async () => {
@@ -1521,5 +1525,424 @@ describe('retry all matching (#161)', () => {
       d.resolve(json(out()))
     })
     await settle()
+  })
+})
+describe('cancel and CANCELLED jobs (#301)', () => {
+  const REQ_AT = '2026-10-26T10:05:00Z'
+  const active = (id: number, over: Partial<JobOut> = {}) =>
+    job(id, {
+      state: 'running',
+      error_class: null,
+      last_error: null,
+      finished_at: null,
+      ...over,
+    })
+  const cancelledJob = (id: number, over: Partial<JobOut> = {}) =>
+    job(id, {
+      error_class: 'CANCELLED',
+      last_error: 'cancelled on request',
+      ...over,
+    })
+  const cancelBtn = (id: number) =>
+    within(rowFor(id)).queryByRole('button', { name: 'Cancel processing' })
+  const cancelBody = (outcome: 'cancelled' | 'cancel_requested' | null) => ({
+    video_id: 'v',
+    jobs: outcome === null ? [] : [{ job_id: 1, kind: 'ingest', outcome }],
+  })
+  const REQUESTED =
+    'Cancel requested: the job stops at its next checkpoint, which can take about a minute'
+  const advance = async (ms: number) => {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms)
+    })
+    await settle()
+  }
+
+  it('lists CANCELLED in the Error class filter and sends it from the URL', async () => {
+    stubFetch(api({ jobs: () => list([cancelledJob(1)]) }))
+    await mount('/ops?error_class=CANCELLED')
+    expect(select('Error class').value).toBe('CANCELLED')
+    expect(
+      within(select('Error class')).getByRole('option', { name: 'CANCELLED' }),
+    ).toBeTruthy()
+    expect(lastJobGet().url.searchParams.get('error_class')).toBe('CANCELLED')
+  })
+
+  it('a CANCELLED dead row shows the label, the hint and a neutral badge; other dead rows stay red', async () => {
+    stubFetch(api({ jobs: () => list([cancelledJob(2), job(1)]) }))
+    await mount()
+    const row = rowFor(2)
+    expect(row.textContent).toContain('CANCELLED')
+    expect(row.textContent).toContain('Cancelled on request; retry to resume')
+    expect(within(row).getByText('dead').className).toBe('badge')
+    expect(within(rowFor(1)).getByText('dead').className).toContain(
+      'badge--danger',
+    )
+  })
+
+  it('a cancelling row says "cancelling" with the request time, never "cancelled"', async () => {
+    stubFetch(
+      api({ jobs: () => list([active(3, { cancel_requested_at: REQ_AT })]) }),
+    )
+    await mount('/ops?state=running')
+    const row = rowFor(3)
+    expect(within(row).getByText('cancelling')).toBeTruthy()
+    expect(within(row).queryByText('running')).toBeNull()
+    expect(row.textContent).toContain('Cancel requested')
+    expect(row.textContent).toContain('2026-10-26 10:05 UTC')
+    expect(row.textContent).not.toMatch(/cancelled/i)
+    expect(cancelBtn(3)).toBeNull()
+  })
+
+  it('running without a request, done with a stale request and pending are not "cancelling"', async () => {
+    stubFetch(
+      api({
+        jobs: () =>
+          list([
+            active(3, { cancel_requested_at: null }),
+            job(2, { state: 'done', cancel_requested_at: REQ_AT }),
+            job(1, { state: 'pending', cancel_requested_at: REQ_AT }),
+          ]),
+      }),
+    )
+    await mount('/ops?state=running')
+    expect(screen.queryByText('cancelling')).toBeNull()
+    expect(screen.queryByText(/Cancel requested/)).toBeNull()
+    expect(within(rowFor(3)).getByText('running')).toBeTruthy()
+    expect(within(rowFor(2)).getByText('done')).toBeTruthy()
+  })
+
+  it('offers Cancel processing on pending and running rows without a request only', async () => {
+    stubFetch(
+      api({
+        jobs: () =>
+          list([
+            job(5, { state: 'pending', error_class: null }),
+            active(4),
+            active(3, { cancel_requested_at: REQ_AT }),
+            job(2, { state: 'done' }),
+            cancelledJob(1),
+          ]),
+      }),
+    )
+    await mount('/ops?state=running')
+    expect(cancelBtn(5)).not.toBeNull()
+    expect(cancelBtn(4)).not.toBeNull()
+    for (const id of [3, 2, 1]) expect(cancelBtn(id)).toBeNull()
+  })
+
+  it('opens an inline confirmation, sends nothing, and moves focus to Confirm cancel', async () => {
+    stubFetch(
+      api({ jobs: () => list([active(4, { video_title: 'My video' })]) }),
+    )
+    await mount('/ops?state=running')
+    await click(cancelBtn(4) as HTMLElement)
+    const row = rowFor(4)
+    expect(posts()).toHaveLength(0)
+    expect(row.textContent).toContain(
+      "Cancel all processing of My video? This also cancels the video's other active jobs. Nothing is deleted.",
+    )
+    expect(row.textContent).not.toContain('starts over')
+    expect(document.activeElement).toBe(
+      within(row).getByRole('button', { name: 'Confirm cancel' }),
+    )
+  })
+
+  it('a transcribe job adds that a transcription starts over if retried', async () => {
+    stubFetch(api({ jobs: () => list([active(4, { kind: 'transcribe' })]) }))
+    await mount('/ops?state=running')
+    await click(cancelBtn(4) as HTMLElement)
+    expect(rowFor(4).textContent).toContain(
+      'A running transcription starts over if retried.',
+    )
+  })
+
+  it('Keep processing sends nothing and returns focus to Cancel processing', async () => {
+    stubFetch(api({ jobs: () => list([active(4)]) }))
+    await mount('/ops?state=running')
+    await click(cancelBtn(4) as HTMLElement)
+    await click(
+      within(rowFor(4)).getByRole('button', { name: 'Keep processing' }),
+    )
+    expect(posts()).toHaveLength(0)
+    expect(
+      within(rowFor(4)).queryByRole('button', { name: 'Confirm cancel' }),
+    ).toBeNull()
+    expect(document.activeElement).toBe(cancelBtn(4))
+  })
+
+  it('Confirm sends exactly one JSON POST /videos/{id}/cancel with the id percent-encoded', async () => {
+    stubFetch(
+      api({
+        jobs: () => list([active(4, { video_id: 'a/b?c' })]),
+        cancel: () => cancelBody('cancelled'),
+      }),
+    )
+    await mount('/ops?state=running')
+    await click(cancelBtn(4) as HTMLElement)
+    await click(
+      within(rowFor(4)).getByRole('button', { name: 'Confirm cancel' }),
+    )
+    expect(posts()).toHaveLength(1)
+    const p = posts()[0] as Call
+    expect(p.url.pathname).toBe('/api/videos/a%2Fb%3Fc/cancel')
+    expect(p.url.search).toBe('')
+    expect(p.headers.get('content-type')).toBe('application/json')
+    expect(p.body).toBe('{}')
+  })
+
+  it('a double click sends one request and disables both buttons while it runs', async () => {
+    const d = deferred()
+    stubFetch(
+      api({
+        jobs: () => list([active(4), active(3)]),
+        cancel: () => d.promise,
+      }),
+    )
+    await mount('/ops?state=running')
+    await click(cancelBtn(4) as HTMLElement)
+    const confirmBtn = within(rowFor(4)).getByRole('button', {
+      name: 'Confirm cancel',
+    })
+    await user().click(confirmBtn)
+    await user().click(confirmBtn)
+    await settle()
+    expect(posts()).toHaveLength(1)
+    expect(confirmBtn).toHaveProperty('disabled', true)
+    expect(
+      within(rowFor(4)).getByRole('button', { name: 'Keep processing' }),
+    ).toHaveProperty('disabled', true)
+    expect(cancelBtn(3)).toHaveProperty('disabled', false)
+    d.resolve(json(cancelBody('cancelled')))
+    await settle()
+  })
+
+  it.each([
+    [202, cancelBody('cancel_requested'), REQUESTED],
+    [200, cancelBody('cancelled'), 'Cancelled'],
+    [200, cancelBody(null), 'Nothing to cancel: this video has no active jobs'],
+    [404, { detail: 'secret <b>x</b>' }, 'This video no longer exists'],
+    [429, { detail: 'x' }, 'Too many requests. Try again shortly.'],
+    [503, { detail: 'x' }, 'The database is unavailable. Try again shortly.'],
+    [500, { detail: 'secret' }, 'Cancel failed'],
+    [422, { detail: 'secret' }, 'Cancel failed'],
+  ])(
+    'status %i is announced in the row as a fixed message',
+    async (status, body, message) => {
+      // The list stays the same, so the row is still there and its own live region speaks.
+      stubFetch(
+        api({
+          jobs: () => list([active(4)]),
+          cancel: () => json(body, status),
+        }),
+      )
+      await mount('/ops?state=running')
+      await click(cancelBtn(4) as HTMLElement)
+      await click(
+        within(rowFor(4)).getByRole('button', { name: 'Confirm cancel' }),
+      )
+      expect(
+        within(rowFor(4)).getByText(message).getAttribute('aria-live'),
+      ).toBe('polite')
+      expect(document.body.textContent).not.toContain('secret')
+      expect(
+        within(rowFor(4)).queryByRole('button', { name: 'Confirm cancel' }),
+      ).toBeNull()
+    },
+  )
+
+  it('a network failure says "Cancel failed" and refetches nothing', async () => {
+    stubFetch(
+      api({
+        jobs: () => list([active(4)]),
+        cancel: () => Promise.reject(new TypeError('Failed to fetch')),
+      }),
+    )
+    await mount('/ops?state=running')
+    const before = jobGets().length
+    await click(cancelBtn(4) as HTMLElement)
+    await click(
+      within(rowFor(4)).getByRole('button', { name: 'Confirm cancel' }),
+    )
+    expect(within(rowFor(4)).getByText('Cancel failed')).toBeTruthy()
+    expect(jobGets()).toHaveLength(before)
+    expect(posts()).toHaveLength(1)
+  })
+
+  it('refetches the list and the depth after any response, and does not retry on its own', async () => {
+    stubFetch(
+      api({
+        jobs: () => list([active(4)]),
+        cancel: () => json({ detail: 'x' }, 500),
+      }),
+    )
+    await mount('/ops?state=running', { mutations: { retry: 3 } })
+    const jobsBefore = jobGets().length
+    const depthBefore = healthGets().length
+    await click(cancelBtn(4) as HTMLElement)
+    await click(
+      within(rowFor(4)).getByRole('button', { name: 'Confirm cancel' }),
+    )
+    await advance(60_000)
+    expect(posts()).toHaveLength(1)
+    expect(jobGets().length).toBeGreaterThan(jobsBefore)
+    expect(healthGets().length).toBeGreaterThan(depthBefore)
+  })
+
+  it('a stale list (the job already ended) is the "nothing to cancel" case, not an error', async () => {
+    stubFetch(
+      api({
+        jobs: () => list([active(4)]),
+        cancel: () => json(cancelBody(null)),
+      }),
+    )
+    await mount('/ops?state=running')
+    await click(cancelBtn(4) as HTMLElement)
+    await click(
+      within(rowFor(4)).getByRole('button', { name: 'Confirm cancel' }),
+    )
+    expect(rowFor(4).textContent).toContain('Nothing to cancel')
+    expect(document.querySelector('[role="alert"]')).toBeNull()
+  })
+
+  it('polls every PROGRESS_POLL_MS while a row is cancelling, shows CANCELLED once it ends, then stops', async () => {
+    let reply = list([active(3, { cancel_requested_at: REQ_AT })])
+    stubFetch(api({ jobs: () => reply }))
+    await mount('/ops?state=running')
+    expect(jobGets()).toHaveLength(1)
+    await advance(PROGRESS_POLL_MS - 1)
+    expect(jobGets()).toHaveLength(1)
+    await advance(1)
+    expect(jobGets()).toHaveLength(2)
+    expect(within(rowFor(3)).getByText('cancelling')).toBeTruthy()
+
+    reply = list([cancelledJob(3)])
+    await advance(PROGRESS_POLL_MS)
+    expect(jobGets()).toHaveLength(3)
+    await advance(1) // let the response render; the next poll is 30 s away
+    expect(rowFor(3).textContent).toContain('CANCELLED')
+    expect(screen.queryByText('cancelling')).toBeNull()
+
+    await advance(PROGRESS_POLL_MS * 4)
+    expect(jobGets()).toHaveLength(3)
+  })
+
+  it('does not poll for a running row without a request or a pending row', async () => {
+    stubFetch(
+      api({
+        jobs: () =>
+          list([
+            active(2),
+            job(1, { state: 'pending', cancel_requested_at: REQ_AT }),
+          ]),
+      }),
+    )
+    await mount('/ops?state=running')
+    await advance(PROGRESS_POLL_MS * 4)
+    expect(jobGets()).toHaveLength(1)
+  })
+
+  it('cancelling a pending job under state=pending: the row leaves and the live region keeps "Cancelled"', async () => {
+    let reply = list([job(4, { state: 'pending', error_class: null })])
+    stubFetch(
+      api({
+        jobs: () => reply,
+        cancel: () => {
+          reply = list([])
+          return json(cancelBody('cancelled'))
+        },
+      }),
+    )
+    await mount('/ops?state=pending')
+    await click(cancelBtn(4) as HTMLElement)
+    await click(
+      within(rowFor(4)).getByRole('button', { name: 'Confirm cancel' }),
+    )
+    expect(screen.queryByRole('region', { name: 'Jobs list' })).toBeNull()
+    expect(liveText()).toContain('Cancelled')
+  })
+
+  it('a pending job cancelled under state=dead&error_class=CANCELLED shows there after the refetch', async () => {
+    let state: 'pending' | 'cancelled' = 'pending'
+    stubFetch(
+      api({
+        jobs: (c) => {
+          const filter = c.url.searchParams.get('error_class')
+          if (filter === 'CANCELLED')
+            return list(state === 'cancelled' ? [cancelledJob(4)] : [])
+          return list(
+            state === 'pending'
+              ? [job(4, { state: 'pending', error_class: null })]
+              : [],
+          )
+        },
+        cancel: () => {
+          state = 'cancelled'
+          return json(cancelBody('cancelled'))
+        },
+      }),
+    )
+    await mount('/ops?state=dead&error_class=CANCELLED')
+    expect(screen.queryByRole('region', { name: 'Jobs list' })).toBeNull()
+    state = 'cancelled'
+    await click(screen.getByRole('button', { name: 'Refresh' }))
+    expect(rowFor(4).textContent).toContain('CANCELLED')
+  })
+
+  it('retries a CANCELLED transcribe job end to end through the existing Retry flow', async () => {
+    stubFetch(
+      api({
+        jobs: () => list([cancelledJob(7, { kind: 'transcribe' })]),
+        retry: () => job(7, { state: 'pending' }),
+      }),
+    )
+    await mount('/ops?error_class=CANCELLED')
+    await click(within(rowFor(7)).getByRole('button', { name: 'Retry' }))
+    expect(rowFor(7).textContent).toMatch(/hours of CPU/)
+    await click(
+      within(rowFor(7)).getByRole('button', { name: 'Confirm retry' }),
+    )
+    expect(posts()).toHaveLength(1)
+    expect((posts()[0] as Call).url.pathname).toBe('/api/ops/jobs/7/retry')
+    expect(rowFor(7).textContent).toContain('Queued again: job #7 is pending')
+  })
+
+  it('Retry all matching sends error_class CANCELLED in the dry run and the real call, and names the scope', async () => {
+    stubFetch(
+      api({
+        jobs: () => list([cancelledJob(1)]),
+        bulk: (c) =>
+          json({
+            retried: 1,
+            job_ids: [1],
+            has_more: false,
+            dry_run: JSON.parse(c.body as string).dry_run,
+          }),
+      }),
+    )
+    await mount('/ops?state=dead&error_class=CANCELLED')
+    await click(screen.getByRole('button', { name: 'Retry all matching' }))
+    expect(
+      screen.getByText(/dead jobs with error class CANCELLED/),
+    ).toBeTruthy()
+    await click(screen.getByRole('button', { name: 'Confirm retry' }))
+    const bodies = posts().map((c) => JSON.parse(c.body as string))
+    expect(bodies).toEqual([
+      { state: 'dead', error_class: 'CANCELLED', limit: 50, dry_run: true },
+      { state: 'dead', error_class: 'CANCELLED', limit: 50, dry_run: false },
+    ])
+  })
+
+  it('shows "Could not load jobs" for a malformed cancel_requested_at', async () => {
+    stubFetch(
+      api({
+        jobs: () => ({
+          items: [{ ...active(1), cancel_requested_at: 5 }],
+          next_before_id: null,
+        }),
+      }),
+    )
+    await mount('/ops?state=running')
+    expect(screen.getByText(/Could not load jobs/)).toBeTruthy()
   })
 })

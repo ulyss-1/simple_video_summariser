@@ -2,6 +2,8 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { api, ApiError, rethrowHttp } from '../api'
 import {
   bulkRetryBody,
+  cancelMessage,
+  isCancelling,
   isBulkRetryOut,
   jobsQuery,
   isHealth,
@@ -64,7 +66,8 @@ export function useOpsChannels() {
 /**
  * One page of GET /api/ops/jobs. The key carries every filter and the cursor.
  * While the page shows a running transcribe job it is refetched every 30 s (its
- * progress is stored that often); with none it is not polled. A hidden tab is not
+ * progress is stored that often) or a running job with a cancel request (#301: until
+ * the worker ends it); with none it is not polled. A hidden tab is not
  * polled either: TanStack pauses `refetchInterval` unless told otherwise.
  */
 export function useOpsJobs(filters: OpsFilters, before: number | null) {
@@ -79,7 +82,7 @@ export function useOpsJobs(filters: OpsFilters, before: number | null) {
     },
     placeholderData: keepPreviousData,
     refetchInterval: (q) =>
-      q.state.data?.items.some((j) => j.kind === 'transcribe' && j.state === 'running')
+      q.state.data?.items.some((j) => (j.kind === 'transcribe' && j.state === 'running') || isCancelling(j))
         ? PROGRESS_POLL_MS
         : false,
   })
@@ -119,6 +122,34 @@ export function useRetryJob(onResult: (jobId: number, message: string) => void) 
       await client.invalidateQueries({ queryKey: ['ops'] })
     },
     onError: (_error, id) => onResult(id, retryMessage(id, { type: 'network' })),
+  })
+}
+
+/**
+ * POST /api/videos/{video_id}/cancel (#301). Same contract as `useRetryJob`: never
+ * retried automatically, every status becomes a fixed message for `onResult`, which
+ * is keyed by the row's job id, and the lists are refetched after any HTTP response
+ * but not after a network failure.
+ */
+export function useCancelVideo(onResult: (jobId: number, message: string) => void) {
+  const client = useQueryClient()
+  return useMutation({
+    retry: 0,
+    mutationFn: async (job: { jobId: number; videoId: string }): Promise<RetryOutcome> =>
+      api
+        .post('/videos/{video_id}/cancel', { params: { path: { video_id: job.videoId } }, body: {} })
+        .then((body): RetryOutcome => ({ type: 'http', status: 200, body }))
+        .catch((error: unknown): RetryOutcome => {
+          if (error instanceof ApiError && (error.kind === 'http' || error.kind === 'parse')) {
+            return { type: 'http', status: error.status ?? 200, body: error.body ?? undefined }
+          }
+          throw error
+        }),
+    onSuccess: async (outcome, { jobId }) => {
+      onResult(jobId, cancelMessage(outcome))
+      await client.invalidateQueries({ queryKey: ['ops'] })
+    },
+    onError: (_error, { jobId }) => onResult(jobId, cancelMessage({ type: 'network' })),
   })
 }
 

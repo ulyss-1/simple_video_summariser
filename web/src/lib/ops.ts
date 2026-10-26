@@ -140,6 +140,8 @@ const HINTS = new Map<string, string>([
   ['LLM_UNAVAILABLE', 'The LLM provider was unreachable'],
   ['RESOURCE', 'Disk full or out of memory. Fix that before retrying'],
   ['BUG', 'Unhandled exception. See the traceback'],
+  // Not a failure (architecture §8.4): a user's cancel request ended the job.
+  ['CANCELLED', 'Cancelled on request; retry to resume'],
 ])
 
 /** The code (or "No class") plus a one-line hint. An unknown string is shown as-is, with no hint. */
@@ -276,6 +278,80 @@ export function retryMessage(jobId: number, outcome: RetryOutcome): string {
   }
 }
 
+// ---- cancel (#301) --------------------------------------------------------
+
+type CancelOut = components['schemas']['VideoCancelResponse']
+
+/** A running job with a stored cancel request: the worker has not stopped it yet. */
+export function isCancelling(j: Pick<JobOut, 'state' | 'cancel_requested_at'>): boolean {
+  return j.state === 'running' && typeof j.cancel_requested_at === 'string'
+}
+
+/** The state badge text: "cancelling" while a request is pending, never "cancelled". */
+export function stateLabel(j: Pick<JobOut, 'state' | 'cancel_requested_at'>): string {
+  return isCancelling(j) ? 'cancelling' : j.state
+}
+
+/** A job the user cancelled is `dead` but not a failure: neutral badge, not red. */
+export function stateBadgeClass(j: Pick<JobOut, 'state' | 'error_class'>): string {
+  switch (j.state) {
+    case 'done':
+      return 'badge badge--success'
+    case 'dead':
+      return j.error_class === 'CANCELLED' ? 'badge' : 'badge badge--danger'
+    case 'running':
+      return 'badge badge--warning'
+    default:
+      return 'badge'
+  }
+}
+
+/** Pending or running with no request stored yet. The server stays authoritative. */
+export function canCancel(j: Pick<JobOut, 'state' | 'cancel_requested_at'>): boolean {
+  return (j.state === 'pending' || j.state === 'running') && !(typeof j.cancel_requested_at === 'string')
+}
+
+/** The path (relative to the API base) for cancelling a video's processing; the id is percent-encoded. */
+export function cancelPath(videoId: string): string {
+  if (videoId === '') throw new Error('Invalid video id')
+  return `videos/${encodeURIComponent(videoId)}/cancel`
+}
+
+const CANCEL_REQUESTED_MESSAGE = 'Cancel requested: the job stops at its next checkpoint, which can take about a minute'
+
+function cancelJobs(body: unknown): CancelOut['jobs'] | null {
+  if (!isObject(body) || !Array.isArray(body.jobs)) return null
+  return body.jobs.every((x) => isObject(x) && typeof x.outcome === 'string') ? (body.jobs as CancelOut['jobs']) : null
+}
+
+/**
+ * The fixed message for a cancel result. The success status is not kept by the
+ * request helper, so a 2xx is read from the jobs' outcomes, which is what the
+ * server derives its 200 or 202 from. The raw response body is never shown.
+ */
+export function cancelMessage(outcome: RetryOutcome): string {
+  if (outcome.type === 'network') return 'Cancel failed'
+  switch (outcome.status) {
+    case 200:
+    case 202: {
+      if (outcome.status === 202) return CANCEL_REQUESTED_MESSAGE
+      const jobs = cancelJobs(outcome.body)
+      if (jobs === null) return 'Cancel failed'
+      if (jobs.some((x) => x.outcome === 'cancel_requested')) return CANCEL_REQUESTED_MESSAGE
+      if (jobs.some((x) => x.outcome === 'cancelled')) return 'Cancelled'
+      return 'Nothing to cancel: this video has no active jobs'
+    }
+    case 404:
+      return 'This video no longer exists'
+    case 429:
+      return 'Too many requests. Try again shortly.'
+    case 503:
+      return 'The database is unavailable. Try again shortly.'
+    default:
+      return 'Cancel failed'
+  }
+}
+
 // ---- queue depth ----------------------------------------------------------
 
 export interface DepthTable {
@@ -355,7 +431,8 @@ function isJob(v: unknown): v is JobOut {
     isStringOrNull(v.last_error) &&
     isStringOrNull(v.finished_at) &&
     typeof v.created_at === 'string' &&
-    (v.progress === undefined || v.progress === null || isObject(v.progress))
+    (v.progress === undefined || v.progress === null || isObject(v.progress)) &&
+    (v.cancel_requested_at === undefined || isStringOrNull(v.cancel_requested_at))
   )
 }
 
