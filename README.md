@@ -61,11 +61,15 @@ running that command in WSL (use `bash -lc` for the `npm` ones).
 - `frontend`, in `web/`: `npm ci`, `npm run --if-present gen:api:check`,
   `npm run --if-present lint`, `npm test`, `npm run build`,
   `npm audit --audit-level=high`.
-- `images`: `pytest -m image`, which builds the backend image, then the
-  whisper image (`FROM` the backend tag), the frontend image and the bake-off
+- `images`: `pytest -m "image and not bakeoff"`, which builds the backend
+  image, then the whisper image (`FROM` the backend tag) and the frontend
   image, and runs their runtime checks.
+- `bakeoff`: `pytest -m "image and bakeoff"`, the bake-off image tests (#76).
+  It runs only when a bake-off file changes (the path set is in
+  `scripts/ci_changes.sh`) and always on a push to `master`; on other PRs it
+  shows as Skipped (#316).
 
-A fourth, gated job `e2e` runs the Playwright browser suite once
+A further gated job `e2e` runs the Playwright browser suite once
 `web/package.json` has a `test:e2e` script (#177); until then it passes in a
 few seconds without installing anything.
 
