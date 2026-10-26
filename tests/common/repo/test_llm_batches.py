@@ -170,6 +170,7 @@ def test_delete_orphan_removes_the_row_of_a_dead_job(conn: psycopg.Connection[An
 
 def test_a_job_revived_after_listing_keeps_its_row(conn: psycopg.Connection[Any]) -> None:
     queue = PostgresQueue(conn)
+    conn.execute("INSERT INTO videos (video_id) VALUES (%s) ON CONFLICT DO NOTHING", (VIDEO,))
     created = queue.enqueue("analyze", VIDEO, dedupe_key="v1:anthropic")
     assert created is not None
     conn.execute("UPDATE jobs SET state = 'dead' WHERE id = %s", (created,))

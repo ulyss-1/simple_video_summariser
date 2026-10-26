@@ -167,6 +167,7 @@ def build_inprocess_handlers(
             metadata=deps.metadata,
             subtitles=deps.subtitles,
             settings=deps.settings,
+            guard_writes=False,  # in-process jobs have no jobs row to lock (#303)
         ),
         "transcribe": _check_transcriber_first(
             deps.transcriber,

@@ -114,6 +114,13 @@ class Rig:
         )
         self.conn.commit()
 
+    def only_the_seeded_row(self, video_id: str, origin: str = "adhoc") -> bool:
+        """``videos`` holds just the bare row ``mark_running`` seeded: the handler wrote none of it."""
+        return self.rows(
+            "SELECT video_id, channel_id, title, duration_sec, published_at, description,"
+            " unavailable, origin FROM videos"
+        ) == [(video_id, None, None, None, None, None, None, origin)]
+
     def nothing_written(self) -> bool:
         return all(
             self.scalar(f"SELECT count(*) FROM {table}") == 0
@@ -488,7 +495,7 @@ def test_an_invalid_video_id_writes_no_video_row(conn: psycopg.Connection[Any]) 
 
     assert rig.metadata.calls == []
     assert rig.subtitles.fetch_calls == []
-    assert rig.scalar("SELECT count(*) FROM videos WHERE title IS NOT NULL") == 0  # the bare row mark_running seeded is untouched
+    assert rig.only_the_seeded_row("--exec=x")
 
 
 def test_origin_defaults_to_adhoc_and_other_payload_keys_are_ignored(
@@ -546,7 +553,7 @@ def test_a_metadata_video_id_mismatch_raises_tool_failure_and_writes_nothing(
     with pytest.raises(ToolFailureError):
         rig.run(MANUAL_ID)
 
-    assert rig.scalar("SELECT count(*) FROM videos WHERE title IS NOT NULL") == 0  # the bare row mark_running seeded is untouched
+    assert rig.only_the_seeded_row(MANUAL_ID)
     assert rig.subtitles.fetch_calls == []
     assert rig.nothing_written()
 
@@ -627,7 +634,7 @@ def test_any_other_metadata_error_propagates_unchanged_and_writes_nothing(
         rig.run(MANUAL_ID)
 
     assert info.value is error
-    assert rig.scalar("SELECT count(*) FROM videos WHERE title IS NOT NULL") == 0  # the bare row mark_running seeded is untouched
+    assert rig.only_the_seeded_row(MANUAL_ID)
     assert rig.nothing_written()
 
 

@@ -137,7 +137,11 @@ def make_ingest_handler(
     subtitles: SubtitleSource,
     settings: Settings,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    guard_writes: bool = True,
 ) -> Callable[[Job, JobContext], None]:
+    """Build the handler. ``guard_writes`` puts its ``videos`` writes under the job-row
+    guard (#303, architecture.md 7.1); only the CLI, whose in-process jobs have no
+    ``jobs`` row, turns it off."""
     def not_yet_available(
         job: Job, ctx: JobContext, status: str, until_of: Callable[[datetime], datetime]
     ) -> None:
@@ -163,7 +167,7 @@ def make_ingest_handler(
     def handler(job: Job, ctx: JobContext) -> None:
         origin = _validate(job)
         video_id = job.video_id
-        guard = JobGuard(job.id, job.locked_by)
+        guard = JobGuard(job.id, job.locked_by) if guard_writes else None
 
         def permanent(exc: PermanentSourceError) -> None:
             record_unavailable(conn, video_id, exc.reason.value, origin=origin, guard=guard)
