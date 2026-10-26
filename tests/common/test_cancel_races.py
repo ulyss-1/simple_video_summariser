@@ -22,9 +22,10 @@ from typing import Any
 
 import psycopg
 import pytest
+from fastapi.testclient import TestClient
 from psycopg.rows import dict_row
 
-from common.config import Settings
+from common.config import Settings, get_settings
 from common.errors import Cancelled, TransientNetworkError
 from common.queue import _CLAIM_SQL, HeartbeatResult, Job, PostgresQueue
 from common.repo.deleted_videos import (
@@ -35,6 +36,7 @@ from common.repo.deleted_videos import (
 )
 from common.repo.jobs import cancel_video
 from common.worker import EXIT_HUNG_HANDLER, JobContext, Worker
+from services.api.main import create_app
 
 pytestmark = pytest.mark.integration
 
@@ -81,6 +83,18 @@ def holder(head_dsn: str) -> Iterator[psycopg.Connection[Any]]:
 @pytest.fixture
 def queue(conn: psycopg.Connection[Any]) -> PostgresQueue:
     return PostgresQueue(conn, settings=_settings(), rng=random.Random(1))
+
+
+@pytest.fixture
+def api(
+    head_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> Iterator[TestClient]:
+    """The FastAPI app over the test database."""
+    monkeypatch.setenv("DATABASE_URL", head_dsn)
+    monkeypatch.setenv("AUDIO_DIR", str(tmp_path))
+    get_settings.cache_clear()
+    with TestClient(create_app()) as client:
+        yield client
 
 
 def seed_video(conn: psycopg.Connection[Any], video_id: str = VID) -> None:
@@ -760,6 +774,7 @@ def test_a_heartbeat_tick_delivers_the_request_the_handler_stops_and_the_worker_
     conn: psycopg.Connection[Any],
     connect: Callable[[], psycopg.Connection[Any]],
     queue: PostgresQueue,
+    api: TestClient,
     tmp_path: Any,
 ) -> None:
     seed_video(conn)
@@ -771,11 +786,13 @@ def test_a_heartbeat_tick_delivers_the_request_the_handler_stops_and_the_worker_
     at_checkpoint = threading.Event()
     go_on = threading.Event()
     seen: list[str] = []
+    first_ctx: list[JobContext] = []
 
     def handler(job: Job, ctx: JobContext) -> None:
         if job.id != first:
             seen.append("second")
             return
+        first_ctx.append(ctx)
         at_checkpoint.set()
         assert go_on.wait(DEADLINE_SEC), "the handler was never released"
         ctx.check_cancelled()
@@ -797,12 +814,20 @@ def test_a_heartbeat_tick_delivers_the_request_the_handler_stops_and_the_worker_
     runner = Call(lambda: worker.run(max_iterations=2))
     assert at_checkpoint.wait(DEADLINE_SEC), "the handler never reached its checkpoint"
 
-    entries = cancel_video(connect(), VID)
-    assert [e.outcome for e in entries] == ["cancel_requested"]
+    response = api.post(f"/videos/{VID}/cancel", json={})
+    assert response.status_code == 202
+    assert response.json()["jobs"] == [
+        {"job_id": first, "kind": "ingest", "outcome": "cancel_requested"}
+    ]
+    [ctx] = first_ctx
+    assert not ctx.cancelled  # the POST only stored the request; the tick delivers it
     second = queue.enqueue("ingest", "abcdefghijk")
     assert second is not None
     second_ids.append(second)
     timers.fire(60.0)  # one heartbeat tick, no sleeping
+    # The flag the handler holds, observed before the handler is released.
+    assert ctx._cancel_event.wait(DEADLINE_SEC), "the heartbeat tick never set ctx.cancelled"
+    assert ctx.cancelled
     go_on.set()
     runner.result("the worker")
 
