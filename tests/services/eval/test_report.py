@@ -575,3 +575,82 @@ def test_usage_totals_add_large_numbers_without_a_separator() -> None:
         [entry(run(LABEL_A, cache_read=1000), None), entry(run(LABEL_A, cache_read=1234567), None, OTHER)],
     )
     assert usage_row(out, "Total cache read tokens")[0] == "1235567"
+
+
+def summary_row(out: str, first_cell: str) -> list[str]:
+    """Cells of the Summary row whose first cell is ``first_cell`` (title or ``**Total**``)."""
+    for line in out.splitlines():
+        if line.startswith("|"):
+            cells = [c.strip() for c in line.strip("|").split("|")]
+            if cells[0] == first_cell and len(cells) == 11:
+                return cells
+    raise AssertionError(f"no Summary row {first_cell!r}")
+
+
+def duration_cells(out: str, first_cell: str) -> list[str]:
+    return summary_row(out, first_cell)[-2:]
+
+
+def titled(n: int, a: AnalysisRun | None, b: AnalysisRun | None) -> VideoEntry:
+    return entry(a, b, vid=f"vid{n:08d}", title=f"Talk {n}")
+
+
+def test_duration_not_recorded_differs_from_a_missing_run_per_video_and_total() -> None:
+    out = render_report(LABEL_A, LABEL_B, [titled(1, run(LABEL_A, duration_ms=None), run(LABEL_B, duration_ms=250))])
+    assert duration_cells(out, "Talk 1") == ["not recorded", "250 ms"]
+    assert duration_cells(out, "**Total**") == ["not recorded", "250 ms"]
+    # the other eight cells are untouched
+    expected = ["0", "0", "0", "0", "0/0", "0/0", "150", "150"]
+    assert summary_row(out, "Talk 1")[1:9] == expected
+    assert summary_row(out, "**Total**")[1:9] == expected
+
+
+def test_unrecorded_duration_on_a_side_whose_other_run_is_missing() -> None:
+    out = render_report(LABEL_A, LABEL_B, [titled(1, run(LABEL_A, duration_ms=None), None)])
+    assert duration_cells(out, "Talk 1") == ["not recorded", "-"]
+    assert duration_cells(out, "**Total**") == ["not recorded", "-"]
+
+
+def test_partial_total_counts_only_present_runs() -> None:
+    entries = [
+        titled(1, run(LABEL_A, duration_ms=100), None),
+        titled(2, run(LABEL_A, duration_ms=None), None),
+        titled(3, None, None),
+    ]
+    out = render_report(LABEL_A, LABEL_B, entries)
+    assert [duration_cells(out, f"Talk {n}")[0] for n in (1, 2, 3)] == ["100 ms", "not recorded", "-"]
+    assert duration_cells(out, "**Total**")[0] == "100 ms (1 of 2 runs recorded)"
+
+
+def test_a_known_zero_duration_is_not_unrecorded() -> None:
+    entries = [titled(1, run(LABEL_A, duration_ms=0), None), titled(2, run(LABEL_A, duration_ms=None), None)]
+    out = render_report(LABEL_A, LABEL_B, entries)
+    assert duration_cells(out, "Talk 1")[0] == "0 ms"
+    assert duration_cells(out, "Talk 2")[0] == "not recorded"
+    assert duration_cells(out, "**Total**")[0] == "0 ms (1 of 2 runs recorded)"
+
+
+def test_known_zero_durations_only() -> None:
+    entries = [titled(n, run(LABEL_A, duration_ms=0), run(LABEL_B, duration_ms=0)) for n in (1, 2)]
+    out = render_report(LABEL_A, LABEL_B, entries)
+    assert duration_cells(out, "Talk 1") == ["0 ms", "0 ms"]
+    assert duration_cells(out, "Talk 2") == ["0 ms", "0 ms"]
+    assert duration_cells(out, "**Total**") == ["0 ms", "0 ms"]
+
+
+def test_duration_totals_are_computed_per_side() -> None:
+    entries = [
+        titled(1, run(LABEL_A, duration_ms=100), run(LABEL_B, duration_ms=200)),
+        titled(2, run(LABEL_A, duration_ms=None), run(LABEL_B, duration_ms=300)),
+    ]
+    out = render_report(LABEL_A, LABEL_B, entries)
+    assert duration_cells(out, "**Total**") == ["100 ms (1 of 2 runs recorded)", "500 ms"]
+
+
+def test_duration_total_has_no_thousands_separator() -> None:
+    entries = [
+        titled(1, run(LABEL_A, duration_ms=1000), None),
+        titled(2, run(LABEL_A, duration_ms=1234567), None),
+    ]
+    out = render_report(LABEL_A, LABEL_B, entries)
+    assert duration_cells(out, "**Total**")[0] == "1235567 ms"
