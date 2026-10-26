@@ -32,6 +32,7 @@ from common.errors import (
 )
 from common.models import AudioRef, Chunk, Segment, TranscriptResult
 from common.queue import HeartbeatResult, Job, PostgresQueue
+from common.repo.deleted_videos import delete_video
 from common.repo.media import delete_media as real_delete_media
 from common.repo.transcripts import save_transcript
 from services.transcriber.transcribe import (
@@ -858,6 +859,65 @@ def test_deletion_only_touches_files_under_audio_dir(
     rig.run()
 
     assert outside.read_bytes() == b"keep me"
+
+
+# --- a video deleted while the transcribe job runs (#303) -----------------------------------
+
+
+class DeletingAudio(FakeAudio):
+    """The audio source that lets a ``DELETE`` land right after the file exists, before the row."""
+
+    def __init__(self, delete: Callable[[], None]) -> None:
+        super().__init__()
+        self.delete = delete
+
+    def fetch_normalized(self, video_id: str, dest: Path) -> AudioRef:
+        audio = super().fetch_normalized(video_id, dest)
+        self.delete()
+        return audio
+
+
+@pytest.mark.parametrize("moment", ["before_register_media", "during_whisper", "before_save"])
+def test_a_video_deleted_under_a_running_transcribe_leaves_no_audio_file_or_row_even_with_audio_keep(
+    conn: psycopg.Connection[Any], head_dsn: str, tmp_path: Path, moment: str
+) -> None:
+    """The API unlinks only the files it knew of at delete time; the job removes the rest."""
+
+    def delete() -> None:
+        with psycopg.connect(head_dsn) as other:
+            delete_video(other, VID)  # the API's unlink is not simulated: the job must clean up
+
+    audio: FakeAudio = DeletingAudio(delete) if moment == "before_register_media" else FakeAudio()
+    transcriber = FakeTranscriber(on_call=lambda _audio: delete() if moment == "during_whisper" else None)
+
+    def chunker(segments: Any, *, chunk_sec: int, overlap_sec: int) -> list[Chunk]:
+        if moment == "before_save":
+            delete()
+        return chunk_segments(segments, chunk_sec=chunk_sec, overlap_sec=overlap_sec)
+
+    rig = Rig(
+        conn, head_dsn, tmp_path, audio=audio, transcriber=transcriber, chunker=chunker, AUDIO_KEEP=True
+    )
+
+    with pytest.raises((psycopg.Error, Cancelled)):
+        rig.run()
+
+    assert not rig.file().exists()
+    assert rig.media() == []
+    assert rig.count("videos") == 0
+    assert rig.count("transcripts") == 0
+
+
+def test_audio_keep_true_still_keeps_the_audio_of_a_cancelled_transcribe_whose_video_exists(
+    make_rig: Callable[..., Rig],
+) -> None:
+    rig = make_rig(AUDIO_KEEP=True, transcriber=FakeTranscriber(Cancelled()))
+
+    with pytest.raises(Cancelled):
+        rig.run()
+
+    assert rig.file().exists()
+    assert len(rig.media()) == 1
 
 
 # --- retries through the real queue ---------------------------------------------------------

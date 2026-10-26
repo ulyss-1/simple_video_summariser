@@ -29,14 +29,16 @@ from common.config import Settings, get_settings
 from common.errors import Cancelled, TransientNetworkError
 from common.queue import _CLAIM_SQL, HeartbeatResult, Job, PostgresQueue
 from common.repo.deleted_videos import (
-    VideoCancelling,
     VideoNotFound,
-    VideoRunning,
     delete_video,
 )
+from common.models import Chunk, Segment, VideoMeta
 from common.repo.jobs import cancel_video
+from common.repo.transcripts import save_chunks, save_transcript
+from common.repo.videos import JobGuard, guard_video_write, upsert_video
 from common.worker import EXIT_HUNG_HANDLER, JobContext, Worker
 from services.api.main import create_app
+from services.api.routes_write import submit_video
 
 pytestmark = pytest.mark.integration
 
@@ -687,7 +689,7 @@ def test_delete_that_wins_with_only_pending_jobs_makes_the_cancel_answer_not_fou
     ).fetchone() == (0,)
 
 
-def test_delete_that_goes_first_with_a_running_job_is_refused_and_the_cancel_then_asks_the_job(
+def test_delete_that_goes_first_with_a_running_job_succeeds_and_the_cancel_then_finds_no_video(
     conn: psycopg.Connection[Any],
     connect: Callable[[], psycopg.Connection[Any]],
     queue: PostgresQueue,
@@ -706,15 +708,15 @@ def test_delete_that_goes_first_with_a_running_job_is_refused_and_the_cancel_the
 
     deleting.resume.set()
 
-    with pytest.raises(VideoRunning) as refused:
-        delete.result("delete")
-    assert not isinstance(refused.value, VideoCancelling)  # no request was stored yet
-    assert [(e.job_id, e.outcome) for e in cancel.result("cancel")] == [
-        (job.id, "cancel_requested")
-    ]
+    delete.result("delete")
+    with pytest.raises(VideoNotFound):
+        cancel.result("cancel")
+    kept = row(conn, job.id)
+    assert (kept["state"], kept["cancel_requested_at"] is not None) == ("running", True)
+    assert_deleted(conn)
 
 
-def test_cancel_that_wins_with_a_running_job_makes_the_delete_say_cancellation_in_progress(
+def test_cancel_that_wins_with_a_running_job_lets_the_delete_through_and_the_request_stays(
     conn: psycopg.Connection[Any],
     connect: Callable[[], psycopg.Connection[Any]],
     queue: PostgresQueue,
@@ -734,9 +736,19 @@ def test_cancel_that_wins_with_a_running_job_makes_the_delete_say_cancellation_i
     assert [(e.job_id, e.outcome) for e in cancel.result("cancel")] == [
         (job.id, "cancel_requested")
     ]
-    with pytest.raises(VideoCancelling):
-        delete.result("delete")
-    assert row(conn, job.id)["state"] == "running"
+    delete.result("delete")
+    kept = row(conn, job.id)
+    assert (kept["state"], kept["cancel_requested_at"] is not None) == ("running", True)
+    assert_deleted(conn)
+
+
+def assert_deleted(conn: psycopg.Connection[Any], video_id: str = VID) -> None:
+    """Tombstone written, no ``videos`` row."""
+    assert conn.execute(
+        "SELECT (SELECT count(*) FROM videos WHERE video_id = %(v)s),"
+        " (SELECT count(*) FROM deleted_videos WHERE video_id = %(v)s)",
+        {"v": video_id},
+    ).fetchone() == (0, 1)
 
 
 def test_cancel_that_wins_with_only_pending_jobs_lets_the_delete_through(
@@ -763,6 +775,267 @@ def test_cancel_that_wins_with_only_pending_jobs_lets_the_delete_through(
     assert conn.execute(
         "SELECT count(*) FROM videos WHERE video_id = %s", (VID,)
     ).fetchone() == (0,)
+
+
+# ---------------------------------------------------------------------------
+# DELETE against handoff, raise_priority, the ingest guard, POST /videos (#303)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def tx_connect(head_dsn: str) -> Iterator[Callable[[], psycopg.Connection[Any]]]:
+    """Connections with an implicit transaction, as the ingest handler's own."""
+    opened: list[psycopg.Connection[Any]] = []
+
+    def _connect() -> psycopg.Connection[Any]:
+        connection = psycopg.connect(head_dsn)
+        opened.append(connection)
+        return connection
+
+    yield _connect
+    for connection in opened:
+        connection.close()
+
+
+def paused_delete(connect: Callable[[], psycopg.Connection[Any]]) -> tuple[PausingConn, Call[Any]]:
+    """A real ``delete_video`` stopped right after it locked the jobs and the video row."""
+    deleting = PausingConn(
+        connect(), lambda sql: "FROM videos" in sql and "FOR UPDATE" in sql
+    )
+    call = Call(lambda: delete_video(deleting, VID))  # type: ignore[arg-type]
+    deleting.wait_paused("delete")
+    return deleting, call
+
+
+def test_handoff_behind_a_delete_raises_cancelled_not_value_error_and_inserts_nothing(
+    conn: psycopg.Connection[Any],
+    connect: Callable[[], psycopg.Connection[Any]],
+    queue: PostgresQueue,
+) -> None:
+    seed_video(conn)
+    assert queue.enqueue("ingest", VID) is not None
+    _manager, parent = claim_job(queue)
+    deleting, delete = paused_delete(connect)
+    handing = PostgresQueue(connect(), settings=_settings())
+    call = Call(lambda: handing.handoff(parent.id, "transcribe", VID))
+    wait_blocked(conn, handing._conn.info.backend_pid, "handoff behind the delete")
+
+    deleting.resume.set()
+
+    delete.result("delete")
+    with pytest.raises(Cancelled):
+        call.result("handoff")
+    assert active(conn) == [(parent.id, "running")]  # no successor for a deleted video
+    assert_deleted(conn)
+
+
+def test_a_delete_behind_a_handoff_removes_the_successor_the_handoff_inserted(
+    holder: psycopg.Connection[Any],
+    conn: psycopg.Connection[Any],
+    connect: Callable[[], psycopg.Connection[Any]],
+    queue: PostgresQueue,
+) -> None:
+    seed_video(conn)
+    assert queue.enqueue("ingest", VID) is not None
+    _manager, parent = claim_job(queue)
+    # What handoff does: the parent row, then the video, then the successor.
+    holder.execute("SELECT 1 FROM jobs WHERE id = %s FOR UPDATE", (parent.id,))
+    holder.execute("SELECT 1 FROM videos WHERE video_id = %s FOR UPDATE", (VID,))
+    holder.execute(
+        "INSERT INTO jobs (video_id, kind) VALUES (%s, 'transcribe')", (VID,)
+    )
+    deleting = connect()
+    delete = Call(lambda: delete_video(deleting, VID))
+    wait_blocked(conn, deleting.info.backend_pid, "delete behind the handoff")
+
+    holder.commit()
+
+    delete.result("delete")
+    assert active(conn) == [(parent.id, "running")]  # the successor went with the delete
+    assert_deleted(conn)
+
+
+def test_raise_priority_behind_a_delete_finishes_without_a_deadlock(
+    conn: psycopg.Connection[Any],
+    connect: Callable[[], psycopg.Connection[Any]],
+    queue: PostgresQueue,
+) -> None:
+    seed_video(conn)
+    assert queue.enqueue("ingest", VID) is not None
+    _manager, job = claim_job(queue)
+    deleting, delete = paused_delete(connect)
+    raising = PostgresQueue(connect(), settings=_settings())
+    call = Call(lambda: raising.raise_priority(VID, 100))
+    wait_blocked(conn, raising._conn.info.backend_pid, "raise_priority behind the delete")
+
+    deleting.resume.set()
+
+    delete.result("delete")
+    assert call.result("raise_priority") == [job.id]  # only the kept running producer is left
+    assert_deleted(conn)
+
+
+def test_a_delete_behind_raise_priority_removes_what_it_raised(
+    holder: psycopg.Connection[Any],
+    conn: psycopg.Connection[Any],
+    connect: Callable[[], psycopg.Connection[Any]],
+    queue: PostgresQueue,
+) -> None:
+    seed_video(conn)
+    pending = queue.enqueue("ingest", VID)
+    assert pending is not None
+    holder.execute("SELECT id FROM jobs WHERE video_id = %s ORDER BY id FOR UPDATE", (VID,))
+    holder.execute("SELECT 1 FROM videos WHERE video_id = %s FOR UPDATE", (VID,))
+    holder.execute("UPDATE jobs SET priority = 100 WHERE id = %s", (pending,))
+    deleting = connect()
+    delete = Call(lambda: delete_video(deleting, VID))
+    wait_blocked(conn, deleting.info.backend_pid, "delete behind raise_priority")
+
+    holder.commit()
+
+    delete.result("delete")
+    assert conn.execute("SELECT count(*) FROM jobs").fetchone() == (0,)
+    assert_deleted(conn)
+
+
+def test_two_deletes_of_the_same_video_give_one_success_and_one_not_found(
+    conn: psycopg.Connection[Any],
+    connect: Callable[[], psycopg.Connection[Any]],
+    queue: PostgresQueue,
+) -> None:
+    seed_video(conn)
+    assert queue.enqueue("ingest", VID) is not None
+    _manager, _job = claim_job(queue)
+    first, first_call = paused_delete(connect)
+    second_conn = connect()
+    second_call = Call(lambda: delete_video(second_conn, VID))
+    wait_blocked(conn, second_conn.info.backend_pid, "the second delete")
+
+    first.resume.set()
+
+    first_call.result("the first delete")
+    with pytest.raises(VideoNotFound):
+        second_call.result("the second delete")
+    assert_deleted(conn)
+
+
+def seed_transcript(conn: psycopg.Connection[Any]) -> None:
+    transcript_id = save_transcript(
+        conn, VID, "whisper", "en", "none", (Segment(0.0, 1.0, "hi"),), None
+    )
+    save_chunks(conn, transcript_id, "time:900:60", [Chunk(0, 0.0, 1.0, "hi")])
+
+
+def test_a_guarded_worker_write_holding_its_job_lock_makes_the_delete_wait_and_the_delete_cascades_it(
+    tx_connect: Callable[[], psycopg.Connection[Any]],
+    conn: psycopg.Connection[Any],
+    connect: Callable[[], psycopg.Connection[Any]],
+    queue: PostgresQueue,
+) -> None:
+    seed_video(conn)
+    assert queue.enqueue("ingest", VID) is not None
+    _manager, job = claim_job(queue)
+    worker = tx_connect()
+    guard_video_write(worker, VID, JobGuard(job.id, job.locked_by))
+    seed_transcript(worker)  # what the handler writes under the guard, uncommitted
+    deleting = connect()
+    delete = Call(lambda: delete_video(deleting, VID))
+    wait_blocked(conn, deleting.info.backend_pid, "delete behind the guarded write")
+
+    worker.commit()
+
+    delete.result("delete")
+    assert conn.execute(
+        "SELECT (SELECT count(*) FROM transcripts), (SELECT count(*) FROM transcript_chunks)"
+    ).fetchone() == (0, 0)
+    assert_deleted(conn)
+
+
+def test_a_guarded_write_behind_a_delete_sees_the_request_and_writes_nothing(
+    tx_connect: Callable[[], psycopg.Connection[Any]],
+    conn: psycopg.Connection[Any],
+    connect: Callable[[], psycopg.Connection[Any]],
+    queue: PostgresQueue,
+) -> None:
+    seed_video(conn)
+    assert queue.enqueue("ingest", VID) is not None
+    _manager, job = claim_job(queue)
+    deleting, delete = paused_delete(connect)
+    worker = tx_connect()
+    meta = VideoMeta(
+        video_id=VID,
+        channel_id="UCnewchannel0000000000A",
+        title="t",
+        duration_sec=1,
+        published_at=None,
+        description=None,
+        language=None,
+        live_status="not_live",
+        manual_subtitle_langs=(),
+        auto_caption_langs=(),
+    )
+    write = Call(
+        lambda: upsert_video(worker, meta, "adhoc", guard=JobGuard(job.id, job.locked_by))
+    )
+    wait_blocked(conn, worker.info.backend_pid, "the guarded upsert behind the delete")
+
+    deleting.resume.set()
+
+    delete.result("delete")
+    with pytest.raises(Cancelled):
+        write.result("the guarded upsert")
+    assert_deleted(conn)
+    assert conn.execute("SELECT count(*) FROM channels").fetchone() == (0,)  # no stub channel
+
+
+def test_a_post_videos_behind_a_delete_recreates_the_video_with_a_fresh_ingest_job(
+    conn: psycopg.Connection[Any],
+    connect: Callable[[], psycopg.Connection[Any]],
+    queue: PostgresQueue,
+) -> None:
+    seed_video(conn)
+    assert queue.enqueue("ingest", VID) is not None
+    deleting, delete = paused_delete(connect)
+    submitting = connect()
+    submit = Call(lambda: submit_video(submitting, VID, queue=PostgresQueue(submitting)))
+    wait_blocked(conn, submitting.info.backend_pid, "the submission behind the delete")
+
+    deleting.resume.set()
+
+    delete.result("delete")
+    result = submit.result("the submission")
+    assert result.created
+    assert conn.execute(
+        "SELECT (SELECT count(*) FROM videos), (SELECT count(*) FROM deleted_videos)"
+    ).fetchone() == (1, 0)
+    assert active(conn) == [(result.job_id, "pending")]
+
+
+def test_a_delete_behind_a_post_videos_removes_both_the_video_and_the_job_it_found(
+    conn: psycopg.Connection[Any],
+    connect: Callable[[], psycopg.Connection[Any]],
+    queue: PostgresQueue,
+) -> None:
+    seed_video(conn)
+    assert queue.enqueue("ingest", VID) is not None
+    inner = connect()
+    submitting = PausingConn(
+        inner, lambda sql: "FROM videos" in sql and "FOR UPDATE" in sql
+    )
+    submit = Call(
+        lambda: submit_video(submitting, VID, queue=PostgresQueue(inner))  # type: ignore[arg-type]
+    )
+    submitting.wait_paused("the submission")
+    deleting = connect()
+    delete = Call(lambda: delete_video(deleting, VID))
+    wait_blocked(conn, deleting.info.backend_pid, "delete behind the submission")
+
+    submitting.resume.set()
+
+    assert not submit.result("the submission").created
+    delete.result("delete")
+    assert conn.execute("SELECT count(*) FROM jobs").fetchone() == (0,)
+    assert_deleted(conn)  # a tombstone and no video: never both a tombstone and a row
 
 
 # ---------------------------------------------------------------------------
@@ -836,6 +1109,92 @@ def test_a_heartbeat_tick_delivers_the_request_the_handler_stops_and_the_worker_
     assert seen == ["second"]
     assert row(conn, second_ids[0])["state"] == "done"
     assert queue.heartbeat(first, "w1") is HeartbeatResult.LOST
+
+
+def test_a_delete_under_a_running_job_cancels_it_through_a_real_worker_which_claims_the_next_job(
+    conn: psycopg.Connection[Any],
+    connect: Callable[[], psycopg.Connection[Any]],
+    queue: PostgresQueue,
+    api: TestClient,
+    tmp_path: Any,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level("INFO", logger="common.errors")
+    seed_video(conn)
+    seed_video(conn, "abcdefghijk")
+    first = queue.enqueue("ingest", VID)
+    assert first is not None
+    timers = ManualTimers()
+    at_checkpoint = threading.Event()
+    go_on = threading.Event()
+    seen: list[str] = []
+    first_ctx: list[JobContext] = []
+
+    def handler(job: Job, ctx: JobContext) -> None:
+        if job.id != first:
+            seen.append("second")
+            return
+        first_ctx.append(ctx)
+        at_checkpoint.set()
+        assert go_on.wait(DEADLINE_SEC), "the handler was never released"
+        ctx.check_cancelled()
+        seen.append("not cancelled")  # pragma: no cover - the test would fail below
+
+    worker = Worker(
+        "w1",
+        ["ingest"],
+        handler,
+        queue,
+        liveness_path=tmp_path / "hb",
+        heartbeat_sec=60,
+        heartbeat_queue_factory=lambda: PostgresQueue(connect(), settings=_settings()),
+        runtime_limit_sec=lambda job: None,
+        timer_factory=timers,
+        install_signal_handlers=False,
+        sleep=lambda seconds: None,
+    )
+    runner = Call(lambda: worker.run(max_iterations=2))
+    assert at_checkpoint.wait(DEADLINE_SEC), "the handler never reached its checkpoint"
+
+    response = api.delete(f"/videos/{VID}")  # at once: no wait for the worker
+    assert response.status_code == 204
+    [ctx] = first_ctx
+    assert not ctx.cancelled  # the delete stored the request; the heartbeat tick delivers it
+    kept = row(conn, first)
+    assert (kept["state"], kept["cancel_requested_at"] is not None) == ("running", True)
+    second = queue.enqueue("ingest", "abcdefghijk")
+    assert second is not None
+    timers.fire(60.0)  # one heartbeat tick, no sleeping
+    assert ctx._cancel_event.wait(DEADLINE_SEC), "the heartbeat tick never set ctx.cancelled"
+    go_on.set()
+    runner.result("the worker")  # returns: the worker carried on to the second job, did not exit
+
+    stored = row(conn, first)
+    assert (stored["state"], stored["error_class"], stored["last_error"]) == (
+        "dead",
+        "CANCELLED",
+        "cancelled on request",
+    )
+    assert seen == ["second"]
+    assert row(conn, second)["state"] == "done"
+    cancelled = [r for r in caplog.records if r.getMessage() == "job.cancelled"]
+    assert [(r.levelname, r.job_id) for r in cancelled] == [("INFO", first)]  # type: ignore[attr-defined]
+    assert_deleted(conn)
+
+
+def test_a_job_that_returns_normally_after_the_delete_ends_done_and_nothing_of_the_video_is_back(
+    conn: psycopg.Connection[Any], queue: PostgresQueue
+) -> None:
+    seed_video(conn)
+    assert queue.enqueue("ingest", VID) is not None
+    manager, job = claim_job(queue)
+    delete_video(conn, VID)
+
+    manager.__exit__(None, None, None)  # the handler returned: its work is real, the job is done
+
+    stored = row(conn, job.id)
+    assert (stored["state"], stored["error_class"]) == ("done", None)
+    assert_deleted(conn)
 
 
 def test_a_retryable_failure_after_the_request_ends_cancelled_with_no_retry_scheduled(
