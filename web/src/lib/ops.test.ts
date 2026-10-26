@@ -7,6 +7,12 @@ import {
   bulkRetryMessage,
   bulkScopeLabel,
   buildJobsRequest,
+  cancelMessage,
+  cancelPath,
+  canCancel,
+  isCancelling,
+  stateBadgeClass,
+  stateLabel,
   isBulkRetryOut,
   collapseError,
   depthTable,
@@ -138,6 +144,7 @@ describe('errorClassInfo', () => {
     ['LLM_UNAVAILABLE', 'The LLM provider was unreachable'],
     ['RESOURCE', 'Disk full or out of memory. Fix that before retrying'],
     ['BUG', 'Unhandled exception. See the traceback'],
+    ['CANCELLED', 'Cancelled on request; retry to resume'],
   ])('%s has its hint', (code, hint) => {
     expect(errorClassInfo(code)).toEqual({ label: code, hint })
   })
@@ -322,6 +329,9 @@ describe('isJobList', () => {
     heartbeat_at: null, finished_at: null, created_at: '2026-01-01T00:00:00Z',
   }
   const ok = (over: Record<string, unknown> = {}, next: unknown = null) => ({ items: [{ ...job, ...over }], next_before_id: next })
+  it.each([[undefined], [null], ['2026-10-26T10:00:00Z']])('accepts cancel_requested_at %j', (v) => {
+    expect(isJobList(ok(v === undefined ? {} : { cancel_requested_at: v }))).toBe(true)
+  })
   it('accepts a list and null/positive cursors', () => {
     expect(isJobList({ items: [], next_before_id: null })).toBe(true)
     expect(isJobList(ok())).toBe(true)
@@ -347,6 +357,7 @@ describe('isJobList', () => {
     ['last_error', 1], ['last_error', undefined],
     ['finished_at', 1], ['finished_at', undefined],
     ['created_at', null], ['created_at', 5],
+    ['cancel_requested_at', 1], ['cancel_requested_at', true], ['cancel_requested_at', {}],
   ])('rejects a job whose %s is %j', (field, value) => {
     expect(isJobList(ok({ [field]: value }))).toBe(false)
   })
@@ -387,5 +398,98 @@ describe('bulk retry helpers (#161)', () => {
     for (const v of [null, {}, { retried: -1, job_ids: [], has_more: false, dry_run: true }, { retried: 1, job_ids: ['1'], has_more: false, dry_run: true }, { retried: 1, job_ids: [1], has_more: 'no', dry_run: true }]) {
       expect(isBulkRetryOut(v)).toBe(false)
     }
+  })
+})
+
+describe('cancel helpers (#301)', () => {
+  const j = (state: string, cancel_requested_at?: string | null, error_class: string | null = null) =>
+    ({ state, cancel_requested_at, error_class }) as never
+
+  it('CANCELLED hint is not a failure hint', () => {
+    const { label, hint } = errorClassInfo('CANCELLED')
+    expect(label).toBe('CANCELLED')
+    expect(hint).not.toMatch(/update|fix|error/i)
+    expect(ERROR_CLASSES).toContain('CANCELLED')
+  })
+
+  it('isCancelling is true only for a running job with a request', () => {
+    expect(isCancelling(j('running', '2026-10-26T10:00:00Z'))).toBe(true)
+    expect(isCancelling(j('running', null))).toBe(false)
+    expect(isCancelling(j('running'))).toBe(false)
+    expect(isCancelling(j('done', '2026-10-26T10:00:00Z'))).toBe(false)
+    expect(isCancelling(j('pending', '2026-10-26T10:00:00Z'))).toBe(false)
+    expect(isCancelling(j('dead', '2026-10-26T10:00:00Z', 'CANCELLED'))).toBe(false)
+  })
+
+  it('stateLabel says cancelling, never cancelled', () => {
+    expect(stateLabel(j('running', '2026-10-26T10:00:00Z'))).toBe('cancelling')
+    expect(stateLabel(j('running', null))).toBe('running')
+    expect(stateLabel(j('done', '2026-10-26T10:00:00Z'))).toBe('done')
+    expect(stateLabel(j('dead', null, 'CANCELLED'))).toBe('dead')
+  })
+
+  it('a CANCELLED dead job has the neutral badge, other dead jobs the danger badge', () => {
+    expect(stateBadgeClass(j('dead', null, 'CANCELLED'))).toBe('badge')
+    expect(stateBadgeClass(j('dead', null, 'BUG'))).toBe('badge badge--danger')
+    expect(stateBadgeClass(j('dead', null, null))).toBe('badge badge--danger')
+    expect(stateBadgeClass(j('done'))).toBe('badge badge--success')
+    expect(stateBadgeClass(j('running'))).toBe('badge badge--warning')
+    expect(stateBadgeClass(j('pending'))).toBe('badge')
+  })
+
+  it('canCancel: pending or running with no request only', () => {
+    expect(canCancel(j('pending', null))).toBe(true)
+    expect(canCancel(j('pending'))).toBe(true)
+    expect(canCancel(j('running', null))).toBe(true)
+    expect(canCancel(j('running', '2026-10-26T10:00:00Z'))).toBe(false)
+    expect(canCancel(j('done'))).toBe(false)
+    expect(canCancel(j('dead', null, 'CANCELLED'))).toBe(false)
+  })
+
+  it('cancelPath percent-encodes the video id and rejects an empty one', () => {
+    expect(cancelPath('abcdefghijk')).toBe('videos/abcdefghijk/cancel')
+    expect(cancelPath('a/b?c#d')).toBe('videos/a%2Fb%3Fc%23d/cancel')
+    expect(() => cancelPath('')).toThrow()
+  })
+
+  const job = (outcome: string) => ({ job_id: 1, kind: 'ingest', outcome })
+  const REQUESTED = 'Cancel requested: the job stops at its next checkpoint, which can take about a minute'
+  it.each([
+    [202, { video_id: 'v', jobs: [job('cancel_requested')] }, REQUESTED],
+    [202, { video_id: 'v', jobs: [job('cancel_requested'), job('cancelled')] }, REQUESTED],
+    [200, { video_id: 'v', jobs: [job('cancelled')] }, 'Cancelled'],
+    [200, { video_id: 'v', jobs: [job('cancelled'), job('cancelled')] }, 'Cancelled'],
+    [200, { video_id: 'v', jobs: [] }, 'Nothing to cancel: this video has no active jobs'],
+    [404, { detail: 'video not found <b>x</b>' }, 'This video no longer exists'],
+    [429, undefined, 'Too many requests. Try again shortly.'],
+    [503, undefined, 'The database is unavailable. Try again shortly.'],
+    [415, undefined, 'Cancel failed'],
+    [422, undefined, 'Cancel failed'],
+    [500, { detail: 'secret' }, 'Cancel failed'],
+  ])('maps %i %j to a fixed message', (status, body, message) => {
+    expect(cancelMessage({ type: 'http', status, body })).toBe(message)
+  })
+  it('a network failure and an unreadable 2xx body are "Cancel failed"', () => {
+    expect(cancelMessage({ type: 'network' })).toBe('Cancel failed')
+    expect(cancelMessage({ type: 'http', status: 200, body: 'nope' })).toBe('Cancel failed')
+    expect(cancelMessage({ type: 'http', status: 200, body: { jobs: 'x' } })).toBe('Cancel failed')
+  })
+  it('a 202 whose body is unreadable still says a request was stored', () => {
+    expect(cancelMessage({ type: 'http', status: 202, body: undefined })).toBe(REQUESTED)
+  })
+})
+
+describe('CANCELLED filter and bulk retry (#301)', () => {
+  it('?error_class=CANCELLED is accepted and sent', () => {
+    const r = parseOpsParams(p('state=dead&error_class=CANCELLED'))
+    expect(r.filters.errorClass).toBe('CANCELLED')
+    expect(r.corrected).toBeNull()
+    expect(buildJobsRequest(r.filters, null).get('error_class')).toBe('CANCELLED')
+  })
+  it('bulk retry body and scope for CANCELLED', () => {
+    const f = { state: 'dead', kind: null, errorClass: 'CANCELLED' } as const
+    expect(bulkRetryBody(f, true)).toEqual({ state: 'dead', error_class: 'CANCELLED', limit: 50, dry_run: true })
+    expect(bulkRetryBody(f, false).error_class).toBe('CANCELLED')
+    expect(bulkScopeLabel(f)).toBe('dead jobs with error class CANCELLED')
   })
 })

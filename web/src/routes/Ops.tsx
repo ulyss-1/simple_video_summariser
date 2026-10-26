@@ -4,6 +4,7 @@ import { JobProgress } from '../components/JobProgress'
 import {
   OpsError,
   useBulkRetry,
+  useCancelVideo,
   useOpsChannels,
   useOpsJobs,
   useQueueDepth,
@@ -16,17 +17,21 @@ import {
   bulkRetryErrorMessage,
   bulkRetryMessage,
   bulkScopeLabel,
+  canCancel,
   collapseError,
   depthTable,
   ERROR_CLASSES,
   errorClassInfo,
   formatUtc,
+  isCancelling,
   isDefaultFilters,
   JOB_KINDS,
   JOB_STATES,
   NO_CLASS,
   opsSearch,
   parseOpsParams,
+  stateBadgeClass,
+  stateLabel,
   type OpsFilters,
 } from '../lib/ops'
 
@@ -431,19 +436,6 @@ function BulkRetry({ filters, onAction }: { filters: OpsFilters; onAction: () =>
   )
 }
 
-function stateBadge(state: JobOut['state']): string {
-  switch (state) {
-    case 'done':
-      return 'badge badge--success'
-    case 'dead':
-      return 'badge badge--danger'
-    case 'running':
-      return 'badge badge--warning'
-    default:
-      return 'badge'
-  }
-}
-
 function JobRow({
   job: j,
   message,
@@ -457,7 +449,13 @@ function JobRow({
 }) {
   const [confirming, setConfirming] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
   const retry = useRetryJob(onResult)
+  const cancel = useCancelVideo(onResult)
+  const cancelRef = useRef<HTMLButtonElement>(null)
+  const confirmCancelRef = useRef<HTMLButtonElement>(null)
+  const restoreCancelFocus = useRef(false)
+  const sentCancel = useRef(false)
   const retryRef = useRef<HTMLButtonElement>(null)
   const confirmRef = useRef<HTMLButtonElement>(null)
   const restoreFocus = useRef(false)
@@ -473,11 +471,35 @@ function JobRow({
     }
   }, [confirming])
 
+  useEffect(() => {
+    if (cancelling) confirmCancelRef.current?.focus()
+    else if (restoreCancelFocus.current) {
+      restoreCancelFocus.current = false
+      cancelRef.current?.focus()
+    }
+  }, [cancelling])
+
   const cls = errorClassInfo(j.error_class)
   const collapsed = collapseError(j.last_error)
   const finished = j.finished_at !== null
   const videoName = j.video_title ?? j.video_id
   const busy = retry.isPending
+  const cancelBusy = cancel.isPending
+
+  const confirmCancel = () => {
+    if (sentCancel.current) return
+    sentCancel.current = true
+    onAction()
+    cancel.mutate(
+      { jobId: j.id, videoId: j.video_id },
+      {
+        onSettled: () => {
+          sentCancel.current = false
+          setCancelling(false)
+        },
+      },
+    )
+  }
 
   const confirm = () => {
     if (sent.current) return
@@ -499,7 +521,15 @@ function JobRow({
       </td>
       <td>{j.kind}</td>
       <td>
-        <span className={stateBadge(j.state)}>{j.state}</span>
+        <span className={stateBadgeClass(j)}>{stateLabel(j)}</span>
+        {isCancelling(j) && j.cancel_requested_at != null && (
+          <>
+            {' '}
+            <small className="muted">
+              Cancel requested <time dateTime={j.cancel_requested_at}>{formatUtc(j.cancel_requested_at)}</time>
+            </small>
+          </>
+        )}
       </td>
       <td>
         <JobProgress kind={j.kind} state={j.state} progress={j.progress ?? null} />
@@ -569,6 +599,48 @@ function JobRow({
               }}
             >
               Retry
+            </button>
+          ))}
+        {canCancel(j) &&
+          (cancelling ? (
+            <div className="ops__confirm">
+              <p>
+                Cancel all processing of {videoName}? This also cancels the video&apos;s other active jobs. Nothing is
+                deleted.
+                {j.kind === 'transcribe' && ' A running transcription starts over if retried.'}
+              </p>
+              <button
+                className="btn btn--primary"
+                type="button"
+                ref={confirmCancelRef}
+                disabled={cancelBusy}
+                onClick={confirmCancel}
+              >
+                Confirm cancel
+              </button>{' '}
+              <button
+                className="btn"
+                type="button"
+                disabled={cancelBusy}
+                onClick={() => {
+                  restoreCancelFocus.current = true
+                  setCancelling(false)
+                }}
+              >
+                Keep processing
+              </button>
+            </div>
+          ) : (
+            <button
+              className="btn"
+              type="button"
+              ref={cancelRef}
+              onClick={() => {
+                onAction()
+                setCancelling(true)
+              }}
+            >
+              Cancel processing
             </button>
           ))}
         <span aria-live="polite">{message}</span>

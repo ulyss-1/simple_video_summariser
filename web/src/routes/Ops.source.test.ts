@@ -11,6 +11,7 @@ describe('Ops view source', () => {
     const src = readFileSync(new URL('../hooks/useOps.ts', import.meta.url), 'utf8')
     expect(src).toMatch(/\.post\('\/ops\/jobs\/\{id\}\/retry'/)
     expect(src).toMatch(/\.post\('\/ops\/jobs\/retry'/)
+    expect(src).toMatch(/\.post\('\/videos\/\{video_id\}\/cancel'/)
     expect(src).not.toMatch(/apiUrl/)
     expect(src).not.toMatch(/fetch\(\s*[`'"]/)
   })
