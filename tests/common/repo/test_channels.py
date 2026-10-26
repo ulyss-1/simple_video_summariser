@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
 
 import psycopg
 import pytest
+import structlog
 
+from common.config import get_settings
+from common.logging import configure_logging
 from common.repo import channels as channels_repo
 from common.repo.channels import (
     PollHealth,
@@ -304,8 +309,29 @@ def _gap(conn: psycopg.Connection[Any], channel_id: str = "UC1") -> tuple[Any, A
     return row[0], row[1]
 
 
+@pytest.fixture
+def _structured_logging(head_dsn: str) -> Iterator[None]:
+    """Configure the service logging these tests read back, then restore it.
+
+    These tests used to get it as a side effect of the per-test ``alembic
+    upgrade`` (migrations/env.py calls ``configure_logging``); with the shared
+    migrated template (#290) they configure it themselves.
+    """
+    root = logging.getLogger()
+    handlers, level = root.handlers[:], root.level
+    configure_logging(get_settings())
+    yield
+    for handler in root.handlers[:]:
+        if handler not in handlers:
+            root.removeHandler(handler)
+    root.setLevel(level)
+    structlog.reset_defaults()
+
+
 def test_mark_suspected_sets_once_and_repeated_detection_preserves_timestamp(
-    conn: psycopg.Connection[Any], caplog: pytest.LogCaptureFixture
+    conn: psycopg.Connection[Any],
+    caplog: pytest.LogCaptureFixture,
+    _structured_logging: None,
 ) -> None:
     caplog.set_level("INFO", logger="common.repo.channels")
     add_channel(conn, "UC1", "One")
@@ -349,7 +375,9 @@ def test_classify_and_clear_only_change_an_existing_marker(
 
 
 def test_same_reason_is_idempotent_and_emits_no_second_transition(
-    conn: psycopg.Connection[Any], caplog: pytest.LogCaptureFixture
+    conn: psycopg.Connection[Any],
+    caplog: pytest.LogCaptureFixture,
+    _structured_logging: None,
 ) -> None:
     add_channel(conn, "UC1", "One")
     channels_repo.mark_feed_gap_suspected(conn, "UC1", source="poll")
