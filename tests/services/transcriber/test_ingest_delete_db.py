@@ -44,10 +44,10 @@ class ParkedMetadata(FakeMetadata):
         self.reached = threading.Event()
         self.release = threading.Event()
 
-    def fetch(self, video_id: str) -> VideoMeta:
+    def fetch(self, video_id: str, **kw: Any) -> VideoMeta:
         self.reached.set()
         assert self.release.wait(DEADLINE_SEC), "the parked fetch was never released"
-        return super().fetch(video_id)
+        return super().fetch(video_id, **kw)
 
 
 @pytest.fixture

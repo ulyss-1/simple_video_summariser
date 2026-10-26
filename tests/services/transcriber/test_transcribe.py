@@ -871,8 +871,8 @@ class DeletingAudio(FakeAudio):
         super().__init__()
         self.delete = delete
 
-    def fetch_normalized(self, video_id: str, dest: Path) -> AudioRef:
-        audio = super().fetch_normalized(video_id, dest)
+    def fetch_normalized(self, video_id: str, dest: Path, **kw: Any) -> AudioRef:
+        audio = super().fetch_normalized(video_id, dest, **kw)
         self.delete()
         return audio
 
