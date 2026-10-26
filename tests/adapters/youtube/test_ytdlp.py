@@ -102,7 +102,7 @@ def test_yt_dlp_not_installed_is_tool_failure() -> None:
 def test_yt_dlp_not_importable_by_a_real_interpreter_is_tool_failure() -> None:
     # `-S` drops site-packages, so this real child cannot import yt_dlp.
     def no_site_packages(
-        argv: Sequence[str], *, timeout: float
+        argv: Sequence[str], *, timeout: float, **_kw: Any
     ) -> subprocess.CompletedProcess[str]:
         return run_process([argv[0], "-S", *argv[1:]], timeout=timeout)
 
@@ -168,7 +168,7 @@ def test_a_timeout_raises_transient_network_and_leaves_no_process_running(
     pids_file = tmp_path / "pids"
 
     def hanging(
-        argv: Sequence[str], *, timeout: float
+        argv: Sequence[str], *, timeout: float, **_kw: Any
     ) -> subprocess.CompletedProcess[str]:
         return run_process(
             [sys.executable, "-c", _HANGING_CHILD, str(pids_file)], timeout=timeout

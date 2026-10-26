@@ -65,7 +65,7 @@ class SpyRunner:
         self.seen: list[dict[str, object]] = []
 
     def __call__(
-        self, argv: Sequence[str], *, timeout: float
+        self, argv: Sequence[str], *, timeout: float, **_kw: Any
     ) -> subprocess.CompletedProcess[str]:
         args = list(argv)
         self.argvs.append(args)
@@ -150,7 +150,9 @@ def test_the_metadata_upcoming_retry_also_passes_cookies(
     upcoming = completed(returncode=1, stderr="ERROR: [youtube] x: This live event will begin in 2 hours.")
     results = [upcoming, completed(returncode=1, stderr="boom")]
 
-    def runner(argv: Sequence[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
+    def runner(
+        argv: Sequence[str], *, timeout: float, **_kw: Any
+    ) -> subprocess.CompletedProcess[str]:
         spy(argv, timeout=timeout)
         return results.pop(0)
 
@@ -288,7 +290,9 @@ def test_the_copy_is_removed_however_the_call_ends(
 ) -> None:
     paths: list[Path] = []
 
-    def runner(argv: Sequence[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
+    def runner(
+        argv: Sequence[str], *, timeout: float, **_kw: Any
+    ) -> subprocess.CompletedProcess[str]:
         paths.append(Path(argv[argv.index("--cookies") + 1]))
         if outcome == "timeout":
             raise subprocess.TimeoutExpired(list(argv), timeout)
@@ -325,7 +329,9 @@ LEAKY_STDERRS = {
 def test_cookie_path_and_contents_never_reach_an_exception_message(
     kind: str, cookie_file: Path
 ) -> None:
-    def runner(argv: Sequence[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
+    def runner(
+        argv: Sequence[str], *, timeout: float, **_kw: Any
+    ) -> subprocess.CompletedProcess[str]:
         copy = argv[argv.index("--cookies") + 1]
         # yt-dlp would quote the path it was given; also try the original.
         stderr = LEAKY_STDERRS[kind].format(path=copy) + "\n" + LEAKY_STDERRS[kind].format(
@@ -359,7 +365,9 @@ def test_a_vanished_cookie_file_fails_the_job_without_the_path_or_os_text(
 
 
 def test_a_timeout_message_carries_no_cookie_data(cookie_file: Path) -> None:
-    def runner(argv: Sequence[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
+    def runner(
+        argv: Sequence[str], *, timeout: float, **_kw: Any
+    ) -> subprocess.CompletedProcess[str]:
         raise subprocess.TimeoutExpired(list(argv), timeout)
 
     with pytest.raises(TransientNetworkError) as info:
@@ -431,7 +439,9 @@ def _leak(cookie_text: str, stderr: str, tmp_path: Path) -> str:
     path = tmp_path / "jar.txt"
     path.write_text(cookie_text, encoding="utf-8")
 
-    def runner(argv: Sequence[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
+    def runner(
+        argv: Sequence[str], *, timeout: float, **_kw: Any
+    ) -> subprocess.CompletedProcess[str]:
         return completed(returncode=1, stderr=stderr)
 
     with pytest.raises(JobError) as info:

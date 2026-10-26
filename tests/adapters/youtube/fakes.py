@@ -12,7 +12,7 @@ class FakeRunner:
         self.calls: list[tuple[list[str], float]] = []
 
     def __call__(
-        self, argv: Sequence[str], *, timeout: float
+        self, argv: Sequence[str], *, timeout: float, **_kw: Any
     ) -> subprocess.CompletedProcess[str]:
         self.calls.append((list(argv), timeout))
         result = self.results.pop(0)

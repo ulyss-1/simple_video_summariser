@@ -39,7 +39,11 @@ class VideoMeta:
 
 
 class MetadataSource(Protocol):
-    def fetch(self, video_id: str) -> VideoMeta: ...
+    def fetch(
+        self, video_id: str, *, cancelled: Callable[[], bool] | None = None
+    ) -> VideoMeta:
+        """``cancelled`` is polled during the fetch; once true it raises ``Cancelled`` (#302)."""
+        ...
 
 
 # FeedEntry and ChannelFeed belong to #26 (channel RSS adapter,
@@ -332,7 +336,11 @@ class AudioRef:
 
 class AudioSource(Protocol):
     # returns 16 kHz mono opus, relative to `dest` (architecture.md 3, D6b)
-    def fetch_normalized(self, video_id: str, dest: Path) -> AudioRef: ...
+    # ``cancelled`` is polled during the download and conversion; once true the
+    # work is killed, no partial file stays behind and ``Cancelled`` is raised (#302).
+    def fetch_normalized(
+        self, video_id: str, dest: Path, *, cancelled: Callable[[], bool] | None = None
+    ) -> AudioRef: ...
 
 
 # TranscriptResult/Transcriber belong to #20 (faster-whisper adapter). Same
