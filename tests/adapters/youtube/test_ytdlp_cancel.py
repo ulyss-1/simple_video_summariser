@@ -70,7 +70,9 @@ def test_a_cancel_kills_the_group_once_and_raises_within_one_slice(
         return len(popen[0].slices) >= 2
 
     with pytest.raises(Cancelled):
-        run_process(["x"], timeout=60, cancelled=cancelled, poll_interval=POLL)
+        run_process(
+            ["x"], timeout=60, cancelled=cancelled, poll_interval=POLL, clock=lambda: 0.0
+        )
 
     assert kills == popen  # the group kill ran once, on the one process
     assert len(popen[0].slices) == 2  # killed in the slice the flag appeared, not later
@@ -87,7 +89,9 @@ def test_a_process_that_finished_in_the_slice_the_flag_was_set_is_returned(
 
     monkeypatch.setattr(subprocess, "Popen", finishing_popen)
 
-    result = run_process(["x"], timeout=60, cancelled=lambda: True, poll_interval=POLL)
+    result = run_process(
+        ["x"], timeout=60, cancelled=lambda: True, poll_interval=POLL, clock=lambda: 0.0
+    )
 
     assert result.stdout == "out"
     assert kills == []
