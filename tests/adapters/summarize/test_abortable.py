@@ -11,7 +11,7 @@ import http.client
 import threading
 from collections.abc import Callable, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from typing import Any, Self
 
 import pytest
 
@@ -137,7 +137,7 @@ class Silent:
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}/"
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
-    def __enter__(self) -> Silent:
+    def __enter__(self) -> Self:
         self.thread.start()
         return self
 
