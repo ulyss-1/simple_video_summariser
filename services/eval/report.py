@@ -170,7 +170,7 @@ def _summary_cells(run: AnalysisRun | None) -> list[str]:
         str(len(a.quotes)),
         f"{_count_unknown(a)}/{len(a.claims)}",
         str(_tokens(a)),
-        f"{a.duration_ms} ms" if a.duration_ms is not None else "-",
+        f"{a.duration_ms} ms" if a.duration_ms is not None else "not recorded",
     ]
 
 
@@ -183,13 +183,12 @@ def _totals(runs: Sequence[AnalysisRun | None]) -> list[str]:
     if not present:
         return ["-"] * 5
     claims = sum(len(x.claims) for x in present)
-    durations = [x.duration_ms for x in present if x.duration_ms is not None]
     return [
         str(claims),
         str(sum(len(x.quotes) for x in present)),
         f"{sum(_count_unknown(x) for x in present)}/{claims}",
         str(sum(_tokens(x) for x in present)),
-        f"{sum(durations)} ms" if durations else "-",
+        _usage_cell([x.duration_ms for x in present], unit=" ms"),
     ]
 
 
@@ -210,16 +209,19 @@ def _summary_table(entries: Sequence[VideoEntry]) -> list[str]:
     return _table(header, rows)
 
 
-def _usage_cell(values: Sequence[int | None]) -> str:
-    """Total of one field over one side's present runs; ``None`` is "not recorded"."""
+def _usage_cell(values: Sequence[int | None], unit: str = "") -> str:
+    """Total of one field over one side's present runs; ``None`` is "not recorded".
+
+    ``unit`` (for example `` ms``) follows the number and precedes the marker.
+    """
     if not values:
         return "-"
     known = [v for v in values if v is not None]
     if not known:
         return "not recorded"
     if len(known) < len(values):
-        return f"{sum(known)} ({len(known)} of {len(values)} runs recorded)"
-    return str(sum(known))
+        return f"{sum(known)}{unit} ({len(known)} of {len(values)} runs recorded)"
+    return f"{sum(known)}{unit}"
 
 
 def _usage_totals_table(entries: Sequence[VideoEntry]) -> list[str]:
