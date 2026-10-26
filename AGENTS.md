@@ -112,10 +112,11 @@ Activate `.venv` first; all Python commands assume it.
   forces moves; `--upgrade-package NAME` (repeatable) drops one pin,
   `--upgrade` re-resolves everything. A failure leaves the lock untouched.
   `python scripts/lock_requirements.py --check-installed requirements.backend.lock requirements.dev.lock`
-  fails when an installed package differs from the locks or is in neither
-  `python scripts/lock_requirements.py --report-outdated` - report-only: exit 1 with one
-  annotation when an `--upgrade` regeneration would change a lock (what the weekly
-  `lock-update-check.yml` runs; needs network access, never writes a file)
+  fails when an installed package differs from the locks or is in neither.
+- `python scripts/lock_requirements.py --report-outdated` - report-only: exit 1 with one
+  annotation when an `--upgrade` regeneration would change a lock, and one more when a
+  direct `==` pin is behind PyPI (#278; yt-dlp is skipped, #68 checks it). What the weekly
+  `lock-update-check.yml` runs; needs network access, never writes a file
 - `npm ci && npm run build` - in `web/`, frontend only
 - `npm run lint` - in `web/`; ESLint (react-hooks + React Compiler rules),
   fails on any warning; `bash -lc 'cd web && npm run lint'`
@@ -149,6 +150,10 @@ Rules
   its exact pin in `pyproject.toml`, run `ruff check .`, `mypy .` and `pytest`,
   regenerate the dev lock in the same PR (`python scripts/lock_requirements.py dev`),
   and fix the fallout in the same PR.
+- A direct pin held back on purpose carries a trailing `# hold: <reason>` comment
+  on its own line (lower case, in a requirements file or in `pyproject.toml`'s dev
+  array); the reason should name the issue. The weekly lock report lists a held pin
+  that is behind as a notice instead of turning red; a malformed hold fails the report.
 - Dependencies live in four places: runtime Python deps in
   `requirements.backend.txt`, speech-to-text-only deps in
   `requirements.whisper.txt` (this split keeps ~2 GB out of every other

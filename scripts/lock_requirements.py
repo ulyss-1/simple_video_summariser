@@ -36,6 +36,13 @@ change; ``1`` and one ``::error`` annotation plus one line per entry when someth
 would; ``0`` with one stderr line when pip fails or times out (an outage); ``2`` when a
 file is missing or unparseable or the platform is refused.
 
+The same mode (issue #278) then checks the *direct* ``==`` pins (the two requirements files,
+``pyproject.toml``'s ``dev`` extra and ``[build-system].requires``) against PyPI's newest
+release, which an ``--upgrade`` resolution never moves. yt-dlp is skipped (#68 checks it
+daily). A trailing ``# hold: <reason>`` comment on a pin's own line turns a behind pin into
+a ``::notice`` instead of a red run; a malformed or misplaced hold is a repository fault.
+A PyPI outage ends that section silent and green.
+
 Standard library only; pip is invoked as a subprocess.
 """
 
@@ -470,12 +477,17 @@ _LEADING_INT = re.compile(r"(\d+)(?![\d!])")
 
 @dataclass(frozen=True)
 class Change:
-    """One lock entry an upgrade would move: `old`/`new` is None when added/removed."""
+    """One entry that would move: `old`/`new` is None when added/removed.
+
+    `lock` is the lock name, or the input file for a direct pin (#278); `unordered` marks
+    versions that could not be compared numerically.
+    """
 
     lock: str
     name: str
     old: str | None
     new: str | None
+    unordered: bool = False
 
     @property
     def major(self) -> bool:
@@ -486,7 +498,8 @@ class Change:
             return f"{self.lock} {self.name} added {self.new}"
         if self.new is None:
             return f"{self.lock} {self.name} removed (was {self.old})"
-        label = " (major)" if self.major else ""
+        labels = [*(["major"] if self.major else []), *(["unordered"] if self.unordered else [])]
+        label = f" ({', '.join(labels)})" if labels else ""
         return f"{self.lock} {self.name} {self.old} -> {self.new}{label}"
 
 
@@ -564,8 +577,231 @@ def _read(root: Path, name: str) -> str:
         raise LockError(f"{name}: cannot read ({err})") from err
 
 
+# ---- direct pins behind PyPI (issue #278) ----
+
+#: yt-dlp is checked daily by ytdlp-update-check.yml (#68), so the weekly report skips it.
+YTDLP_EXCLUDED = "yt-dlp"
+#: Seconds one PyPI request may take (as in #68).
+FETCH_TIMEOUT = 20.0
+#: Most bytes read from one PyPI answer.
+MAX_BODY_BYTES = 32 * 1024 * 1024
+DIRECT_TITLE = "Direct Python pins are behind PyPI"
+HELD_TITLE = "Held Python pins"
+DIRECT_STEPS = (
+    "bump the pin in the named file",
+    (
+        "regenerate that file's lock (python scripts/lock_requirements.py backend or whisper; "
+        "for a pyproject.toml pin follow the AGENTS.md rule for bumping a dev tool)"
+    ),
+    "run pytest -m image for a runtime pin",
+    "then open a PR (architecture.md 11.3)",
+)
+_NUMERIC_VERSION = re.compile(r"\d+(?:\.\d+)*")
+_HOLD = re.compile(r"#\s*hold:(?P<reason>.*)")
+_TOML_STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
+
+
+@dataclass(frozen=True)
+class DirectPin:
+    file: str
+    line: int
+    name: str  # canonical
+    version: str
+    hold: str | None
+
+
+def make_fetch(timeout: float, max_bytes: int = MAX_BODY_BYTES) -> Fetch:
+    """A fetch seam with a per-request timeout and a cap on the body read."""
+
+    def fetch(url: str) -> bytes:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            if response.status != 200:
+                raise OSError(f"PyPI answered HTTP {response.status}")
+            data: bytes = response.read(max_bytes + 1)
+        if len(data) > max_bytes:
+            raise OSError(f"answer is larger than {max_bytes} bytes")
+        return data
+
+    return fetch
+
+
+def _fault(file: str, line: int, message: str) -> LockError:
+    return LockError(f"{file}:{line}: {message}")
+
+
+def _split_comment(line: str, quoted: bool) -> tuple[str, str]:
+    """(code, comment) of a line; the comment starts at the first `#` after whitespace
+    (or at line start). In TOML (`quoted`) a `#` inside a string does not count."""
+    in_string = False
+    for i, ch in enumerate(line):
+        if quoted and ch == '"' and (i == 0 or line[i - 1] != "\\"):
+            in_string = not in_string
+        elif ch == "#" and not in_string and (i == 0 or line[i - 1].isspace()):
+            return line[:i], line[i:]
+    return line, ""
+
+
+def _hold_of(file: str, number: int, comment: str) -> str | None:
+    """The reason of a `# hold:` comment, None for any other comment; empty reason is a fault."""
+    match = _HOLD.fullmatch(comment.rstrip())
+    if match is None:
+        return None
+    reason = match["reason"].strip()
+    if not reason:
+        raise _fault(file, number, "`# hold:` needs a reason (name the issue)")
+    return reason
+
+
+def _exact_pin(entry: str) -> tuple[str, str] | None:
+    """(canonical name, version) of an exact `name[extras]==version [; marker]` entry."""
+    match = _REQ.fullmatch(entry.split(";", 1)[0].strip())
+    return (canonical_name(match["name"]), match["version"]) if match else None
+
+
+def _make_pin(file: str, number: int, entry: str, hold: str | None) -> DirectPin | None:
+    pin = _exact_pin(entry)
+    if pin is None:
+        if hold is not None:
+            raise _fault(file, number, "`# hold:` is only allowed on a line with one exact == pin")
+        return None
+    if pin[0] == YTDLP_EXCLUDED:
+        if hold is not None:
+            raise _fault(file, number, "yt-dlp cannot be held: #68 checks it daily and does not read holds")
+        return None
+    return DirectPin(file, number, pin[0], pin[1], hold)
+
+
+def requirements_direct_pins(file: str, text: str) -> list[DirectPin]:
+    found: list[DirectPin] = []
+    for number, raw in enumerate(text.splitlines(), start=1):
+        code, comment = _split_comment(raw, quoted=False)
+        hold = _hold_of(file, number, comment) if comment else None
+        if not code.strip():
+            if hold is not None:
+                raise _fault(file, number, "`# hold:` must sit on the pin's own line")
+            continue
+        pin = _make_pin(file, number, code.strip(), hold)
+        if pin is not None:
+            found.append(pin)
+    return found
+
+
+def pyproject_direct_pins(file: str, text: str) -> list[DirectPin]:
+    """Exact pins of the dev extra and `[build-system].requires`; holds come from the text."""
+    section = ""
+    array = ""  # "" outside, else "dev" / "build"
+    found: list[DirectPin] = []
+    for number, raw in enumerate(text.splitlines(), start=1):
+        code, comment = _split_comment(raw, quoted=True)
+        hold = _hold_of(file, number, comment) if comment else None
+        stripped = code.strip()
+        if not array:
+            header = re.fullmatch(r"\[+\s*([^\]]+?)\s*\]+", stripped)
+            if header:
+                section = header.group(1)
+            elif section == "project.optional-dependencies" and re.match(r"dev\s*=\s*\[", stripped):
+                array = "dev"
+            elif section == "build-system" and re.match(r"requires\s*=\s*\[", stripped):
+                array = "build"
+        if not array:
+            if hold is not None:
+                raise _fault(file, number, "`# hold:` is only allowed on a dev or build-system.requires entry")
+            continue
+        entries = [m.group(1) for m in _TOML_STRING.finditer(code)]
+        if hold is not None and len(entries) != 1:
+            raise _fault(file, number, "`# hold:` is only allowed on a line with one exact == pin")
+        for entry in entries:
+            pin = _make_pin(file, number, entry, hold)
+            if pin is not None:
+                found.append(pin)
+        if "]" in _TOML_STRING.sub("", code).split("=", 1)[-1]:
+            array = ""
+    return found
+
+
+def numeric_version(version: str) -> tuple[int, ...] | None:
+    """Plain dotted-numeric versions as integer tuples without trailing zeros, else None."""
+    if _NUMERIC_VERSION.fullmatch(version) is None:
+        return None
+    parts = [int(p) for p in version.split(".")]
+    while len(parts) > 1 and parts[-1] == 0:
+        parts.pop()
+    return tuple(parts)
+
+
+def behind(pinned: str, latest: str) -> tuple[bool, bool]:
+    """(is the pin behind, were the versions unordered)."""
+    have, newest = numeric_version(pinned), numeric_version(latest)
+    if have is None or newest is None:
+        return pinned != latest, True
+    return have < newest, False
+
+
+def latest_version(name: str, fetch: Fetch, max_body: int) -> str:
+    """`info.version` of PyPI's JSON for `name`; raises on any failure."""
+    body = fetch(f"https://pypi.org/pypi/{name}/json")
+    if len(body) > max_body:
+        raise ValueError(f"answer is larger than {max_body} bytes")
+    version = json.loads(body)["info"]["version"]
+    if not isinstance(version, str) or not version:
+        raise ValueError("no info.version")
+    return version
+
+
+def workflow_escape(text: str) -> str:
+    """Escape annotation data as GitHub workflow commands require."""
+    return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def direct_pin_report(
+    pins: Sequence[DirectPin], fetch: Fetch, *, inline_limit: int, max_body: int
+) -> tuple[int, str, str]:
+    """(exit code 0/1, stdout, stderr) for the direct-pin section; an outage reports nothing."""
+    latest: dict[str, str] = {}
+    changes: list[Change] = []
+    held: list[tuple[DirectPin, str]] = []
+    for pin in pins:
+        try:
+            if pin.name not in latest:
+                latest[pin.name] = latest_version(pin.name, fetch, max_body)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as err:
+            return 0, "", (
+                f"lock_requirements: direct pins: {pin.name}: {type(err).__name__}: {err}; "
+                "will retry on the next run\n"
+            )
+        is_behind, unordered = behind(pin.version, latest[pin.name])
+        if not is_behind:
+            continue
+        if pin.hold is None:
+            changes.append(Change(pin.file, pin.name, pin.version, latest[pin.name], unordered))
+        else:
+            held.append((pin, latest[pin.name]))
+    out: list[str] = []
+    if changes:
+        ordered = sorted(changes, key=lambda c: (not c.major, c.lock, c.name))
+        majors = sum(1 for c in ordered if c.major)
+        out.append(
+            f"::error title={DIRECT_TITLE}::"
+            + workflow_escape(
+                f"{len(ordered)} direct pins are behind PyPI ({majors} major): "
+                f"{inline_summary(ordered, inline_limit)}. Run: {', '.join(DIRECT_STEPS)}"
+            )
+        )
+        out += [c.text() for c in ordered]
+    if held:
+        lines = [f"{p.name} {p.version} (latest {new}): {p.hold}" for p, new in held]
+        out.append(
+            f"::notice title={HELD_TITLE}::"
+            + workflow_escape(f"{len(held)} held pins are behind PyPI: " + "; ".join(lines))
+        )
+        out += lines
+    return (1 if changes else 0), "".join(f"{ln}\n" for ln in out), ""
+
+
+
 def report_outdated(
-    *, root: Path = ROOT, run_pip: RunPip, inline_limit: int = INLINE_LIMIT
+    *, root: Path = ROOT, run_pip: RunPip, fetch: Fetch, inline_limit: int = INLINE_LIMIT,
+    max_body: int = MAX_BODY_BYTES,
 ) -> tuple[int, str, str]:
     """(exit code, stdout, stderr) of the weekly report. Never writes a file."""
     try:
@@ -573,12 +809,18 @@ def report_outdated(
             "backend": _read(root, TARGETS["backend"][0]),
             "whisper": _read(root, TARGETS["whisper"][0]),
         }
+        pyproject_text = _read(root, "pyproject.toml")
         try:
-            inputs["dev"] = dev_requirements_text(_read(root, "pyproject.toml"))
+            inputs["dev"] = dev_requirements_text(pyproject_text)
         except (tomllib.TOMLDecodeError, TypeError) as err:
             raise LockError(f"pyproject.toml: cannot parse ({err})") from err
-        for text in inputs.values():
-            direct_pins(text)  # raises naming a requirement that is not an exact pin
+        pins = [
+            *requirements_direct_pins(TARGETS["backend"][0], inputs["backend"]),
+            *requirements_direct_pins(TARGETS["whisper"][0], inputs["whisper"]),
+            *pyproject_direct_pins("pyproject.toml", pyproject_text),
+        ]
+        for name in ("backend", "whisper"):
+            direct_pins(inputs[name])  # raises naming a requirement that is not an exact pin
         committed: dict[str, dict[str, str]] = {}
         for target in TARGETS:
             lock_name = TARGETS[target][1]
@@ -595,6 +837,7 @@ def report_outdated(
     upgraded: dict[str, dict[str, str]] = {}
     constraints: list[str] = []
     changes: list[Change] = []
+    outage = ""
     try:
         for target in TARGETS:
             try:
@@ -611,15 +854,19 @@ def report_outdated(
             constraints += [f"{n}=={v}" for n, v in versions.items()]
             changes += compare_locks(TARGETS[target][1], committed[target], versions)
     except _Outage as err:
-        return 0, "", f"lock_requirements: {err}; will retry on the next run\n"
+        outage = f"lock_requirements: {err}; will retry on the next run\n"
+        changes = []
     except (LockError, ValueError, KeyError, TypeError) as err:
         return 2, "", f"lock_requirements: unusable pip report: {err}\n"
 
-    if not changes:
-        return 0, "", ""
-    ordered = order_changes(changes)
-    lines = [behind_annotation(ordered, inline_limit), *(c.text() for c in ordered)]
-    return 1, "\n".join(lines) + "\n", ""
+    out = ""
+    if changes:
+        ordered = order_changes(changes)
+        out = "\n".join([behind_annotation(ordered, inline_limit), *(c.text() for c in ordered)]) + "\n"
+    direct_code, direct_out, direct_err = direct_pin_report(
+        pins, fetch, inline_limit=inline_limit, max_body=max_body
+    )
+    return (1 if changes or direct_code else 0), out + direct_out, outage + direct_err
 
 
 def _installed() -> dict[str, str]:
@@ -633,11 +880,12 @@ def main(
     *,
     root: Path = ROOT,
     run_pip: RunPip | None = None,
-    fetch: Fetch = default_fetch,
+    fetch: Fetch | None = None,
     platform: tuple[str, str, str, tuple[int, int]] | None = None,
     installed: Mapping[str, str] | None = None,
     inline_limit: int = INLINE_LIMIT,
     pip_timeout: float = PIP_TIMEOUT,
+    fetch_timeout: float = FETCH_TIMEOUT,
 ) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0] if __doc__ else None)
     parser.add_argument("target", nargs="?", choices=sorted(TARGETS))
@@ -663,12 +911,14 @@ def main(
             print(f"lock_requirements: {refused}", file=sys.stderr)
             return 2
         code, out, err = report_outdated(
-            root=root, run_pip=run_pip or make_run_pip(pip_timeout), inline_limit=inline_limit
+            root=root, run_pip=run_pip or make_run_pip(pip_timeout),
+            fetch=fetch or make_fetch(fetch_timeout), inline_limit=inline_limit,
         )
         sys.stdout.write(out)
         sys.stderr.write(err)
         return code
     run_pip = run_pip or default_run_pip
+    fetch = fetch or default_fetch
 
     try:
         if args.check_installed:
