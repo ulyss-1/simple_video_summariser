@@ -344,6 +344,26 @@ def test_the_ops_view_accepts_the_cancelled_class_and_shows_the_job(
     assert [i["id"] for i in response.json()["items"]] == [job_id]
 
 
+def test_ops_retry_of_a_dead_job_of_a_deleted_video_is_refused_as_not_retryable(
+    api: TestClient, db: psycopg.Connection[Any]
+) -> None:
+    """#303: the route's existing "job is not dead" 409 (``RetryOutcome.status == "not_dead"``)."""
+    seed_video(db)
+    job_id = add_job(db, "running")
+    assert api.delete(f"/videos/{VID}").status_code == 204
+    db.execute(  # the worker's outcome write
+        "UPDATE jobs SET state = 'dead', error_class = 'CANCELLED', locked_by = NULL,"
+        " finished_at = now() WHERE id = %s",
+        (job_id,),
+    )
+
+    response = api.post(f"/ops/jobs/{job_id}/retry", json={}, headers=JSON)
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "job is not dead", "state": "dead"}
+    assert job_row(db, job_id)[0] == "dead"
+
+
 def test_ops_retry_resumes_a_cancelled_job_and_clears_the_request(
     api: TestClient, db: psycopg.Connection[Any]
 ) -> None:
@@ -368,46 +388,47 @@ def test_ops_retry_resumes_a_cancelled_job_and_clears_the_request(
 # ---------------------------------------------------------------------------
 
 
-def test_delete_says_cancellation_in_progress_while_every_running_job_has_a_request(
-    api: TestClient, db: psycopg.Connection[Any]
-) -> None:
-    seed_video(db)
-    add_job(db, "running")
-    add_job(db, "running", kind="transcribe", key="a")
-    api.post(f"/videos/{VID}/cancel", json={})
-
-    response = api.delete(f"/videos/{VID}")
-
-    assert response.status_code == 409
-    assert response.json() == {"detail": "cancellation in progress"}
-
-
-def test_delete_keeps_the_processing_message_while_a_running_job_has_no_request(
-    api: TestClient, db: psycopg.Connection[Any]
-) -> None:
-    seed_video(db)
-    add_job(db, "running", requested=True)
-    add_job(db, "running", kind="transcribe", key="a")
-
-    response = api.delete(f"/videos/{VID}")
-
-    assert response.status_code == 409
-    assert response.json() == {"detail": "video is currently processing"}
-
-
-def test_delete_succeeds_once_the_cancelled_job_has_stopped(
+def test_delete_after_a_cancel_answers_204_at_once_and_the_running_rows_keep_their_requests(
     api: TestClient, db: psycopg.Connection[Any]
 ) -> None:
     seed_video(db)
     running = add_job(db, "running")
+    other = add_job(db, "running", kind="transcribe", key="a")
     api.post(f"/videos/{VID}/cancel", json={})
-    assert api.delete(f"/videos/{VID}").status_code == 409
-    db.execute(
-        "UPDATE jobs SET state = 'dead', error_class = 'CANCELLED', locked_by = NULL WHERE id = %s",
-        (running,),
-    )
 
+    response = api.delete(f"/videos/{VID}")
+
+    assert response.status_code == 204
+    for job_id in (running, other):
+        row = job_row(db, job_id)
+        assert (row[0], row[5] is not None) == ("running", True)  # the worker ends it
+    assert db.execute("SELECT count(*) FROM videos").fetchone() == (0,)
+
+
+def test_delete_with_running_jobs_that_had_no_request_stores_one_on_each(
+    api: TestClient, db: psycopg.Connection[Any]
+) -> None:
+    seed_video(db)
+    first = add_job(db, "running", requested=True)
+    second = add_job(db, "running", kind="transcribe", key="a")
+
+    response = api.delete(f"/videos/{VID}")
+
+    assert response.status_code == 204
+    assert job_row(db, first)[5] is not None
+    assert job_row(db, second)[5] is not None
+
+
+def test_cancel_after_a_delete_is_not_found(
+    api: TestClient, db: psycopg.Connection[Any]
+) -> None:
+    seed_video(db)
+    add_job(db, "running")
     assert api.delete(f"/videos/{VID}").status_code == 204
+
+    response = api.post(f"/videos/{VID}/cancel", json={})
+
+    assert response.status_code == 404
 
 
 def test_delete_after_a_cancel_of_only_pending_jobs_is_204(

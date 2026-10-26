@@ -11,8 +11,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from common.config import get_settings
+from common.queue import PRIORITY_INTERACTIVE
 from common.repo import deleted_videos
-from common.repo.deleted_videos import VideoRunning, delete_video
+from common.repo.deleted_videos import delete_video
 from services.api import routes_write
 from services.api.main import create_app
 from tests.services.api.conftest import LogSink
@@ -80,27 +81,97 @@ def test_delete_unknown_and_repeated_delete_are_fixed_404s(
     assert db.execute("SELECT video_id FROM deleted_videos").fetchall() == [(VID,)]
 
 
-def test_running_job_blocks_delete_without_changes(
+def test_a_running_job_does_not_block_delete_the_pending_row_goes_and_the_running_row_keeps_a_request(
     api: TestClient, db: psycopg.Connection[Any]
 ) -> None:
     seed_video(db, state="running")
+    db.execute("INSERT INTO jobs (video_id, kind, state) VALUES (%s, 'transcribe', 'pending')", (VID,))
     db.execute(
         "INSERT INTO llm_batches (job_id, step_key, batch_id, request_sha256)"
-        " SELECT id, 'x', 'b', 'h' FROM jobs WHERE video_id = %s",
+        " SELECT id, 'x', 'b', 'h' FROM jobs WHERE video_id = %s AND state = 'running'",
         (VID,),
     )
-    before = db.execute("SELECT * FROM videos WHERE video_id = %s", (VID,)).fetchone()
-    batches_before = db.execute("SELECT * FROM llm_batches").fetchall()
-    assert len(batches_before) == 1
+    db.execute(
+        "INSERT INTO media (video_id, path, bytes, expires_at) VALUES (%s, 'dq/audio.opus', 5, now())",
+        (VID,),
+    )
 
     response = api.delete(f"/videos/{VID}")
 
+    assert response.status_code == 204
+    assert api.get(f"/videos/{VID}").status_code == 404
+    for table in ("videos", "media", "transcripts", "analyses"):
+        assert db.execute(f"SELECT count(*) FROM {table}").fetchone() == (0,)
+    assert db.execute("SELECT video_id FROM deleted_videos").fetchall() == [(VID,)]
+    assert db.execute(
+        "SELECT kind, state, cancel_requested_at IS NOT NULL FROM jobs WHERE video_id = %s", (VID,)
+    ).fetchall() == [("ingest", "running", True)]
+    # The kept row keeps its batch for the orphan pass once the job is dead.
+    assert db.execute("SELECT count(*) FROM llm_batches").fetchone() == (1,)
+
+
+def test_delete_answers_404_for_an_unknown_video_and_422_for_a_malformed_id_and_has_no_409(
+    api: TestClient,
+) -> None:
+    assert api.delete(f"/videos/{VID}").status_code == 404
+    assert api.delete("/videos/short").status_code == 422
+    delete_spec = api.get("/openapi.json").json()["paths"]["/videos/{video_id}"]["delete"]
+    assert "409" not in delete_spec["responses"]
+
+
+def test_two_concurrent_deletes_give_one_204_and_one_404(
+    api: TestClient, db: psycopg.Connection[Any]
+) -> None:
+    seed_video(db, state="running")
+    statuses: list[int] = []
+
+    def delete() -> None:
+        statuses.append(api.delete(f"/videos/{VID}").status_code)
+
+    threads = [threading.Thread(target=delete) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+        assert not thread.is_alive(), "a delete never finished"
+
+    assert sorted(statuses) == [204, 404]
+
+
+def test_resubmitting_while_the_deleted_videos_running_job_winds_down_is_a_409_and_writes_nothing(
+    api: TestClient, db: psycopg.Connection[Any]
+) -> None:
+    seed_video(db, state="running")
+    assert api.delete(f"/videos/{VID}").status_code == 204
+
+    response = api.post("/videos", json={"url": VID})
+
     assert response.status_code == 409
-    assert response.json() == {"detail": "video is currently processing"}
-    assert db.execute("SELECT * FROM videos WHERE video_id = %s", (VID,)).fetchone() == before
-    assert db.execute("SELECT state FROM jobs WHERE video_id = %s", (VID,)).fetchall() == [("running",)]
+    assert response.json() == {"detail": "cancellation in progress"}
+    assert db.execute("SELECT count(*) FROM videos").fetchone() == (0,)
+    assert db.execute("SELECT video_id FROM deleted_videos").fetchall() == [(VID,)]
+    assert db.execute("SELECT state FROM jobs").fetchall() == [("running",)]
+
+
+def test_resubmitting_after_the_running_job_ended_clears_the_tombstone_and_the_old_rows(
+    api: TestClient, db: psycopg.Connection[Any]
+) -> None:
+    seed_video(db, state="running")
+    assert api.delete(f"/videos/{VID}").status_code == 204
+    db.execute(  # what the worker's outcome write does with the request
+        "UPDATE jobs SET state = 'dead', error_class = 'CANCELLED', locked_by = NULL,"
+        " last_error = 'cancelled on request'"
+    )
+    db.execute("INSERT INTO jobs (video_id, kind, state) VALUES (%s, 'analyze', 'dead')", (VID,))
+
+    response = api.post("/videos", json={"url": VID})
+
+    assert response.status_code == 202
+    assert response.json()["created"] is True
     assert db.execute("SELECT count(*) FROM deleted_videos").fetchone() == (0,)
-    assert db.execute("SELECT * FROM llm_batches").fetchall() == batches_before
+    assert db.execute(
+        "SELECT kind, state, priority, error_class FROM jobs WHERE video_id = %s", (VID,)
+    ).fetchall() == [("ingest", "pending", PRIORITY_INTERACTIVE, None)]
 
 
 def test_delete_removes_the_tree_and_jobs_but_keeps_the_batch_row_for_the_orphan_pass_and_other_rows(
@@ -210,11 +281,11 @@ def wait_until_blocked(db: psycopg.Connection[Any], app: str) -> None:
     raise AssertionError(f"{app} never blocked on a lock")
 
 
-def test_delete_serializes_with_worker_claim_and_claim_wins(
+def test_delete_waits_for_a_claim_that_is_in_flight_then_cancels_the_job_it_claimed(
     dsn: str, db: psycopg.Connection[Any]
 ) -> None:
     seed_video(db)
-    result: dict[str, VideoRunning] = {}
+    result: dict[str, object] = {}
 
     with psycopg.connect(dsn) as claiming:
         claimed = claiming.execute(
@@ -230,8 +301,8 @@ def test_delete_serializes_with_worker_claim_and_claim_wins(
         def delete() -> None:
             try:
                 with psycopg.connect(dsn, application_name="delete-claim-race") as conn:
-                    delete_video(conn, VID)
-            except VideoRunning as exc:
+                    result["deleted"] = delete_video(conn, VID)
+            except Exception as exc:  # noqa: BLE001 - handed to the test thread
                 result["error"] = exc
 
         thread = threading.Thread(target=delete)
@@ -241,9 +312,12 @@ def test_delete_serializes_with_worker_claim_and_claim_wins(
         thread.join(timeout=10)
 
     assert not thread.is_alive()
-    assert isinstance(result["error"], VideoRunning)
-    assert db.execute("SELECT state FROM jobs WHERE video_id = %s", (VID,)).fetchone() == ("running",)
-    assert db.execute("SELECT count(*) FROM deleted_videos").fetchone() == (0,)
+    assert "error" not in result, result.get("error")
+    assert "deleted" in result
+    assert db.execute(
+        "SELECT state, cancel_requested_at IS NOT NULL FROM jobs WHERE video_id = %s", (VID,)
+    ).fetchone() == ("running", True)  # the claim committed first; the delete cancelled what it won
+    assert db.execute("SELECT count(*) FROM deleted_videos").fetchone() == (1,)
 
 
 def test_unlink_failure_does_not_change_committed_204(
