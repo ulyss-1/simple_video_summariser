@@ -307,6 +307,11 @@ usage error. It is read-only: it installs nothing, edits no config, never runs
 WARN. `ops/host/preflight.sh --help` lists all checks and their threshold
 variables.
 
+The container checks run in the backend's pinned Python base image, with
+`--pull=never`. On a fresh host that image is absent: the preflight FAILs
+`ollama-from-container` and `egress` and prints the exact `docker pull`
+command. Run it, then run the preflight again.
+
 ---
 
 ## 11. First deploy

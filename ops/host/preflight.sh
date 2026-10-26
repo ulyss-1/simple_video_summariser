@@ -5,6 +5,10 @@ set -u
 : "${MIN_MEM_GB:=12}"
 : "${MIN_DOCKER_VERSION:=25.0}"
 : "${MIN_COMPOSE_VERSION:=2.24.0}"
+# Literal copy of the runtime-stage FROM in ops/Dockerfile.backend; a plain
+# assignment so no ambient variable replaces it. tests/test_base_image_copies.py
+# fails until the two agree.
+probe_image="python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8"
 ENV_FILE="${ENV_FILE:-.env}"
 PREFLIGHT_MEMINFO="${PREFLIGHT_MEMINFO:-/proc/meminfo}"
 
@@ -262,6 +266,11 @@ run_container_checks() {
 	summarizer="$(env_get SUMMARIZER)"
 	hosts="www.youtube.com,redirector.googlevideo.com,huggingface.co,cdn-lfs.huggingface.co,pypi.org,files.pythonhosted.org,deb.debian.org,registry.npmjs.org,registry-1.docker.io"
 	[ "$summarizer" = anthropic ] && hosts="$hosts,api.anthropic.com"
+	if ! docker image inspect "$probe_image" >/dev/null 2>&1; then
+		fail ollama-from-container "image $probe_image is missing; run: docker pull $probe_image"
+		fail egress "image $probe_image is missing; run: docker pull $probe_image"
+		return
+	fi
 	if ! docker network create "$net" >/dev/null 2>&1; then
 		fail ollama-from-container "could not create throwaway network"
 		fail egress "could not create throwaway network"
@@ -283,7 +292,7 @@ for host in hosts:
   print("EGRESS\t%s\tOK"%host)
  except Exception:
   print("EGRESS\t%s\tFAIL"%host)'
-	container_output="$(docker run --pull=never --rm --name "$cname" --network "$net" --add-host host.docker.internal:host-gateway -e "PREFLIGHT_OLLAMA_MODEL=$model" -e "PREFLIGHT_EGRESS_HOSTS=$hosts" python:3.14-slim python -c "$py" 2>/dev/null)" || true
+	container_output="$(docker run --pull=never --rm --name "$cname" --network "$net" --add-host host.docker.internal:host-gateway -e "PREFLIGHT_OLLAMA_MODEL=$model" -e "PREFLIGHT_EGRESS_HOSTS=$hosts" "$probe_image" python -c "$py" 2>/dev/null)" || true
 	container_ready=1
 }
 

@@ -16,6 +16,9 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "ops" / "host" / "preflight.sh"
 DROP_IN = ROOT / "ops" / "host" / "ollama.override.conf"
 ENV_EXAMPLE = ROOT / ".env.example"
+PROBE_IMAGE = (
+    "python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8"
+)
 
 GOOD_ENV = (
     "COMPOSE_FILE=compose.yml\n"
@@ -49,6 +52,7 @@ STUB_KEYS = (
     "STUB_DOCKER_ROOT",
     "STUB_DOCKER_SERVER_VERSION",
     "STUB_HTTP_ERROR_HOST",
+    "STUB_IMAGE_INSPECT_RC",
     "STUB_NETWORK_CREATE_RC",
     "STUB_NPROC",
     "STUB_NTP",
@@ -87,6 +91,7 @@ case "$1 ${2:-}" in
     printf '%b' "${STUB_COMPOSE_CONFIG:-}"
     exit "${STUB_COMPOSE_CONFIG_RC:-0}" ;;
   "info "*) echo "${STUB_DOCKER_ROOT:-}" ;;
+  "image inspect"*) exit "${STUB_IMAGE_INSPECT_RC:-0}" ;;
   "network create"*) [ "${STUB_NETWORK_CREATE_RC:-0}" = 0 ] ;;
   "network rm"*) exit 0 ;;
   "rm "*) exit 0 ;;
@@ -523,6 +528,20 @@ def test_container_checks_use_one_network_and_one_container_without_pull(run: Ru
     assert len(runs) == 1
     assert "--pull=never" in runs[0]
     assert "--network ytdigest-preflight-net-" in runs[0]
+    assert f" {PROBE_IMAGE} python -c" in runs[0]
+
+
+def test_missing_probe_image_fails_both_container_checks_without_pulling_or_running(run: RunFn) -> None:
+    result = run(stubs={"STUB_IMAGE_INSPECT_RC": "1"})
+    pull = f"docker pull {PROBE_IMAGE}"
+    assert result.code == 1
+    assert len(result.lines) == 13
+    for check in ("ollama-from-container", "egress"):
+        assert result.status(check) == "FAIL"
+        assert pull in result.lines[check][1]
+    assert result.docker_calls.count(f"image inspect {PROBE_IMAGE}") == 1
+    assert not any(call.startswith(("run ", "network create", "pull ")) for call in result.docker_calls)
+    assert result.status("docker-group") == "PASS"
 
 
 def test_docker_group_always_passes_and_lists_members(run: RunFn) -> None:
