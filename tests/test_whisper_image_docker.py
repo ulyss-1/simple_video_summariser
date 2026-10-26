@@ -172,7 +172,7 @@ def test_adapter_sees_the_library_without_loading_a_model() -> None:
         "FasterWhisperTranscriber as T; T('tiny','int8',1).check_available()"
     )
     assert _run("python", "-c", check).returncode == 0
-    assert _run("python", "-c", "import services.transcriber.main").returncode == 0
+    # -m runs the module top level (the import) before --help exits.
     assert _run("python", "-m", "services.transcriber.main", "--help").returncode == 0
 
 

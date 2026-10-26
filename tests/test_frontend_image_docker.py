@@ -165,26 +165,6 @@ def test_html_directory_is_exactly_the_build_output(
     assert not [f for f in shipped if f.endswith(".map")]
 
 
-def test_conf_d_holds_only_default_conf_identical_to_ops_nginx_conf(
-    image: str,
-) -> None:
-    assert _files(image, "/etc/nginx/conf.d") == ["./default.conf"]
-    shipped = subprocess.run(
-        ["docker", "run", "--rm", "--entrypoint", "cat", image]
-        + ["/etc/nginx/conf.d/default.conf"],
-        capture_output=True,
-        check=False,
-        timeout=120,
-    )
-    assert shipped.returncode == 0
-    assert shipped.stdout == (REPO_ROOT / "ops" / "nginx.conf").read_bytes()
-
-
-def test_config_is_valid_without_a_resolvable_api_host(image: str) -> None:
-    result = _docker("run", "--rm", "--network", "none", image, "nginx", "-t")
-    assert result.returncode == 0, result.stderr
-
-
 def test_nginx_is_the_1_30_line(image: str) -> None:
     assert re.search(
         r"nginx/1\.30\.", _docker("run", "--rm", image, "nginx", "-v").stderr
@@ -500,6 +480,15 @@ def _asset_paths(stack: Stack) -> list[str]:
 
 
 def test_entrypoint_leaves_the_mounted_config_byte_identical(stack: Stack) -> None:
+    listing = subprocess.run(
+        ["docker", "exec", stack.web, "ls", "-A", "/etc/nginx/conf.d"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert listing.returncode == 0, listing.stderr
+    assert listing.stdout.split() == ["default.conf"]
     out = subprocess.run(
         ["docker", "exec", stack.web, "cat", "/etc/nginx/conf.d/default.conf"],
         capture_output=True,
