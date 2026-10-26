@@ -39,6 +39,7 @@ markers = [
     "integration: needs a real Postgres (Docker Desktop running); deselect with -m \"not integration\"",
     "whisper: needs faster-whisper installed (pip install -r requirements.whisper.txt); deselected by default, select with -m whisper",
     "image: builds the backend, whisper, frontend and bake-off container images (minutes, downloads from PyPI, Debian, the npm registry and Hugging Face); needs Docker Desktop; deselected by default, select with -m image",
+    "bakeoff: the bake-off image tests (#76), a subset of image; CI runs them in their own job only when the bake-off paths change (#316, scripts/ci_changes.sh); select with -m bakeoff",
 ]
 
 [tool.ruff]

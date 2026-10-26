@@ -349,6 +349,17 @@ def test_api_healthcheck_curls_healthz() -> None:
     assert '["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]' in block
 
 
+def test_db_and_api_probe_every_second_while_starting_up() -> None:
+    """#316: a fresh `up --wait` must not wait a whole interval for the first probe."""
+    db = _block("db")
+    assert '["CMD-SHELL", "pg_isready -U ytdigest -d ytdigest"]' in db
+    for key in ("interval: 10s", "timeout: 5s", "retries: 5", "start_period: 30s", "start_interval: 1s"):
+        assert key in db
+    api = _block("api")
+    for key in ("interval: 30s", "timeout: 5s", "retries: 3", "start_period: 20s", "start_interval: 1s"):
+        assert key in api
+
+
 def test_workers_share_one_heartbeat_healthcheck_with_escaped_dollars() -> None:
     text = COMPOSE_YML.read_text()
     assert text.count("&worker-health") == 1

@@ -1640,6 +1640,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
+      start_interval: 1s    # so `up --wait` does not wait a full interval
     networks: [internal]
     logging: *logging
     restart: unless-stopped
@@ -1669,6 +1671,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+      start_interval: 1s    # so `up --wait` does not wait a full interval
     networks: [internal, edge]
     logging: *logging
     restart: unless-stopped
