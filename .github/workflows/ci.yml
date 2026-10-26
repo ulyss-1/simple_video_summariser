@@ -77,8 +77,13 @@ jobs:
       # AGENTS.md -> Setup: tests/adapters/youtube/test_audio.py runs real
       # ffmpeg/ffprobe, and the runner image ships neither. A distro package
       # (not a third-party action) keeps the trusted-action set first-party.
+      # A stalled apt mirror once held this step for 1344 s of the job's 30 min
+      # (#290): its own 5-minute limit and apt's network timeouts fail it fast.
       - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+        timeout-minutes: 5
+        run: |
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends ffmpeg
       # Hash-checking mode covers a whole pip command and refuses editables, so
       # the locks and the editable install are two commands (#145, #264). With
       # --no-build-isolation pip builds the editable with the setuptools from
