@@ -6,7 +6,7 @@ Marked `integration` (needs Docker Desktop) and `image` (the build runs
 `test_frontend_image.py`.
 
 The upstream is the stdlib stub `tests/fixtures/stub_api.py` in
-`python:3.14-slim` on a per-test user-defined network under the alias `api`.
+the pinned backend base image (`ops/Dockerfile.backend`) on a per-test user-defined network under the alias `api`.
 HTTP goes through `http.client`, which neither follows redirects nor merges
 duplicate headers. Every container, network and tag created here is removed
 afterwards, even on failure; waits poll with a deadline, never a fixed sleep.
@@ -33,8 +33,8 @@ pytestmark = [pytest.mark.integration, pytest.mark.image]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STUB = REPO_ROOT / "tests" / "fixtures" / "stub_api.py"
-BASE = "nginx/nginx-unprivileged:1.30-alpine"
-STUB_IMAGE = "python:3.14-slim"
+BASE = "nginx/nginx-unprivileged:1.30-alpine@sha256:517607ae849a46afbd400616a783e4ead0290f52d20ccc0618ccea1a49362474"
+STUB_IMAGE = "python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8"
 CSP = (
     "default-src 'self'; frame-src https://www.youtube-nocookie.com; "
     "img-src 'self' https://i.ytimg.com data:; style-src 'self' 'unsafe-inline'; "

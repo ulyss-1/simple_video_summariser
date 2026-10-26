@@ -1438,8 +1438,11 @@ something looks: the daily `base image digest check` workflow
 goes red, naming the file, the line, the pinned and the upstream digest and the
 replacement reference. It only reports; a human bumps the pin, as for yt-dlp
 (§16.11). To bump an image: run `docker buildx imagetools inspect <name>:<tag>`,
-replace every copy of that digest in the Dockerfiles, the compose files and the
-listings in this document, open a PR, and deploy. One PR can refresh every stale
+replace every copy of that digest in the Dockerfiles, the compose files, the
+literals in `tests/conftest.py` (`_POSTGRES_IMAGE`), `tests/test_frontend_image_docker.py`
+(`STUB_IMAGE`, `BASE`) and `ops/host/preflight.sh` (`probe_image`), and the
+listings in this document (`tests/test_base_image_copies.py` fails until the
+copies match the pins), open a PR, and deploy. One PR can refresh every stale
 pin. The same workflow also reports, through `--stable-line nginx/nginx-unprivileged`
 (#250), when a newer nginx stable line (an even minor, such as `1.32-alpine`) is
 published or the pinned `1.30-alpine` tag is withdrawn. A digest check alone is

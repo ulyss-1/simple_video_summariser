@@ -42,8 +42,9 @@ pytest_plugins = ["pytester", "tests.shuffle_plugin"]
 # when testcontainers first read its environment (and needs no os.environ write).
 testcontainers_config.ryuk_disabled = True
 
-# Same image tag as compose.yml (architecture.md 11.4, 16.1: >=18.6).
-_POSTGRES_IMAGE = "postgres:18-alpine"
+# Literal copy of the `db` image in compose.yml (architecture.md 11.3, 11.4, 16.1: >=18.6).
+# tests/test_base_image_copies.py fails until the two agree.
+_POSTGRES_IMAGE = "postgres:18-alpine@sha256:898c60cb390d1085bc97bdd6a1ae968757421df394b071848b52b1c09c89d6a5"
 _DEFAULT_DOCKER_ENDPOINT = "unix:///var/run/docker.sock"
 
 
