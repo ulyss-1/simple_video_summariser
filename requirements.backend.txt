@@ -16,7 +16,7 @@ yt-dlp==2026.10.21
 
 # Typed, validated settings from environment variables (architecture.md 10,
 # common/config.py). Pydantic itself comes in transitively.
-pydantic-settings==2.15.0
+pydantic-settings==2.16.1
 
 # Structured JSON logs to stdout, stdlib records included (architecture.md 2,
 # 12; common/logging.py).
@@ -25,7 +25,7 @@ structlog==26.1.0
 # Migrations, hand-written SQL only, target_metadata=None (architecture.md 6,
 # 11.4; task #7). Pulls in SQLAlchemy transitively, used only as Alembic's
 # connection/engine layer, not as an ORM.
-alembic==1.20.0
+alembic==1.20.1
 
 # Postgres driver. The compose DSN uses the postgresql:// scheme, which
 # SQLAlchemy maps to the (uninstalled) psycopg2 by default, so
@@ -39,5 +39,5 @@ psycopg-pool==3.3.3
 # HTTP API (architecture.md 8.3, 16.10; task #39). Plain uvicorn, without the
 # [standard] extras: the API serves a single operator, so uvloop/httptools
 # buy nothing measurable.
-fastapi==0.142.2
+fastapi==0.162.0
 uvicorn==0.54.0

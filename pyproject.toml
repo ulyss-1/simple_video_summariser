@@ -15,7 +15,7 @@ ytdigest = "services.cli.main:main"
 [project.optional-dependencies]
 dev = [
     "pytest==9.1.1",
-    "hypothesis==6.170.9",
+    "hypothesis==6.170.11",
     "ruff==0.17.2",
     "mypy==2.4.0",
     # One-Postgres-container-per-session fixture for integration tests
