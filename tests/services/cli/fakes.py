@@ -52,7 +52,7 @@ class FakeAudio:
         self.exc = exc
         self.calls: list[str] = []
 
-    def fetch_normalized(self, video_id: str, dest: Path) -> AudioRef:
+    def fetch_normalized(self, video_id: str, dest: Path, **_kw: Any) -> AudioRef:
         self.calls.append(video_id)
         if self.exc is not None:
             raise self.exc

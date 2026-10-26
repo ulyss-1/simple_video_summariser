@@ -53,7 +53,7 @@ class _GatedMeta:
     def __init__(self, gate: _Gate) -> None:
         self.gate = gate
 
-    def fetch(self, video_id: str) -> str:
+    def fetch(self, video_id: str, **_kw: Any) -> str:
         self.gate.park()
         return video_id
 

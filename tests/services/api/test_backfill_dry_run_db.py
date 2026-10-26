@@ -37,7 +37,7 @@ class Meta:
     def factory(self, timeout: float) -> Meta:
         return self
 
-    def fetch(self, video_id: str) -> Any:
+    def fetch(self, video_id: str, **_kw: Any) -> Any:
         self.calls.append(video_id)
         if self.conn is not None:
             self.statuses.append(self.conn.info.transaction_status)

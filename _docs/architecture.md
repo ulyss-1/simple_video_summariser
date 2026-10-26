@@ -1841,9 +1841,25 @@ claiming. A user's cancel is terminal and does not stop the worker: the job ends
 stored when the shutdown signal arrives, the job still ends `CANCELLED` and the
 worker then exits as for any shutdown. The watchdog's exit with status 70 on a
 job with a request records `CANCELLED`, not `TOOL_FAILURE`, and schedules no
-retry. A long stretch with no checkpoint (the audio download, a synchronous LLM
-call, a metadata fetch) keeps the job `running` with `cancel_requested_at`
-visible until it returns; killing those is #302.
+retry. The heartbeat tick still sets `ctx.cancelled` (up to 60 s after the
+request); the long stretches with no checkpoint then stop within about a second
+because the adapters poll the flag (#302). Each service passes
+`lambda: ctx.cancelled` as a `cancelled` callable (`None` outside a job) to the
+metadata, subtitle and audio ports and, through `JobScope.cancelled()`, to the
+summarizers; adapters never see the database, the queue or `JobContext`. A
+yt-dlp, ffmpeg or ffprobe process (`run_process`) is waited on in slices of
+0.5 s and, on a cancel, its whole process group is killed (`SIGKILL`) and
+`Cancelled` is raised; `YouTubeAudio` then removes every file carrying the
+job's token, so no partial audio stays. A synchronous Anthropic
+(`ANTHROPIC_BATCH=0`) or Ollama call runs on a helper thread while the caller
+polls; on a cancel the open socket is shut down, so the blocked read fails
+and Ollama stops generating, and `Cancelled` is raised. A response that
+arrived in the same slice as the flag is used, not discarded. The adapters
+only raise `Cancelled`; the worker still maps it (a user cancel to `dead` /
+`CANCELLED`, a shutdown cancel to `pending` with the attempt refunded), and a
+cancelled call adds nothing to the job's recorded usage (the spend of a
+cancelled attempt is #252). A batch-mode job keeps its #89 behaviour: it stops
+waiting and leaves its batch to the orphan pass (#160).
 
 **Network segmentation.** `internal: true` means the database and `migrate`
 have no route off the compose bridge. The workers also sit on `egress`.

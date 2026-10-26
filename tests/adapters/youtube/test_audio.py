@@ -16,6 +16,7 @@ import subprocess
 import uuid
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 from hypothesis import given
@@ -55,7 +56,7 @@ class FakeDownloader:
         self.calls: list[tuple[list[str], float]] = []
 
     def __call__(
-        self, argv: Sequence[str], *, timeout: float
+        self, argv: Sequence[str], *, timeout: float, **_kw: Any
     ) -> subprocess.CompletedProcess[str]:
         self.calls.append((list(argv), timeout))
         dest = Path(argv[argv.index("-o") + 1])
@@ -84,7 +85,7 @@ class RecordingRealFfmpeg:
         self.calls: list[list[str]] = []
 
     def __call__(
-        self, argv: Sequence[str], *, timeout: float
+        self, argv: Sequence[str], *, timeout: float, **_kw: Any
     ) -> subprocess.CompletedProcess[str]:
         self.calls.append(list(argv))
         return run_tool(argv, timeout=timeout)
@@ -98,7 +99,7 @@ class FailingFfmpeg:
         self.calls: list[list[str]] = []
 
     def __call__(
-        self, argv: Sequence[str], *, timeout: float
+        self, argv: Sequence[str], *, timeout: float, **_kw: Any
     ) -> subprocess.CompletedProcess[str]:
         self.calls.append(list(argv))
         Path(argv[-1]).write_bytes(b"not actually opus")

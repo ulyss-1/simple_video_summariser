@@ -11,6 +11,7 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -73,7 +74,7 @@ class WritingFakeRunner:
         self.tmpdir_used: Path | None = None
 
     def __call__(
-        self, argv: Sequence[str], *, timeout: float
+        self, argv: Sequence[str], *, timeout: float, **_kw: Any
     ) -> subprocess.CompletedProcess[str]:
         self.calls.append((list(argv), timeout))
         tmpdir = Path(argv[list(argv).index("--paths") + 1])

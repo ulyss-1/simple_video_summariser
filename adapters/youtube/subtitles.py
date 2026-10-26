@@ -11,12 +11,18 @@ from __future__ import annotations
 
 import re
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 from adapters.youtube.metadata import watch_url
 from adapters.youtube.vtt import parse_vtt
-from adapters.youtube.ytdlp import ProcessRunner, run_process, run_ytdlp
+from adapters.youtube.ytdlp import (
+    DEFAULT_POLL_INTERVAL_SEC,
+    ProcessRunner,
+    run_process,
+    run_ytdlp,
+)
 from common.errors import ToolFailureError
 from common.models import Segment, VideoMeta
 
@@ -54,10 +60,12 @@ class YouTubeSubtitles:
         timeout: float = DEFAULT_TIMEOUT_SEC,
         runner: ProcessRunner = run_process,
         cookie_file: Path | None = None,
+        poll_interval: float = DEFAULT_POLL_INTERVAL_SEC,
     ) -> None:
         self._timeout = timeout
         self._runner = runner
         self._cookie_file = cookie_file
+        self._poll_interval = poll_interval
 
     def available(self, meta: VideoMeta) -> SubtitleAvailability:
         """Which English manual/auto track is preferred, from ``meta`` alone.
@@ -69,7 +77,14 @@ class YouTubeSubtitles:
         auto = _preferred_lang(meta.auto_caption_langs) if _is_english(meta.language) else None
         return SubtitleAvailability(manual=manual, auto=auto)
 
-    def fetch(self, video_id: str, lang: str, kind: str) -> list[Segment]:
+    def fetch(
+        self,
+        video_id: str,
+        lang: str,
+        kind: str,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> list[Segment]:
         """Download and parse one subtitle track into segments.
 
         Raises ``ToolFailureError`` if yt-dlp exits 0 but writes no matching
@@ -101,6 +116,8 @@ class YouTubeSubtitles:
                 timeout=self._timeout,
                 runner=self._runner,
                 cookie_file=self._cookie_file,
+                cancelled=cancelled,
+                poll_interval=self._poll_interval,
             )
             matches = sorted(tmpdir.glob(f"*.{lang}.vtt"))
             if not matches:

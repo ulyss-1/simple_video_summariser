@@ -28,7 +28,7 @@ pytestmark = pytest.mark.integration
 
 CHANNEL = "UCuAXFkgsw1L7xaCfnd5JJOw"
 class _FakeMetadata:
-    def fetch(self, video_id: str) -> Any:
+    def fetch(self, video_id: str, **_kw: Any) -> Any:
         return video_id
 
 

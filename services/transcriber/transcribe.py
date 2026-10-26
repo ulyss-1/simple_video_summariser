@@ -307,10 +307,12 @@ def make_transcribe_handler(
         ticker: ProgressTicker,
         history: list[float],
     ) -> None:
-        # The last stop before the audio download, which has no checkpoint inside it (#237).
+        # The last stop before the audio download; inside it the adapter polls the signal (#302).
         ctx.check_cancelled()
         try:
-            audio = audio_source.fetch_normalized(job.video_id, settings.AUDIO_DIR)
+            audio = audio_source.fetch_normalized(
+                job.video_id, settings.AUDIO_DIR, cancelled=lambda: ctx.cancelled
+            )
         except PermanentSourceError as exc:
             mark_unavailable(conn, job.video_id, exc.reason.value)
             conn.commit()

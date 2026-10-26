@@ -301,7 +301,7 @@ def test_two_replicas_handle_every_job_exactly_once(
 
 
 class FakeAudio:
-    def fetch_normalized(self, video_id: str, dest: Path) -> AudioRef:
+    def fetch_normalized(self, video_id: str, dest: Path, **_kw: Any) -> AudioRef:
         rel_path = f"{video_id[:2]}/{video_id}.opus"
         target = dest / rel_path
         target.parent.mkdir(parents=True, exist_ok=True)

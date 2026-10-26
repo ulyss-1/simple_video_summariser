@@ -74,7 +74,14 @@ class SubtitleSource(Protocol):
 
     def available(self, meta: VideoMeta) -> SubtitleAvailability: ...
 
-    def fetch(self, video_id: str, lang: str, kind: str) -> list[Segment]: ...
+    def fetch(
+        self,
+        video_id: str,
+        lang: str,
+        kind: str,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> list[Segment]: ...
 
 
 class TranscriptPath(StrEnum):
@@ -161,7 +168,7 @@ def make_ingest_handler(
             conn.commit()
 
         try:
-            meta = metadata.fetch(video_id)
+            meta = metadata.fetch(video_id, cancelled=lambda: ctx.cancelled)
         except PermanentSourceError as exc:
             permanent(exc)
             raise
@@ -199,7 +206,7 @@ def make_ingest_handler(
         def download(lang: str, kind: str) -> list[Segment]:
             ctx.check_cancelled()
             try:
-                return subtitles.fetch(video_id, lang, kind)
+                return subtitles.fetch(video_id, lang, kind, cancelled=lambda: ctx.cancelled)
             except PermanentSourceError as exc:
                 permanent(exc)
                 raise

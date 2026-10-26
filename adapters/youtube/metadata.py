@@ -6,12 +6,18 @@ a ``VideoMeta``. Failures arrive already classified by the shared runner.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from adapters.youtube.errors import UpcomingVideoError, decode_ytdlp_json
-from adapters.youtube.ytdlp import ProcessRunner, run_process, run_ytdlp
+from adapters.youtube.ytdlp import (
+    DEFAULT_POLL_INTERVAL_SEC,
+    ProcessRunner,
+    run_process,
+    run_ytdlp,
+)
 from common.errors import ToolFailureError
 from common.models import VideoMeta
 from common.youtube_refs import VIDEO_ID_PATTERN
@@ -49,25 +55,31 @@ class YouTubeMetadata:
         timeout: float = DEFAULT_TIMEOUT_SEC,
         runner: ProcessRunner = run_process,
         cookie_file: Path | None = None,
+        poll_interval: float = DEFAULT_POLL_INTERVAL_SEC,
     ) -> None:
         self._timeout = timeout
         self._runner = runner
         self._cookie_file = cookie_file
+        self._poll_interval = poll_interval
 
-    def fetch(self, video_id: str) -> VideoMeta:
+    def fetch(
+        self, video_id: str, *, cancelled: Callable[[], bool] | None = None
+    ) -> VideoMeta:
         url = watch_url(video_id)
         try:
-            stdout = self._run([*_DUMP_FLAGS, url])
+            stdout = self._run([*_DUMP_FLAGS, url], cancelled)
         except UpcomingVideoError:
-            stdout = self._run([*_UPCOMING_FLAGS, url])
+            stdout = self._run([*_UPCOMING_FLAGS, url], cancelled)
         return _parse(decode_ytdlp_json(stdout), video_id)
 
-    def _run(self, args: list[str]) -> str:
+    def _run(self, args: list[str], cancelled: Callable[[], bool] | None) -> str:
         return run_ytdlp(
             args,
             timeout=self._timeout,
             runner=self._runner,
             cookie_file=self._cookie_file,
+            cancelled=cancelled,
+            poll_interval=self._poll_interval,
         )
 
 

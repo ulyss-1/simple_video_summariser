@@ -3,7 +3,7 @@
 yt-dlp runs as ``sys.executable -m yt_dlp``, so the copy pinned in this
 interpreter's environment (requirements.backend.txt) is the one used, never
 whatever ``yt-dlp`` happens to be on ``PATH``. It runs in its own process
-group: on a timeout the whole group is killed, including anything yt-dlp
+group: on a timeout or a cancel (#302) the whole group is killed, including anything yt-dlp
 started (ffmpeg, a JS runtime).
 
 The process call is injectable (``runner``), so tests never start yt-dlp.
@@ -26,32 +26,56 @@ from typing import Protocol
 from urllib.parse import quote, quote_plus
 
 from adapters.youtube.errors import from_ytdlp
-from common.errors import ToolFailureError, TransientNetworkError
+from common.errors import Cancelled, ToolFailureError, TransientNetworkError
 from common.safe_url import redact_literals
 
 # How long to wait for a killed process group to close its pipes.
 _REAP_TIMEOUT_SEC = 5.0
+
+#: How often a running process checks the cancel signal (#302).
+DEFAULT_POLL_INTERVAL_SEC = 0.5
 
 # What `python -m yt_dlp` prints when the module is missing.
 _NOT_INSTALLED = "No module named yt_dlp"
 
 
 class ProcessRunner(Protocol):
-    """Runs ``argv`` to completion; raises ``subprocess.TimeoutExpired`` on timeout."""
+    """Runs ``argv`` to completion; raises ``subprocess.TimeoutExpired`` on timeout.
+
+    With ``cancelled`` set, the runner polls it every ``poll_interval`` seconds
+    and, once it is true, kills the process and raises ``common.errors.Cancelled``.
+    """
 
     def __call__(
-        self, argv: Sequence[str], *, timeout: float
+        self,
+        argv: Sequence[str],
+        *,
+        timeout: float,
+        cancelled: Callable[[], bool] | None = None,
+        poll_interval: float = DEFAULT_POLL_INTERVAL_SEC,
     ) -> subprocess.CompletedProcess[str]: ...
 
 
 def run_process(
-    argv: Sequence[str], *, timeout: float
+    argv: Sequence[str],
+    *,
+    timeout: float,
+    cancelled: Callable[[], bool] | None = None,
+    poll_interval: float = DEFAULT_POLL_INTERVAL_SEC,
+    clock: Callable[[], float] = time.monotonic,
 ) -> subprocess.CompletedProcess[str]:
     """Run ``argv`` in a new process group and capture its output as text.
 
-    On timeout (or any interruption) the whole group is killed and reaped
-    before the exception propagates, so nothing keeps running.
+    On timeout, a cancel (or any interruption) the whole group is killed and
+    reaped before the exception propagates, so nothing keeps running.
+
+    With ``cancelled`` the wait is cut into slices of at most ``poll_interval``.
+    A process that finished in a slice is returned whatever the signal says;
+    otherwise the signal is checked before the deadline, so a cancel due in the
+    same slice as the timeout raises ``Cancelled``, not ``TimeoutExpired``.
     """
+    if poll_interval <= 0:
+        raise ValueError(f"poll_interval must be > 0, got {poll_interval}")
     proc = subprocess.Popen(
         list(argv),
         stdin=subprocess.DEVNULL,
@@ -63,7 +87,20 @@ def run_process(
         start_new_session=True,
     )
     try:
-        stdout, stderr = proc.communicate(timeout=timeout)
+        if cancelled is None:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        else:
+            deadline = clock() + timeout
+            while True:
+                slice_sec = min(poll_interval, max(deadline - clock(), 0.0))
+                try:
+                    stdout, stderr = proc.communicate(timeout=slice_sec)
+                    break
+                except subprocess.TimeoutExpired:
+                    if cancelled():
+                        raise Cancelled() from None
+                    if clock() >= deadline:
+                        raise subprocess.TimeoutExpired(list(argv), timeout) from None
     except BaseException:
         _kill_group(proc)
         raise
@@ -222,6 +259,8 @@ def run_ytdlp(
     timeout: float,
     runner: ProcessRunner = run_process,
     cookie_file: Path | None = None,
+    cancelled: Callable[[], bool] | None = None,
+    poll_interval: float = DEFAULT_POLL_INTERVAL_SEC,
 ) -> str:
     """Run yt-dlp with ``args`` and return its stdout.
 
@@ -233,13 +272,15 @@ def run_ytdlp(
 
     Raises ``TransientNetworkError`` on timeout, ``ToolFailureError`` when
     yt-dlp is not installed or the cookie file cannot be read, and
-    ``from_ytdlp(stderr, returncode)`` on any other non-zero exit. Neither
+    ``from_ytdlp(stderr, returncode)`` on any other non-zero exit. With
+    ``cancelled`` the runner kills yt-dlp once it is true and ``Cancelled``
+    propagates unchanged (#302). Neither
     the cookie file's contents nor its path appear in any of those messages.
     """
     if timeout <= 0:
         raise ValueError(f"timeout must be > 0, got {timeout}")
     if cookie_file is None:
-        return _run(args, timeout, runner, ())
+        return _run(args, timeout, runner, (), cancelled, poll_interval)
     try:
         text = Path(cookie_file).read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
@@ -252,7 +293,9 @@ def run_ytdlp(
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
         secrets = _cookie_secrets(text, cookie_file, copy, tmp)
-        return _run(["--cookies", str(copy), *args], timeout, runner, secrets)
+        return _run(
+            ["--cookies", str(copy), *args], timeout, runner, secrets, cancelled, poll_interval
+        )
 
 
 def _run(
@@ -260,10 +303,12 @@ def _run(
     timeout: float,
     runner: ProcessRunner,
     secrets: Sequence[str],
+    cancelled: Callable[[], bool] | None,
+    poll_interval: float,
 ) -> str:
     argv = [sys.executable, "-m", "yt_dlp", *args]
     try:
-        result = runner(argv, timeout=timeout)
+        result = runner(argv, timeout=timeout, cancelled=cancelled, poll_interval=poll_interval)
     except subprocess.TimeoutExpired:
         raise TransientNetworkError(f"yt-dlp timed out after {timeout}s") from None
     except FileNotFoundError as exc:
