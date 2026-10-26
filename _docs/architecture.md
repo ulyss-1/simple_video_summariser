@@ -1356,8 +1356,10 @@ venv. A lock records a digest of its input, which an offline test compares:
 editing a requirements file without regenerating fails CI, a new upstream
 release never does. A weekly report-only workflow (`lock-update-check.yml`, #266) runs
 `scripts/lock_requirements.py --report-outdated` and goes red, with one annotation naming the
-entries, when an `--upgrade` regeneration of the locks would change any of them; direct `==` pins are
-not covered (#278; yt-dlp has its own daily check, #68). On a red run, regenerate with
+entries, when an `--upgrade` regeneration of the locks would change any of them. The same run reports
+direct `==` pins that are behind PyPI's newest release (#278); a pin held back on purpose carries
+`# hold: <reason>` and shows as a notice instead of turning the run red. yt-dlp stays on #68's daily
+check. On a red run, regenerate with
 `backend --upgrade`, `whisper --upgrade` and `dev --upgrade`, run `pytest -m image`, and open a PR.
 
 **Layer ordering matters:** the lock is copied and installed *before*
@@ -2410,7 +2412,8 @@ requirements:**
   Implemented by `.github/workflows/ytdlp-update-check.yml` (#68): daily, runs
   `scripts/ytdlp_update_check.py`, which goes red with an `::error` naming the
   pinned and latest versions when the pin is behind PyPI, stays silent when it
-  is current, and ends green on a PyPI outage. It never edits the pin.
+  is current, and ends green on a PyPI outage. It never edits the pin. The weekly
+  lock report (§11.3, #278) skips yt-dlp, so it is not reported twice.
 - The `TOOL_FAILURE` class in §8.4 should trigger a **visible alert**, not a
   silent dead-letter. A 403 storm means "go update yt-dlp", and that signal is
   useless if it only lands in a database column.
