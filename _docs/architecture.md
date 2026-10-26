@@ -1354,7 +1354,11 @@ version. `pip install --require-hashes --no-deps` then installs exactly that
 set. The whisper lock holds only what the whisper layer adds to the backend
 venv. A lock records a digest of its input, which an offline test compares:
 editing a requirements file without regenerating fails CI, a new upstream
-release never does.
+release never does. A weekly report-only workflow (`lock-update-check.yml`, #266) runs
+`scripts/lock_requirements.py --report-outdated` and goes red, with one annotation naming the
+entries, when an `--upgrade` regeneration of the locks would change any of them; direct `==` pins are
+not covered (#278; yt-dlp has its own daily check, #68). On a red run, regenerate with
+`backend --upgrade`, `whisper --upgrade` and `dev --upgrade`, run `pytest -m image`, and open a PR.
 
 **Layer ordering matters:** the lock is copied and installed *before*
 application code. Editing a Python file then rebuilds only the final `COPY`
