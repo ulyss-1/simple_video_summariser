@@ -220,9 +220,10 @@ def test_migrate_runs_twice_with_json_output_and_reaches_head(compose: Compose) 
     for _ in range(2):
         result = compose("run", "--rm", "migrate")
         assert result.returncode == 0, result.stderr
-        for line in result.stdout.splitlines():
-            if line.strip():
-                assert isinstance(json.loads(line), dict), line
+        lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+        assert lines, "migrate printed nothing on stdout"
+        for line in lines:
+            assert isinstance(json.loads(line), dict), line
 
     current = compose("run", "--rm", "migrate", "alembic", "current")
     assert current.returncode == 0, current.stderr
