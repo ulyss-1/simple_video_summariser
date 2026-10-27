@@ -240,6 +240,24 @@ Query owns server state; there is no global client-state store.
   The active channel filter is a `role="group" aria-label="Active filters"`
   with the channel name in `<strong>` and a "Clear" button.
 
+- **Add several videos (#240).** Under the single add form, a disclosure
+  button `Add several videos` (`aria-expanded`, collapsed by default, §7.8)
+  reveals a form with a `<textarea>` labelled `YouTube video URLs or IDs, one per
+  line` and `Add videos`. Lines are trimmed and empty ones dropped; zero lines
+  (`Enter at least one video URL or ID`) and more than 200
+  (`At most 200 videos at a time`) are `role="alert"` messages linked by
+  `aria-invalid`/`aria-describedby`, with no request. While the request is pending
+  the textarea and button are `disabled` and a `role="status"` reads `Adding N
+  videos…`. The result is a polite summary (`Queued N · Already added M · Not
+  valid K`, non-zero counts only) over a `<ul>` with one `<li>` per submitted line,
+  in order: `Queued: {id}` / `Already added: {id}` with an `Open` link,
+  `Line N: same video as line M`, `Line N: not a YouTube video URL or ID (first 60
+  characters…)`, `{id}: still being deleted, try again in a minute`, `{id}: could
+  not be added`. `Retry these` appears while any line failed or is still being
+  deleted. On success the textarea keeps only the invalid, failed and cancelling
+  lines. Request errors keep the text and show fixed `role="alert"` copy; nothing
+  from the response is shown.
+
 ### 7.5 Loading, empty and error states
 
 | State | Pattern | Copy examples |

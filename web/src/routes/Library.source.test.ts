@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-const FILES = ['Library.tsx', '../hooks/useBulkDeleteVideos.ts', '../hooks/forgetVideos.ts']
+const FILES = ['Library.tsx', '../components/AddVideosForm.tsx', '../hooks/useSubmitVideosBatch.ts', '../hooks/useBulkDeleteVideos.ts', '../hooks/forgetVideos.ts']
 
 const read = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8')
 

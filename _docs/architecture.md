@@ -1256,6 +1256,14 @@ web/src/
   `useBulkDeleteVideos`; the cache cleanup after a delete is shared with
   `useDeleteVideo` (`hooks/forgetVideos.ts`). Processing rows are selectable
   (#303).
+- **Add several videos (#240).** A disclosure on the Library opens a
+  one-URL-or-ID-per-line form that sends one `POST /videos/batch` (#341) through
+  `useSubmitVideosBatch` (`retry: 0`, invalidates `videos` and `ops`). The client
+  only trims, drops blank lines and checks the cap (`MAX_BATCH_SUBMIT`, 200);
+  the server decides what is a video. One result row per submitted line; the
+  textarea keeps only the lines to fix or retry, and `Retry these` resends the
+  failed and still-being-deleted ones. A submit of the text already sent is
+  ignored until the text changes or the request fails.
 - **Transcript virtualization deferred** (D12b) by paginating segments
   server-side — `GET /videos/{id}/transcript?offset=&limit=`.
 - **Stack:** React 19.3 + Vite 8 (Rolldown) + TypeScript; React Compiler

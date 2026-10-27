@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router'
 import { AddVideoForm } from '../components/AddVideoForm'
+import { AddVideosForm } from '../components/AddVideosForm'
 import { BackfillChannelForm } from '../components/BackfillChannelForm'
 import { bulkDeleteErrorMessage, useBulkDeleteVideos } from '../hooks/useBulkDeleteVideos'
 import { useChannels } from '../hooks/useChannels'
@@ -188,6 +189,7 @@ export function Library() {
       <p aria-live="polite">{notice}</p>
 
       <AddVideoForm />
+      <AddVideosForm />
       <BackfillChannelForm />
 
       <form className="card filters" onSubmit={(e) => e.preventDefault()}>
