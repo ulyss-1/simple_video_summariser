@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.docker_steps import Step, run_steps
+
 pytestmark = [pytest.mark.integration, pytest.mark.image]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -50,6 +52,11 @@ def _ok(*command: str) -> str:
     return result.stdout.strip()
 
 
+def _steps(*commands: str) -> list[Step]:
+    """Several commands in one container, each result kept apart (#330)."""
+    return run_steps(lambda script: _run("sh", "-c", script), *commands)
+
+
 @pytest.fixture(scope="module", autouse=True)
 def image() -> str:
     result = _docker(
@@ -60,24 +67,40 @@ def image() -> str:
 
 
 def test_runs_as_app_uid_10001() -> None:
-    assert _ok("id", "-u") == "10001"
-    assert _ok("id", "-un") == "app"
+    uid, name = _steps("id -u", "id -un")
+    assert uid.ok() == "10001", uid.describe()
+    assert name.ok() == "app", name.describe()
 
 
 def test_python_is_the_venv_python_3_14() -> None:
-    assert _ok("python", "--version").startswith("Python 3.14.")
-    assert _ok("which", "python") == "/opt/venv/bin/python"
-    assert _ok("printenv", "PATH").startswith("/opt/venv/bin")
-    assert _ok("printenv", "PYTHONUNBUFFERED") == "1"
-    assert _ok("printenv", "PYTHONPATH") == "/app"
-    assert _ok("pwd") == "/app"
+    version, which, path, unbuffered, pythonpath, pwd = _steps(
+        "python --version",
+        "which python",
+        "printenv PATH",
+        "printenv PYTHONUNBUFFERED",
+        "printenv PYTHONPATH",
+        "pwd",
+    )
+    assert version.ok().startswith("Python 3.14."), version.describe()
+    assert which.ok() == "/opt/venv/bin/python", which.describe()
+    assert path.ok().startswith("/opt/venv/bin"), path.describe()
+    assert unbuffered.ok() == "1", unbuffered.describe()
+    assert pythonpath.ok() == "/app", pythonpath.describe()
+    assert pwd.ok() == "/app", pwd.describe()
 
 
 def test_app_directory_holds_only_the_application() -> None:
-    entries = set(_ok("ls", "-A", "/app").split())
-    assert entries == {"common", "adapters", "services", "migrations", "alembic.ini"}
-    prompts = _ok("sh", "-c", "ls /app/adapters/summarize/prompts/v1/*.txt | wc -l")
-    assert prompts == "7"
+    listing, prompts = _steps(
+        "ls -A /app", "ls /app/adapters/summarize/prompts/v1/*.txt | wc -l"
+    )
+    assert set(listing.ok().split()) == {
+        "common",
+        "adapters",
+        "services",
+        "migrations",
+        "alembic.ini",
+    }, listing.describe()
+    assert prompts.ok() == "7", prompts.describe()
 
 
 @pytest.mark.parametrize(
@@ -101,9 +124,14 @@ def test_yt_dlp_is_the_pinned_version() -> None:
 
 
 def test_runtime_stage_has_no_build_toolchain() -> None:
-    assert _ok("sh", "-c", "command -v gcc cc make || true") == ""
-    assert _run("dpkg", "-s", "build-essential").returncode != 0
-    assert _ok("sh", "-c", "ls /var/lib/apt/lists | grep -v '^partial$' | wc -l") == "0"
+    compilers, dpkg, apt_lists = _steps(
+        "command -v gcc cc make || true",
+        "dpkg -s build-essential",
+        "ls /var/lib/apt/lists | grep -v '^partial$' | wc -l",
+    )
+    assert compilers.ok() == "", compilers.describe()
+    dpkg.failed()
+    assert apt_lists.ok() == "0", apt_lists.describe()
 
 
 @pytest.mark.parametrize(
@@ -192,9 +220,10 @@ def test_migrate_runs_twice_with_json_output_and_reaches_head(compose: Compose) 
     for _ in range(2):
         result = compose("run", "--rm", "migrate")
         assert result.returncode == 0, result.stderr
-        for line in result.stdout.splitlines():
-            if line.strip():
-                assert isinstance(json.loads(line), dict), line
+        lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+        assert lines, "migrate printed nothing on stdout"
+        for line in lines:
+            assert isinstance(json.loads(line), dict), line
 
     current = compose("run", "--rm", "migrate", "alembic", "current")
     assert current.returncode == 0, current.stderr

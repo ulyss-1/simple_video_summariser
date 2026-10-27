@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.docker_steps import Step, run_steps
+
 pytestmark = [pytest.mark.integration, pytest.mark.image]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -72,6 +74,11 @@ def _ok(*command: str, image: str = IMAGE) -> str:
     return result.stdout.strip()
 
 
+def _steps(*commands: str) -> list[Step]:
+    """Several commands in one container, each result kept apart (#330)."""
+    return run_steps(lambda script: _run("sh", "-c", script), *commands)
+
+
 @pytest.fixture(scope="module", autouse=True)
 def images() -> str:
     for dockerfile, tag in (("ops/Dockerfile.backend", BACKEND), ("ops/Dockerfile.whisper", IMAGE)):
@@ -98,25 +105,31 @@ def _volume(volumes: list[str], kind: str) -> str:
 
 
 def test_runs_as_app_uid_10001_with_no_entrypoint_or_healthcheck() -> None:
-    assert _ok("id", "-u") == "10001"
-    assert _ok("id", "-un") == "app"
+    uid, name, pid = _steps("id -u", "id -un", "echo $$")
+    assert uid.ok() == "10001", uid.describe()
+    assert name.ok() == "app", name.describe()
     config = json.loads(_docker("image", "inspect", IMAGE).stdout)[0]["Config"]
     assert config["User"] in {"app", "10001"}
     assert not config.get("Entrypoint")
     assert not config.get("Healthcheck")
-    assert _ok("python", "-c", "import os; print(os.getpid())") == "1"
+    # The container's command is the `sh` running the script; with no
+    # entrypoint it is PID 1 (as the `python` command was before the fold).
+    assert pid.ok() == "1", pid.describe()
 
 
 def test_environment_is_set_and_overridable() -> None:
-    assert _ok("printenv", "OMP_NUM_THREADS", "HF_HOME", "CT2_VERBOSE").split() == [
-        "4",
-        "/models",
-        "0",
-    ]
-    assert _ok("printenv", "PATH").startswith("/opt/venv/bin")
-    assert _ok("printenv", "PYTHONUNBUFFERED") == "1"
-    assert _ok("printenv", "PYTHONPATH") == "/app"
-    assert _ok("pwd") == "/app"
+    values, path, unbuffered, pythonpath, pwd = _steps(
+        "printenv OMP_NUM_THREADS HF_HOME CT2_VERBOSE",
+        "printenv PATH",
+        "printenv PYTHONUNBUFFERED",
+        "printenv PYTHONPATH",
+        "pwd",
+    )
+    assert values.ok().split() == ["4", "/models", "0"], values.describe()
+    assert path.ok().startswith("/opt/venv/bin"), path.describe()
+    assert unbuffered.ok() == "1", unbuffered.describe()
+    assert pythonpath.ok() == "/app", pythonpath.describe()
+    assert pwd.ok() == "/app", pwd.describe()
     override = _run("printenv", "OMP_NUM_THREADS", extra=("-e", "OMP_NUM_THREADS=2"))
     assert override.stdout.strip() == "2"
 
@@ -142,10 +155,14 @@ def test_tmp_is_writable_by_app() -> None:
 
 
 def test_faster_whisper_is_installed_at_the_pinned_version() -> None:
-    assert "Version: 1.2.1" in _ok("pip", "show", "faster-whisper")
-    imports = "import faster_whisper, ctranslate2, onnxruntime, av, tokenizers"
-    assert _run("python", "-c", imports).returncode == 0
-    assert _run("pip", "check").returncode == 0
+    show, imports, check = _steps(
+        "pip show faster-whisper",
+        "python -c 'import faster_whisper, ctranslate2, onnxruntime, av, tokenizers'",
+        "pip check",
+    )
+    assert "Version: 1.2.1" in show.ok(), show.describe()
+    imports.ok()
+    check.ok()
 
 
 def test_backend_packages_are_unchanged_in_the_whisper_image() -> None:
@@ -171,9 +188,13 @@ def test_adapter_sees_the_library_without_loading_a_model() -> None:
         "from adapters.transcription.faster_whisper import "
         "FasterWhisperTranscriber as T; T('tiny','int8',1).check_available()"
     )
-    assert _run("python", "-c", check).returncode == 0
-    # -m runs the module top level (the import) before --help exits.
-    assert _run("python", "-m", "services.transcriber.main", "--help").returncode == 0
+    adapter, help_ = _steps(
+        f'python -c "{check}"',
+        # -m runs the module top level (the import) before --help exits.
+        "python -m services.transcriber.main --help",
+    )
+    adapter.ok()
+    help_.ok()
 
 
 def test_whisper_threads_overrides_the_default_of_zero() -> None:

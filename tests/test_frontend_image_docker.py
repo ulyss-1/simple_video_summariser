@@ -29,6 +29,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.docker_steps import run_steps
+
 pytestmark = [pytest.mark.integration, pytest.mark.image]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -153,9 +155,15 @@ def test_build_output_has_hashed_assets_and_no_source_maps(build_image: str) -> 
 
 
 def test_no_node_toolchain_in_the_shipped_image(image: str) -> None:
-    assert _sh(image, "command -v node npm npx").stdout.strip() == ""
-    assert _sh(image, "find / -xdev -name node_modules").stdout.strip() == ""
-    assert _sh(image, "test ! -e /src").returncode == 0
+    binaries, modules, src = run_steps(
+        lambda script: _sh(image, script),
+        "command -v node npm npx",
+        "find / -xdev -name node_modules",
+        "test ! -e /src",
+    )
+    assert binaries.stdout.strip() == "", binaries.describe()
+    assert modules.stdout.strip() == "", modules.describe()
+    src.ok()
 
 
 def test_html_directory_is_exactly_the_build_output(
