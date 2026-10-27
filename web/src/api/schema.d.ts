@@ -471,6 +471,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/videos/batch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Videos Batch
+         * @description Submit several videos, one outcome per item in request order (#341).
+         *
+         *     Each valid reference goes through ``submit_video`` in its own transaction (a
+         *     batch-wide one would hold many videos' locks and could deadlock with a bulk or
+         *     channel delete), at ``PRIORITY_NORMAL``: a list of dozens must not outrank every
+         *     RSS upload (architecture 4, D9b). A string that is not a video reference is the
+         *     item outcome ``invalid`` and is never echoed; a repeated video is submitted once.
+         *     A database error on one item makes it ``failed`` and the rest carry on.
+         */
+        post: operations["post_videos_batch_videos_batch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/videos/delete": {
         parameters: {
             query?: never;
@@ -873,6 +900,81 @@ export interface components {
             transcription_sec: number | null;
             /** Video Id */
             video_id: string;
+        };
+        /** BatchSubmitCounts */
+        BatchSubmitCounts: {
+            /**
+             * Already Submitted
+             * @default 0
+             */
+            already_submitted: number;
+            /**
+             * Cancellation In Progress
+             * @default 0
+             */
+            cancellation_in_progress: number;
+            /**
+             * Duplicate
+             * @default 0
+             */
+            duplicate: number;
+            /**
+             * Failed
+             * @default 0
+             */
+            failed: number;
+            /**
+             * Invalid
+             * @default 0
+             */
+            invalid: number;
+            /**
+             * Queued
+             * @default 0
+             */
+            queued: number;
+            /**
+             * Restarted
+             * @default 0
+             */
+            restarted: number;
+        };
+        /**
+         * BatchSubmitItem
+         * @description One outcome; fields that do not apply to it are left out of the JSON.
+         */
+        BatchSubmitItem: {
+            /** First Index */
+            first_index?: number | null;
+            /** Index */
+            index: number;
+            /** Job Id */
+            job_id?: number | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "queued" | "restarted" | "already_submitted" | "duplicate" | "invalid" | "cancellation_in_progress" | "failed";
+            /** Reason */
+            reason?: "not_a_video_ref" | null;
+            /** State */
+            state?: string | null;
+            /** Video Id */
+            video_id?: string | null;
+        };
+        /**
+         * BatchSubmitRequest
+         * @description ``{"urls": [...]}``; the count cap is checked in the route, so a test can lower it.
+         */
+        BatchSubmitRequest: {
+            /** Urls */
+            urls: string[];
+        };
+        /** BatchSubmitResponse */
+        BatchSubmitResponse: {
+            counts: components["schemas"]["BatchSubmitCounts"];
+            /** Results */
+            results: components["schemas"]["BatchSubmitItem"][];
         };
         /** BulkDeleteCounts */
         BulkDeleteCounts: {
@@ -2421,6 +2523,44 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    post_videos_batch_videos_batch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BatchSubmitRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BatchSubmitResponse"];
+                };
+            };
+            /** @description The body is not JSON */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Empty, too long or malformed urls */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

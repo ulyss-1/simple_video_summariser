@@ -2,6 +2,8 @@
 
 - ``POST /videos`` turns a pasted video URL or bare ID into a ``videos`` row
   and one ``ingest`` job at ``PRIORITY_INTERACTIVE``.
+- ``POST /videos/batch`` submits up to ``MAX_BATCH_SUBMIT`` references, one outcome
+  per item, each through ``submit_video`` at ``PRIORITY_NORMAL`` (#341).
 - ``POST /channels`` starts forward-only monitoring from ``monitor_from = now()``.
 - ``POST /channels/{channel_id}/backfill`` lists a registered channel's newest
   uploads and, unless it is a dry run, enqueues the unknown ones at
@@ -36,7 +38,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from psycopg.pq import TransactionStatus
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 from starlette.convertors import Convertor, register_url_convertor
 
 from common.backfill import ConnectionProvider
@@ -55,6 +57,7 @@ from common.errors import (
 from common.models import CatalogSource
 from common.queue import (
     PRIORITY_INTERACTIVE,
+    PRIORITY_NORMAL,
     JobQueue,
     PostgresQueue,
     analyze_dedupe_key,
@@ -68,6 +71,7 @@ from common.repo.media import UnsafeMediaPath, resolve_media_path
 from common.repo.transcripts import get_best_transcript
 from common.repo.videos import insert_submitted_video, video_exists
 from common.youtube_refs import (
+    MAX_REF_CHARS,
     NameRef,
     is_channel_id,
     is_video_id,
@@ -146,8 +150,10 @@ CANCELLATION_IN_PROGRESS = "cancellation in progress"
 NO_TRANSCRIPT = "no transcript yet"
 ANALYSIS_RUNNING = "an analysis is already running for this video"
 REANALYSIS_CONTENDED = "the analysis job kept changing, try again"
+MAX_BATCH_SUBMIT = 200  # POST /videos/batch cap (#341); read at request time like the next one
 MAX_BULK_DELETE = 200  # read at request time, so a test can lower it
 BAD_BULK_DELETE_IDS = "video_ids must be unique canonical YouTube video IDs (11 characters)"
+BATCH_SUBMIT_TOO_MANY = "urls must hold at most {limit} items"
 BULK_DELETE_TOO_MANY = "video_ids must hold at most {limit} IDs"
 BAD_REANALYZE_VIDEO = "video id must be 11 characters of A-Z, a-z, 0-9, '_' or '-'"
 
@@ -300,7 +306,11 @@ class CancellationInProgress(Exception):
 
 
 def submit_video(
-    conn: psycopg.Connection[Any], video_id: str, *, queue: PostgresQueue
+    conn: psycopg.Connection[Any],
+    video_id: str,
+    *,
+    queue: PostgresQueue,
+    priority: int = PRIORITY_INTERACTIVE,
 ) -> SubmitResult:
     """Record ``video_id`` and give it one ``ingest`` job, unless it already has one.
 
@@ -350,17 +360,17 @@ def submit_video(
         if cancelled is not None:
             revived = queue.retry_dead(cancelled)
             if revived.status == "retried":
-                queue.raise_priority(video_id, PRIORITY_INTERACTIVE)
+                queue.raise_priority(video_id, priority)
                 return SubmitResult(video_id, cancelled, "pending", created=False, restarted=True)
         existing = latest_job(conn, video_id, "ingest")
         if existing is None:
-            job_id = queue.enqueue("ingest", video_id, priority=PRIORITY_INTERACTIVE)
+            job_id = queue.enqueue("ingest", video_id, priority=priority)
             if job_id is not None:
                 return SubmitResult(video_id, job_id, "pending", created=True)
             existing = latest_job(conn, video_id, "ingest")
         if existing is None:
             raise RuntimeError("enqueue conflicted but no ingest job is visible")
-        queue.raise_priority(video_id, PRIORITY_INTERACTIVE)
+        queue.raise_priority(video_id, priority)
         job_id, state = existing
         return SubmitResult(video_id, job_id, state, created=False)
 
@@ -413,6 +423,141 @@ def post_videos(
         created=result.created,
         restarted=result.restarted,
     )
+
+
+class BatchSubmitRequest(BaseModel):
+    """``{"urls": [...]}``; the count cap is checked in the route, so a test can lower it."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    urls: list[Annotated[str, StringConstraints(max_length=MAX_REF_CHARS)]] = Field(min_length=1)
+
+
+BatchOutcome = Literal[
+    "queued",
+    "restarted",
+    "already_submitted",
+    "duplicate",
+    "invalid",
+    "cancellation_in_progress",
+    "failed",
+]
+
+
+class BatchSubmitItem(BaseModel):
+    """One outcome; fields that do not apply to it are left out of the JSON."""
+
+    index: int
+    outcome: BatchOutcome
+    video_id: str | None = None
+    job_id: int | None = None
+    state: str | None = None
+    first_index: int | None = None
+    reason: Literal["not_a_video_ref"] | None = None
+
+
+class BatchSubmitCounts(BaseModel):
+    queued: int = 0
+    restarted: int = 0
+    already_submitted: int = 0
+    duplicate: int = 0
+    invalid: int = 0
+    cancellation_in_progress: int = 0
+    failed: int = 0
+
+
+class BatchSubmitResponse(BaseModel):
+    results: list[BatchSubmitItem]
+    counts: BatchSubmitCounts
+
+
+@router.post(
+    "/videos/batch",
+    response_model=BatchSubmitResponse,
+    response_model_exclude_none=True,
+    dependencies=[Depends(_require_json_content_type)],
+    responses={
+        415: {"description": "The body is not JSON"},
+        422: {"description": "Empty, too long or malformed urls"},
+    },
+)
+def post_videos_batch(
+    body: BatchSubmitRequest,
+    conn: Annotated[psycopg.Connection[Any], Depends(get_conn)],
+) -> BatchSubmitResponse:
+    """Submit several videos, one outcome per item in request order (#341).
+
+    Each valid reference goes through ``submit_video`` in its own transaction (a
+    batch-wide one would hold many videos' locks and could deadlock with a bulk or
+    channel delete), at ``PRIORITY_NORMAL``: a list of dozens must not outrank every
+    RSS upload (architecture 4, D9b). A string that is not a video reference is the
+    item outcome ``invalid`` and is never echoed; a repeated video is submitted once.
+    A database error on one item makes it ``failed`` and the rest carry on.
+    """
+    if len(body.urls) > MAX_BATCH_SUBMIT:
+        raise RequestValidationError(
+            [
+                {
+                    "loc": ("body", "urls"),
+                    "msg": BATCH_SUBMIT_TOO_MANY.format(limit=MAX_BATCH_SUBMIT),
+                    "type": "value_error",
+                }
+            ]
+        )
+    _require_idle(conn)
+    results: list[BatchSubmitItem] = []
+    first_seen: dict[str, int] = {}
+    for index, raw in enumerate(body.urls):
+        try:
+            video_id = parse_video_ref(raw)
+        except ValueError:
+            results.append(
+                BatchSubmitItem(index=index, outcome="invalid", reason="not_a_video_ref")
+            )
+            continue
+        if video_id in first_seen:
+            results.append(
+                BatchSubmitItem(
+                    index=index,
+                    outcome="duplicate",
+                    video_id=video_id,
+                    first_index=first_seen[video_id],
+                )
+            )
+            continue
+        first_seen[video_id] = index
+        try:
+            result = submit_video(conn, video_id, queue=PostgresQueue(conn), priority=PRIORITY_NORMAL)
+        except CancellationInProgress:
+            results.append(
+                BatchSubmitItem(index=index, outcome="cancellation_in_progress", video_id=video_id)
+            )
+            continue
+        except psycopg.Error as exc:
+            _log.warning(
+                "videos.batch.item_failed",
+                index=index,
+                video_id=video_id,
+                error_class=type(exc).__name__,
+            )
+            results.append(BatchSubmitItem(index=index, outcome="failed", video_id=video_id))
+            continue
+        outcome: BatchOutcome = (
+            "queued" if result.created else "restarted" if result.restarted else "already_submitted"
+        )
+        results.append(
+            BatchSubmitItem(
+                index=index,
+                outcome=outcome,
+                video_id=video_id,
+                job_id=result.job_id,
+                state=None if result.created or result.restarted else result.state,
+            )
+        )
+    counts = BatchSubmitCounts()
+    for item in results:
+        setattr(counts, item.outcome, getattr(counts, item.outcome) + 1)
+    return BatchSubmitResponse(results=results, counts=counts)
 
 
 @dataclass(frozen=True, slots=True)

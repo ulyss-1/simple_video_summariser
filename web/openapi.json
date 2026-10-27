@@ -725,6 +725,171 @@
         "title": "BackfillVideo",
         "type": "object"
       },
+      "BatchSubmitCounts": {
+        "properties": {
+          "already_submitted": {
+            "default": 0,
+            "title": "Already Submitted",
+            "type": "integer"
+          },
+          "cancellation_in_progress": {
+            "default": 0,
+            "title": "Cancellation In Progress",
+            "type": "integer"
+          },
+          "duplicate": {
+            "default": 0,
+            "title": "Duplicate",
+            "type": "integer"
+          },
+          "failed": {
+            "default": 0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "invalid": {
+            "default": 0,
+            "title": "Invalid",
+            "type": "integer"
+          },
+          "queued": {
+            "default": 0,
+            "title": "Queued",
+            "type": "integer"
+          },
+          "restarted": {
+            "default": 0,
+            "title": "Restarted",
+            "type": "integer"
+          }
+        },
+        "title": "BatchSubmitCounts",
+        "type": "object"
+      },
+      "BatchSubmitItem": {
+        "description": "One outcome; fields that do not apply to it are left out of the JSON.",
+        "properties": {
+          "first_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Index"
+          },
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "outcome": {
+            "enum": [
+              "queued",
+              "restarted",
+              "already_submitted",
+              "duplicate",
+              "invalid",
+              "cancellation_in_progress",
+              "failed"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "const": "not_a_video_ref",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          },
+          "video_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Video Id"
+          }
+        },
+        "required": [
+          "index",
+          "outcome"
+        ],
+        "title": "BatchSubmitItem",
+        "type": "object"
+      },
+      "BatchSubmitRequest": {
+        "additionalProperties": false,
+        "description": "``{\"urls\": [...]}``; the count cap is checked in the route, so a test can lower it.",
+        "properties": {
+          "urls": {
+            "items": {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Urls",
+            "type": "array"
+          }
+        },
+        "required": [
+          "urls"
+        ],
+        "title": "BatchSubmitRequest",
+        "type": "object"
+      },
+      "BatchSubmitResponse": {
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/BatchSubmitCounts"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/BatchSubmitItem"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "results",
+          "counts"
+        ],
+        "title": "BatchSubmitResponse",
+        "type": "object"
+      },
       "BulkDeleteCounts": {
         "properties": {
           "deleted": {
@@ -4399,6 +4564,41 @@
           }
         },
         "summary": "Post Videos"
+      }
+    },
+    "/videos/batch": {
+      "post": {
+        "description": "Submit several videos, one outcome per item in request order (#341).\n\nEach valid reference goes through ``submit_video`` in its own transaction (a\nbatch-wide one would hold many videos' locks and could deadlock with a bulk or\nchannel delete), at ``PRIORITY_NORMAL``: a list of dozens must not outrank every\nRSS upload (architecture 4, D9b). A string that is not a video reference is the\nitem outcome ``invalid`` and is never echoed; a repeated video is submitted once.\nA database error on one item makes it ``failed`` and the rest carry on.",
+        "operationId": "post_videos_batch_videos_batch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchSubmitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchSubmitResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "description": "The body is not JSON"
+          },
+          "422": {
+            "description": "Empty, too long or malformed urls"
+          }
+        },
+        "summary": "Post Videos Batch"
       }
     },
     "/videos/delete": {
