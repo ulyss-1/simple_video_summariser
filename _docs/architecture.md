@@ -387,6 +387,18 @@ and the feed-gap writes of both paths, so an unfollowed channel never gets poll
 health or a gap marker back. Lock order is the channel row, then request,
 video and job rows.
 
+Deleting a channel (#339) extends that order and the same guards. `DELETE
+/channels/{id}` takes the channel row `FOR NO KEY UPDATE` first, not `FOR UPDATE`:
+an ingest that holds its job lock takes `KEY SHARE` on the channel through the
+`videos` foreign key, and `FOR UPDATE` would deadlock with it, while `FOR NO KEY
+UPDATE` still conflicts with the `FOR SHARE` guards. Then come the active backfill
+request, the channel's jobs by `id`, its `videos` rows by `video_id`, and last the
+row delete of `channels`. The unfollow guards above find no row once it is gone and
+write nothing. The synchronous backfill, the planner's backfill slice, the catalog
+snapshot write and `POST /channels/{id}/catalog/process` read the row `FOR SHARE`
+too, requiring only that it exists (active or not), and raise
+`ChannelNotRegistered` once it is gone, so none of them recreates the channel stub.
+
 The channel gap columns are current state, not event history (#156). Polling's
 existing possible-gap condition sets `suspected` without moving an existing
 start time. Reconciliation changes only an existing marker: no valid anchor is
@@ -594,6 +606,8 @@ true again, with `monitor_from = now()`. Inactive stops exactly two things:
 RSS polling and gap reconciliation add no videos for the channel, and it has no
 poll health or feed-gap state (unfollow clears both). Everything explicit still
 works for it: backfill, backfill requests, the catalog and `POST /videos`.
+Unfollow keeps the row; `DELETE /channels/{id}` (#339) removes it together with
+all its videos, whatever their `origin`, each tombstoned.
 
 ```sql
 -- ============ transcripts ============
@@ -1063,6 +1077,7 @@ separated per D13.
 | `GET` | `/channels` | paginated channel list (id, title, active, video count), powers the Library channel filter |
 | `GET` | `/channels/{id}` | one channel, active or not: `{channel_id, title, active, monitor_from, added_at, video_count}` (`video_count` counts its `videos` rows as `GET /channels` does); no subprocess, no write; `404` unknown, `422` malformed ID (#235) |
 | `POST` | `/channels/{id}/unfollow` | body `{}`, JSON only (`415` otherwise); unfollow and keep the videos (#235). In one transaction, channel row first: `active = false`, poll health and feed-gap columns reset, and the channel's pending or running backfill request ended exactly as `backfill/cancel` does. Answers `200` `{channel_id, active: false, changed, backfill: {backfill_id, cancelled_jobs} \| null}`; `changed: false` and nothing else written for an already inactive channel (an ad-hoc stub's request is still ended), so repeating is safe. Videos, transcripts, analyses, tombstones, the catalog snapshot and every other job are untouched. `POST /channels` follows it again, forward-only from `now()`. `404` unknown, `422` malformed ID. Deleting the channel with its videos is #339 |
+| `DELETE` | `/channels/{id}` | delete the channel and every video of it, whatever the `origin` (`rss`, `backfill` or `adhoc`), in one transaction (#339). Each video gets exactly what `POST /videos/delete` does (tombstone, derived data, jobs per #303), through the shared repository function without `MAX_BULK_DELETE`; the active backfill request is ended with the #116 rule first, all of the channel's `backfill_requests` rows are deleted, `channel_catalog_entries` go by their cascade, then the `channels` row. Lock order: channel row `FOR NO KEY UPDATE`, active request, jobs by `id`, `videos` by `video_id`, the row delete (the lock-order note in section 4). Answers `200` `{channel_id, deleted_videos, cancelled_backfill: {backfill_id, cancelled_jobs} \| null}`; media files are unlinked after the commit as in `POST /videos/delete`. Tombstones keep the owner rule: following the channel again and backfilling does not bring the videos back, only an explicit `POST /videos` does. `404` unknown, `422` for a malformed or percent-encoded ID, `503` on a database failure with nothing changed |
 | `POST` | `/channels/{id}/backfill` | `{limit, dry_run}`; priority `-10` (D9b) |
 | `POST` | `/channels/{id}/backfill-requests` | `{limit <= 5000, dry_run}`; only records a request, the planner `channel_backfill` task runs it (#115); `409` while the channel has a pending or running one |
 | `GET` | `/channels/{id}/backfill-requests/{request_id}` | state, attempts, enqueued, timestamps and `result` (the shape of the synchronous response) (#115) |

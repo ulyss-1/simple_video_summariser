@@ -40,7 +40,18 @@ export interface paths {
         get: operations["get_channel_detail_channels__channel_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete Stored Channel
+         * @description Delete a channel and every video of it, whatever their origin (#339).
+         *
+         *     Each video gets exactly what ``POST /videos/delete`` does (#238, #303: a
+         *     tombstone, derived data gone, pending jobs gone, running jobs asked to stop).
+         *     The channel's pending or running backfill request is ended first (#116), its
+         *     request rows and catalog snapshot go, and so does the channel itself. All or
+         *     nothing. Following the channel again later is forward-only and the deleted videos
+         *     stay deleted; only an explicit ``POST /videos`` restores one.
+         */
+        delete: operations["delete_stored_channel_channels__channel_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1112,6 +1123,21 @@ export interface components {
             /** Text */
             text: string;
         };
+        /** DeleteChannelBackfill */
+        DeleteChannelBackfill: {
+            /** Backfill Id */
+            backfill_id: string;
+            /** Cancelled Jobs */
+            cancelled_jobs: number;
+        };
+        /** DeleteChannelResponse */
+        DeleteChannelResponse: {
+            cancelled_backfill: components["schemas"]["DeleteChannelBackfill"] | null;
+            /** Channel Id */
+            channel_id: string;
+            /** Deleted Videos */
+            deleted_videos: number;
+        };
         /** ExcerptOut */
         ExcerptOut: {
             /** Spans */
@@ -1678,6 +1704,42 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    delete_stored_channel_channels__channel_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channel_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteChannelResponse"];
+                };
+            };
+            /** @description Unknown channel */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Malformed channel ID */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

@@ -236,6 +236,17 @@ def lock_active_backfill_id(conn: psycopg.Connection[Any], channel_id: str) -> s
     return None if row is None else request_backfill_id(int(row[0]))
 
 
+def delete_for_channel(conn: psycopg.Connection[Any], channel_id: str) -> int:
+    """Delete every backfill request row of ``channel_id``, whatever its state (#339).
+
+    ``backfill_requests.channel_id`` has no cascade; the channel delete calls this
+    first. An active request must have been ended by the caller. Returns the count.
+    """
+    return conn.execute(
+        "DELETE FROM backfill_requests WHERE channel_id = %s", (channel_id,)
+    ).rowcount
+
+
 def cancel_active(conn: psycopg.Connection[Any], channel_id: str, backfill_id: str) -> int | None:
     """End the channel's active request if ``backfill_id`` is its id (#116).
 
