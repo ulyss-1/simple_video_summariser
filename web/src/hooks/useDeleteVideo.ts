@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '../api'
+import { forgetVideos } from './forgetVideos'
 
 /** Fixed, user-facing text for a failed delete. Nothing from the response or the exception is used. */
 export function deleteErrorMessage(error: unknown): string {
@@ -38,12 +39,7 @@ export function useDeleteVideo(videoId: string, onDeleted: () => void | Promise<
       // Leave the page first: removing a query its mounted observer watches
       // would make that observer fetch the deleted video again.
       await onDeleted()
-      for (const key of ['video', 'transcript', 'analyses', 'analyses-total']) {
-        client.removeQueries({ queryKey: [key, videoId] })
-      }
-      await Promise.all(
-        ['videos', 'search', 'ops'].map((key) => client.invalidateQueries({ queryKey: [key] })),
-      )
+      await forgetVideos(client, [videoId])
     },
   })
 }

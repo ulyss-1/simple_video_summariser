@@ -321,6 +321,7 @@ describe('sorting', () => {
     await mount()
     const headers = screen.getAllByRole('columnheader')
     expect(headers.map((header) => [header.textContent, header.getAttribute('aria-sort')])).toEqual([
+      ['Select', null],
       ['Title', null],
       ['Channel', null],
       ['Published 1 descending', 'descending'],
@@ -468,6 +469,7 @@ describe('rows', () => {
     expect(within(row).getByText('2026-09-01')).toBeTruthy()
     expect(within(row).getByText('Analysed')).toBeTruthy()
     expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toEqual([
+      'Select',
       'Title',
       'Channel',
       'Published 1 descending',
@@ -1131,7 +1133,7 @@ describe('accessibility', () => {
     expect(screen.getByLabelText('To').tagName).toBe('INPUT')
     expect(screen.getByLabelText('Status').tagName).toBe('SELECT')
     expect(screen.getByRole('table')).toBeTruthy()
-    expect(screen.getAllByRole('columnheader')).toHaveLength(5)
+    expect(screen.getAllByRole('columnheader')).toHaveLength(6)
   })
 
   it('uses no dangerouslySetInnerHTML in the view sources', async () => {

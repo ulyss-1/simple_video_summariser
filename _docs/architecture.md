@@ -1190,6 +1190,13 @@ web/src/
   polls `GET /channels/{id}/catalog` every 5 s while any row is `pending` or
   `running`; the selected IDs are route-local state and are reconciled against
   every response.
+- **Library bulk delete (#234).** Each Library row has a checkbox; the
+  selection is route-local state limited to the rows on screen and is cleared on
+  any page, filter or sort change. "Delete N selected videos" opens an inline
+  confirmation and sends one `POST /videos/delete` (#238) through
+  `useBulkDeleteVideos`; the cache cleanup after a delete is shared with
+  `useDeleteVideo` (`hooks/forgetVideos.ts`). Processing rows are selectable
+  (#303).
 - **Transcript virtualization deferred** (D12b) by paginating segments
   server-side — `GET /videos/{id}/transcript?offset=&limit=`.
 - **Stack:** React 19.3 + Vite 8 (Rolldown) + TypeScript; React Compiler
