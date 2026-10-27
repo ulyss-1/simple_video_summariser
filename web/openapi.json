@@ -2907,6 +2907,10 @@
             "title": "Job Id",
             "type": "integer"
           },
+          "restarted": {
+            "title": "Restarted",
+            "type": "boolean"
+          },
           "state": {
             "title": "State",
             "type": "string"
@@ -2920,7 +2924,8 @@
           "video_id",
           "job_id",
           "state",
-          "created"
+          "created",
+          "restarted"
         ],
         "title": "VideoSubmission",
         "type": "object"
@@ -4047,7 +4052,7 @@
                 }
               }
             },
-            "description": "Already submitted"
+            "description": "Already submitted (not restarted)"
           },
           "202": {
             "content": {
@@ -4243,7 +4248,7 @@
     },
     "/videos/{video_id}/cancel": {
       "post": {
-        "description": "Stop all processing of one video (#237).\n\nPending jobs end at once as ``CANCELLED``. A running job is asked to stop and\nends at its next checkpoint (``cancel_requested``, status 202). Repeating the\nrequest is safe. Nothing is deleted (``DELETE /videos/{id}`` works with a running\njob too, #303; a cancel after it is 404). Resume a cancelled job with\n``POST /ops/jobs/{id}/retry``.",
+        "description": "Stop all processing of one video (#237).\n\nPending jobs end at once as ``CANCELLED``. A running job is asked to stop and\nends at its next checkpoint (``cancel_requested``, status 202). Repeating the\nrequest is safe. Nothing is deleted (``DELETE /videos/{id}`` works with a running\njob too, #303; a cancel after it is 404). Resume a cancelled video with\n``POST /videos`` (#304) or a cancelled job with ``POST /ops/jobs/{id}/retry``.",
         "operationId": "post_video_cancel_videos__video_id__cancel_post",
         "parameters": [
           {

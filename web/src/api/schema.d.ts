@@ -495,8 +495,8 @@ export interface paths {
          *     Pending jobs end at once as ``CANCELLED``. A running job is asked to stop and
          *     ends at its next checkpoint (``cancel_requested``, status 202). Repeating the
          *     request is safe. Nothing is deleted (``DELETE /videos/{id}`` works with a running
-         *     job too, #303; a cancel after it is 404). Resume a cancelled job with
-         *     ``POST /ops/jobs/{id}/retry``.
+         *     job too, #303; a cancel after it is 404). Resume a cancelled video with
+         *     ``POST /videos`` (#304) or a cancelled job with ``POST /ops/jobs/{id}/retry``.
          */
         post: operations["post_video_cancel_videos__video_id__cancel_post"];
         delete?: never;
@@ -1455,6 +1455,8 @@ export interface components {
             created: boolean;
             /** Job Id */
             job_id: number;
+            /** Restarted */
+            restarted: boolean;
             /** State */
             state: string;
             /** Video Id */
@@ -2141,7 +2143,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Already submitted */
+            /** @description Already submitted (not restarted) */
             200: {
                 headers: {
                     [name: string]: unknown;
