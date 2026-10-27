@@ -311,6 +311,7 @@ def db(dsn: str) -> Iterator[psycopg.Connection[Any]]:
 
 
 def seed(db: psycopg.Connection[Any], video: str, kind: str, state: str, error_class: str | None) -> int:
+    db.execute("INSERT INTO videos (video_id) VALUES (%s) ON CONFLICT DO NOTHING", (video,))
     row = db.execute(
         """
         INSERT INTO jobs (video_id, kind, dedupe_key, state, attempts, error_class, finished_at)

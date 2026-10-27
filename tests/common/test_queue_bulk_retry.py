@@ -40,6 +40,8 @@ def seed(
     attempts: int = 3,
     priority: int = 5,
 ) -> int:
+    # A dead job of a deleted video is not retryable (#303): these videos exist.
+    conn.execute("INSERT INTO videos (video_id) VALUES (%s) ON CONFLICT DO NOTHING", (video,))
     row = conn.execute(
         """
         INSERT INTO jobs (video_id, kind, dedupe_key, state, attempts, error_class,
@@ -252,6 +254,10 @@ def test_the_limit_boundaries_are_accepted(queue: PostgresQueue, limit: int) -> 
 def test_the_cap_holds_with_many_more_eligible_jobs(
     conn: psycopg.Connection[Any], queue: PostgresQueue
 ) -> None:
+    conn.execute(
+        "INSERT INTO videos (video_id) SELECT 'bulk' || g FROM generate_series(1, %s) g",
+        (MAX_BULK_RETRY * 3,),
+    )
     conn.execute(
         """
         INSERT INTO jobs (video_id, kind, dedupe_key, state, attempts, error_class, finished_at)

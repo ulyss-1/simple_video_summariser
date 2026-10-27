@@ -39,6 +39,7 @@ from tests.services.transcriber.fakes import (
     make_job,
     make_settings,
     manual_segments,
+    mark_running,
 )
 
 pytestmark = pytest.mark.integration
@@ -75,8 +76,7 @@ class Rig:
         built = make_job(video_id, **job)
         parent_id = self.queue.enqueue("ingest", video_id, priority=built.priority)
         assert parent_id is not None
-        self.conn.execute("UPDATE jobs SET state = 'running' WHERE id = %s", (parent_id,))
-        self.conn.commit()
+        mark_running(self.conn, parent_id, video_id, built.payload.get("origin", "adhoc"))
         try:
             self.handler(replace(built, id=parent_id), self.ctx)
         finally:
@@ -113,6 +113,13 @@ class Rig:
             (video_id, "default" if state in ("pending", "running") else f"k-{state}", state),
         )
         self.conn.commit()
+
+    def only_the_seeded_row(self, video_id: str, origin: str = "adhoc") -> bool:
+        """``videos`` holds just the bare row ``mark_running`` seeded: the handler wrote none of it."""
+        return self.rows(
+            "SELECT video_id, channel_id, title, duration_sec, published_at, description,"
+            " unavailable, origin FROM videos"
+        ) == [(video_id, None, None, None, None, None, None, origin)]
 
     def nothing_written(self) -> bool:
         return all(
@@ -488,7 +495,7 @@ def test_an_invalid_video_id_writes_no_video_row(conn: psycopg.Connection[Any]) 
 
     assert rig.metadata.calls == []
     assert rig.subtitles.fetch_calls == []
-    assert rig.scalar("SELECT count(*) FROM videos") == 0
+    assert rig.only_the_seeded_row("--exec=x")
 
 
 def test_origin_defaults_to_adhoc_and_other_payload_keys_are_ignored(
@@ -546,7 +553,7 @@ def test_a_metadata_video_id_mismatch_raises_tool_failure_and_writes_nothing(
     with pytest.raises(ToolFailureError):
         rig.run(MANUAL_ID)
 
-    assert rig.scalar("SELECT count(*) FROM videos") == 0
+    assert rig.only_the_seeded_row(MANUAL_ID)
     assert rig.subtitles.fetch_calls == []
     assert rig.nothing_written()
 
@@ -627,7 +634,7 @@ def test_any_other_metadata_error_propagates_unchanged_and_writes_nothing(
         rig.run(MANUAL_ID)
 
     assert info.value is error
-    assert rig.scalar("SELECT count(*) FROM videos") == 0
+    assert rig.only_the_seeded_row(MANUAL_ID)
     assert rig.nothing_written()
 
 

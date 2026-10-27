@@ -491,3 +491,53 @@ def test_a_job_object_carries_the_request_timestamp(
     with queue.claim(["ingest"], worker="w1") as job:
         assert isinstance(job, Job)
         assert job.cancel_requested_at is not None
+
+
+# ---------------------------------------------------------------------------
+# a job whose video was deleted (#303)
+# ---------------------------------------------------------------------------
+
+
+def dead_job(conn: psycopg.Connection[Any], video_id: str, kind: str = "ingest") -> int:
+    found = conn.execute(
+        "INSERT INTO jobs (video_id, kind, state, error_class, attempts, finished_at)"
+        " VALUES (%s, %s, 'dead', 'CANCELLED', 1, now()) RETURNING id",
+        (video_id, kind),
+    ).fetchone()
+    assert found is not None
+    return int(found[0])
+
+
+def test_retry_dead_refuses_a_dead_job_of_a_deleted_video_and_changes_nothing(
+    conn: psycopg.Connection[Any], queue: PostgresQueue
+) -> None:
+    job_id = dead_job(conn, VID)  # no videos row: the record a delete leaves behind
+
+    outcome = queue.retry_dead(job_id)
+
+    assert (outcome.status, outcome.state) == ("not_dead", "dead")
+    assert row(conn, job_id)["state"] == "dead"
+
+
+def test_retry_dead_still_revives_a_dead_job_whose_video_exists(
+    conn: psycopg.Connection[Any], queue: PostgresQueue
+) -> None:
+    seed_video(conn)
+    job_id = dead_job(conn, VID)
+
+    assert queue.retry_dead(job_id).status == "retried"
+
+
+def test_retry_dead_matching_skips_dead_jobs_of_deleted_videos(
+    conn: psycopg.Connection[Any], queue: PostgresQueue
+) -> None:
+    seed_video(conn, OTHER)
+    gone = dead_job(conn, VID)
+    kept = dead_job(conn, OTHER)
+
+    dry = queue.retry_dead_matching(limit=10, dry_run=True)
+    result = queue.retry_dead_matching(limit=10)
+
+    assert [job.job_id for job in dry.jobs] == [kept]
+    assert result.job_ids == [kept]
+    assert row(conn, gone)["state"] == "dead"

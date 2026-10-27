@@ -1183,6 +1183,8 @@ def _make_dead(
     last_error: str = "boom",
     priority: int = 5,
 ) -> int:
+    # A dead job of a deleted video is not retryable (#303): the video exists here.
+    conn.execute("INSERT INTO videos (video_id) VALUES (%s) ON CONFLICT DO NOTHING", (video_id,))
     job_id = queue.enqueue(kind, video_id, dedupe_key=dedupe_key, priority=priority)
     assert job_id is not None
     with conn.cursor() as cur:
@@ -1670,6 +1672,7 @@ def test_started_at_survives_reap(queue: PostgresQueue, conn: psycopg.Connection
 
 
 def test_started_at_survives_retry_dead(queue: PostgresQueue, conn: psycopg.Connection[Any]) -> None:
+    conn.execute("INSERT INTO videos (video_id) VALUES ('v1') ON CONFLICT DO NOTHING")
     job_id = queue.enqueue("ingest", "v1")
     assert job_id is not None
     past = datetime(2020, 1, 1, tzinfo=UTC)

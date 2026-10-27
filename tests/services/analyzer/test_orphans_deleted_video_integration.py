@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from adapters.summarize.anthropic import AnthropicSummarizer
 from common.config import get_settings
+from common.models import OrphanOutcome
 from common.repo.deleted_videos import delete_video
 from common.repo.llm_batches import insert_checkpoint
 from services.analyzer.orphans import ORPHAN_EXPIRED_AFTER, PassCounts, run_pass
@@ -131,3 +132,64 @@ def test_a_video_added_again_after_the_delete_does_not_adopt_the_old_batches(
         ("POST", f"{API}/v1/messages/batches/{B1}/cancel"),
         ("POST", f"{API}/v1/messages/batches/{B2}/cancel"),
     ]
+
+
+class _Canceller:
+    """An ``OrphanBatchCanceller`` that cancels everything and records the calls."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def cancel_orphan_batch(self, batch_id: str) -> OrphanOutcome:
+        self.calls.append(batch_id)
+        return "cancelled"
+
+
+def test_a_deleted_videos_pending_and_running_analyze_jobs_both_end_with_their_batch_cancelled_once(
+    conn: psycopg.Connection[Any], head_dsn: str
+) -> None:
+    """#303: the pending job's row is gone (``job_id`` NULL); the running job's row is kept,
+    ends ``CANCELLED`` through the worker's outcome write, and its batch is handled as a dead job's."""
+    conn.execute("INSERT INTO videos (video_id) VALUES (%s)", (VIDEO_A,))
+    ids = {}
+    for batch, state, key in ((B1, "pending", "v1:pending"), (B2, "running", "v1:running")):
+        row = conn.execute(
+            "INSERT INTO jobs (kind, video_id, dedupe_key, state, locked_by) "
+            "VALUES ('analyze', %s, %s, %s, CASE WHEN %s = 'running' THEN 'w1' END) RETURNING id",
+            (VIDEO_A, key, state, state),
+        ).fetchone()
+        assert row is not None
+        ids[batch] = int(row[0])
+        insert_checkpoint(conn, ids[batch], "roster", batch, "sha")
+    conn.commit()
+    delete_video(conn, VIDEO_A)
+    canceller = _Canceller()
+
+    def one() -> PassCounts | None:
+        return run_pass(
+            lambda: psycopg.connect(head_dsn),
+            canceller,
+            limit=5,
+            expired_after=ORPHAN_EXPIRED_AFTER,
+            stop=lambda: False,
+        )
+
+    # While the running job is still running its batch is untouched (#89's resume).
+    assert one() == PassCounts(cancelled=1)
+    assert canceller.calls == [B1]
+    conn.rollback()
+    assert conn.execute("SELECT job_id, batch_id FROM llm_batches").fetchall() == [(ids[B2], B2)]
+
+    # The worker's outcome write: the kept row ends dead / CANCELLED.
+    conn.execute(
+        "UPDATE jobs SET state = 'dead', error_class = 'CANCELLED', locked_by = NULL,"
+        " finished_at = now() WHERE id = %s",
+        (ids[B2],),
+    )
+    conn.commit()
+
+    assert one() == PassCounts(cancelled=1)
+    assert canceller.calls == [B1, B2]  # each batch cancelled exactly once
+    assert conn.execute("SELECT count(*) FROM llm_batches").fetchone() == (0,)
+    assert one() == PassCounts()
+    assert canceller.calls == [B1, B2]

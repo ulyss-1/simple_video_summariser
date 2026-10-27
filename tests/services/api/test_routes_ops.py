@@ -430,6 +430,8 @@ def _seed_job(
     last_error: str | None = "boom",
     priority: int = 0,
 ) -> int:
+    # A dead job of a deleted video is not retryable (#303): the video exists here.
+    db.execute("INSERT INTO videos (video_id) VALUES (%s) ON CONFLICT DO NOTHING", (video_id,))
     row = db.execute(
         """
         INSERT INTO jobs (video_id, kind, dedupe_key, state, attempts,

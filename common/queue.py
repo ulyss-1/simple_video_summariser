@@ -278,6 +278,7 @@ _STALE_ANALYZE_SQL = r"""
 #: same statement as the write, so there is still no read-then-write gap.
 _RETRYABLE_PREDICATE = """
         j.state = 'dead'
+          AND EXISTS (SELECT 1 FROM videos v WHERE v.video_id = j.video_id)
           AND NOT EXISTS (
               SELECT 1 FROM jobs newer
               WHERE newer.video_id = j.video_id AND newer.kind = j.kind
@@ -441,7 +442,8 @@ class RetryOutcome:
       ``prev_attempts`` is its attempt count just before the retry, for the
       route's log line.
     - ``"not_found"``: no job has that id.
-    - ``"not_dead"``: the job exists but is ``state`` (not ``dead``).
+    - ``"not_dead"``: the job exists but is ``state`` (not ``dead``), or it is ``dead``
+      but its video was deleted (#303), which no retry can bring back.
     - ``"superseded"``: a newer job exists for the same
       ``(video_id, kind, dedupe_key)``; ``newer_job_id`` is its id
       (always set, whether the initial check or a lost race against a
@@ -597,14 +599,18 @@ class PostgresQueue:
             )
             parent = cur.fetchone()
             cur.execute("SELECT 1 FROM videos WHERE video_id = %s FOR UPDATE", (video_id,))
-            if cur.fetchone() is None:
+            video_found = cur.fetchone() is not None
+            # The request is read before the video's existence: a delete (#303) keeps
+            # the running parent with its request and removes the video, and that
+            # parent must end CANCELLED, not fail with a ValueError.
+            if parent is not None and parent[1] is not None:
+                raise Cancelled()
+            if not video_found:
                 raise ValueError(f"no video {video_id!r} for handoff")
             if parent is None:
                 raise ValueError(
                     f"parent job {parent_job_id} does not belong to video {video_id!r}"
                 )
-            if parent[1] is not None:
-                raise Cancelled()
             cur.execute(
                 """
                 INSERT INTO jobs (video_id, kind, dedupe_key, payload, priority, run_after)
@@ -836,6 +842,13 @@ class PostgresQueue:
             return RetryOutcome("not_found")
         video_id, kind, dedupe_key, state = existing
         if state != "dead":
+            return RetryOutcome("not_dead", state=state)
+
+        if not self._conn.execute(
+            "SELECT 1 FROM videos WHERE video_id = %s", (video_id,)
+        ).fetchone():
+            # The video was deleted (#303): a dead row of it (the record of a cancelled
+            # running job) is not revivable. The route answers like a job that is not dead.
             return RetryOutcome("not_dead", state=state)
 
         newer = self._conn.execute(

@@ -24,6 +24,7 @@ from tests.services.transcriber.fakes import (
     make_job,
     make_settings,
     manual_segments,
+    mark_running,
 )
 
 pytestmark = pytest.mark.integration
@@ -79,8 +80,7 @@ class Rig:
         built = make_job(video_id)
         parent_id = self.queue.enqueue("ingest", video_id, priority=built.priority)
         assert parent_id is not None
-        self.conn.execute("UPDATE jobs SET state = 'running' WHERE id = %s", (parent_id,))
-        self.conn.commit()
+        mark_running(self.conn, parent_id, video_id, built.payload.get("origin", "adhoc"))
         try:
             self.handler(replace(built, id=parent_id), self.ctx)
         finally:

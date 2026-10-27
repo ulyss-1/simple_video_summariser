@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -162,6 +163,7 @@ def test_every_video_origin_is_accepted_by_the_ingest_validator(
         metadata=FakeMetadata(PermanentSourceError(UnavailableReason.REMOVED, "x")),
         subtitles=FakeSubtitles(),
         settings=_settings(),
+        guard_writes=False,  # a fabricated job: there is no jobs row to lock
     )
     ctx, _ = make_ctx()
     with pytest.raises(PermanentSourceError):  # got past _validate: reached the adapter
@@ -550,7 +552,9 @@ def _run_ingest(conn: psycopg.Connection[Any], video_id: str, meta_name: str, **
         (video_id,),
     ).fetchone()
     assert row is not None
-    handler(make_job(video_id, payload=row[1], priority=row[2]), ctx)
+    conn.execute("UPDATE jobs SET state = 'running', locked_by = 'w' WHERE id = %s", (row[0],))
+    conn.commit()
+    handler(replace(make_job(video_id, payload=row[1], priority=row[2]), id=row[0]), ctx)
     conn.execute("UPDATE jobs SET state = 'done', finished_at = now() WHERE id = %s", (row[0],))
     conn.commit()
 

@@ -110,3 +110,23 @@ def test_stale_analyze_leaves_a_cancelled_analyze_alone(conn: psycopg.Connection
         "SELECT state, error_class, dedupe_key FROM jobs WHERE id = %s", (job,)
     ).fetchone()
     assert row == ("dead", "CANCELLED", analyze_dedupe_key("v1", "fake"))
+
+
+def test_the_auto_caption_fallback_ignores_a_dead_transcribe_of_a_deleted_video(
+    conn: psycopg.Connection[Any],
+) -> None:
+    """#303: the leftover record of a deleted video has no ``videos`` row to join."""
+    conn.execute(
+        "INSERT INTO jobs (video_id, kind, state, error_class, attempts, finished_at) "
+        "VALUES (%s, 'transcribe', 'dead', 'TOOL_FAILURE', 3, now())",
+        (V,),
+    )
+    settings = _settings()
+
+    enqueued = run_auto_caption_fallback_sweep(
+        conn, PostgresQueue(conn, settings=settings), settings=settings
+    )
+
+    assert enqueued == 0
+    row = conn.execute("SELECT count(*) FROM jobs WHERE kind = 'ingest'").fetchone()
+    assert row is not None and row[0] == 0

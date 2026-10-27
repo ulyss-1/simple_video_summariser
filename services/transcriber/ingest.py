@@ -29,6 +29,7 @@ from common.queue import Job, JobQueue
 from common.repo.jobs import latest_job_outcome
 from common.repo.transcripts import get_best_transcript
 from common.repo.videos import (
+    JobGuard,
     clear_unavailable,
     get_discovered_at,
     record_unavailable,
@@ -136,7 +137,11 @@ def make_ingest_handler(
     subtitles: SubtitleSource,
     settings: Settings,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    guard_writes: bool = True,
 ) -> Callable[[Job, JobContext], None]:
+    """Build the handler. ``guard_writes`` puts its ``videos`` writes under the job-row
+    guard (#303, architecture.md 7.1); only the CLI, whose in-process jobs have no
+    ``jobs`` row, turns it off."""
     def not_yet_available(
         job: Job, ctx: JobContext, status: str, until_of: Callable[[datetime], datetime]
     ) -> None:
@@ -162,9 +167,10 @@ def make_ingest_handler(
     def handler(job: Job, ctx: JobContext) -> None:
         origin = _validate(job)
         video_id = job.video_id
+        guard = JobGuard(job.id, job.locked_by) if guard_writes else None
 
         def permanent(exc: PermanentSourceError) -> None:
-            record_unavailable(conn, video_id, exc.reason.value, origin=origin)
+            record_unavailable(conn, video_id, exc.reason.value, origin=origin, guard=guard)
             conn.commit()
 
         try:
@@ -189,14 +195,16 @@ def make_ingest_handler(
                 job, ctx, status, lambda current: _not_yet_until(status, meta.release_at, current)
             )
 
-        upsert_video(conn, meta, origin)
+        upsert_video(conn, meta, origin, guard=guard)
         # A policy outcome, not a source failure: the job finishes done (#80).
         # Only automatic origins are skipped; a human's `adhoc` submission
         # clears an earlier skip and is processed.
         if should_skip_short(
             is_short=meta.is_short, origin=origin, skip_shorts=settings.SKIP_SHORTS
         ):
-            record_unavailable(conn, video_id, UnavailableReason.SHORT.value, origin=origin)
+            record_unavailable(
+                conn, video_id, UnavailableReason.SHORT.value, origin=origin, guard=guard
+            )
             conn.commit()
             ctx.logger.info("ingest skipped: short", video_id=video_id, origin=origin)
             return
