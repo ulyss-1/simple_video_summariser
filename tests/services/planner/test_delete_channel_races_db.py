@@ -290,15 +290,28 @@ def test_a_planner_backfill_slice_listed_before_the_delete_ends_quietly_and_reco
     planner, deleter, observer = conns
     create_request(planner, CHANNEL, limit_n=50, dry_run=False)
     planner.commit()
-    held = _held_delete(pool, deleter)
+    # The delete must start only after the slice claimed its request and listed the
+    # channel: a delete started earlier removes the request row and the planner then
+    # finds nothing to claim, so it never blocks on the insert.
+    listed = threading.Event()
+    delete_parked = threading.Event()
+
+    def after_list() -> None:
+        listed.set()
+        assert delete_parked.wait(DEADLINE_SEC), "the delete never parked"
+
     settings = Settings(DATABASE_URL=SecretStr(dsn))
     future = pool.submit(
         run_channel_backfill,
         planner,
         PostgresQueue(planner),
-        _Catalog(lambda: held.wait_reached()),
+        _Catalog(after_list),
         settings=settings,
     )
+    assert listed.wait(DEADLINE_SEC), "the slice never listed the channel"
+    held = _held_delete(pool, deleter)
+    held.wait_reached()
+    delete_parked.set()
     _wait_until(
         _blocked_by(observer, planner.info.backend_pid, deleter.info.backend_pid),
         "the slice insert blocked behind the open delete",
