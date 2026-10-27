@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router'
 import { type components } from '../api'
 import { batchSubmitErrorMessage, useSubmitVideosBatch } from '../hooks/useSubmitVideosBatch'
-import { MAX_BATCH_SUBMIT } from '../lib/batchSubmit'
+import { MAX_BATCH_SUBMIT, outcomeNeedsRetry, summarizeOutcomes } from '../lib/batchSubmit'
 import { parseVideoId } from '../lib/videoId'
 
 type BatchSubmitResponse = components['schemas']['BatchSubmitResponse']
@@ -46,7 +46,7 @@ function rowsFrom(sent: readonly Entry[], response: BatchSubmitResponse): Row[] 
   })
 }
 
-const needsRetry = (row: Row) => row.outcome === 'failed' || row.outcome === 'cancellation_in_progress'
+const needsRetry = (row: Row) => outcomeNeedsRetry(row.outcome)
 const needsFix = (row: Row) => row.outcome === 'invalid' || needsRetry(row)
 
 interface Props {
@@ -146,12 +146,7 @@ export function AddVideosForm({ maxLines = MAX_BATCH_SUBMIT }: Props) {
     })
   }
 
-  const count = (...outcomes: Outcome[]) => rows?.filter((r) => outcomes.includes(r.outcome)).length ?? 0
-  const summary = [
-    { label: 'Queued', n: count('queued', 'restarted') },
-    { label: 'Already added', n: count('already_submitted') },
-    { label: 'Not valid', n: count('invalid') },
-  ].filter((part) => part.n > 0)
+  const summary = summarizeOutcomes(rows?.map((r) => r.outcome) ?? [])
 
   return (
     <div className="card">
@@ -200,9 +195,7 @@ export function AddVideosForm({ maxLines = MAX_BATCH_SUBMIT }: Props) {
               {message}
             </p>
           )}
-          <p aria-live="polite">
-            {summary.map((part) => `${part.label} ${part.n}`).join(' · ')}
-          </p>
+          <p aria-live="polite">{summary}</p>
           {rows !== null && (
             <ul aria-label="Results" aria-live="polite">
               {rows.map((row) => (

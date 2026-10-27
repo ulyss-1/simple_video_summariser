@@ -32,6 +32,7 @@ describe('route table', () => {
     ['/channels/add', 'Add channel'],
     [`/channels/UC${'a'.repeat(22)}/catalog`, 'Channel catalog'],
     ['/channels/not-a-channel/catalog', 'Channel not found'],
+    ['/playlists/import', 'Import a playlist'],
   ])('%s renders the view with heading %s', (path, name) => {
     expect(heading(render(path).html)).toContain(name)
   })

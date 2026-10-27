@@ -3,6 +3,7 @@ import { PlayerProvider } from '../components/PlayerContext'
 import { AddChannel } from './AddChannel'
 import { ChannelCatalog } from './ChannelCatalog'
 import { Compare } from './Compare'
+import { ImportPlaylist } from './ImportPlaylist'
 import { Library } from './Library'
 import { NotFound } from './NotFound'
 import { Ops } from './Ops'
@@ -49,6 +50,7 @@ export const routes: RouteObject[] = [
       },
       { path: 'channels/add', element: <AddChannel /> },
       { path: 'channels/:channelId/catalog', element: <ChannelCatalog /> },
+      { path: 'playlists/import', element: <ImportPlaylist /> },
       { path: 'search', element: <Search /> },
       { path: 'ops', element: <Ops /> },
       { path: '*', element: <NotFound /> },
