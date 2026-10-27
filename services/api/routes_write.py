@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal
 import psycopg
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from psycopg.pq import TransactionStatus
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -61,7 +62,7 @@ from common.queue import (
 from common.repo.backfill_requests import create_request
 from common.repo.channel_catalog import get_enrichment_state, retry_enrichment
 from common.repo.channels import channel_exists, fill_channel_title, register_channel
-from common.repo.deleted_videos import VideoNotFound, delete_video
+from common.repo.deleted_videos import VideoNotFound, delete_video, delete_videos
 from common.repo.jobs import active_job, cancel_video, latest_job
 from common.repo.media import UnsafeMediaPath, resolve_media_path
 from common.repo.transcripts import get_best_transcript
@@ -143,6 +144,9 @@ CANCELLATION_IN_PROGRESS = "cancellation in progress"
 NO_TRANSCRIPT = "no transcript yet"
 ANALYSIS_RUNNING = "an analysis is already running for this video"
 REANALYSIS_CONTENDED = "the analysis job kept changing, try again"
+MAX_BULK_DELETE = 200  # read at request time, so a test can lower it
+BAD_BULK_DELETE_IDS = "video_ids must be unique canonical YouTube video IDs (11 characters)"
+BULK_DELETE_TOO_MANY = "video_ids must hold at most {limit} IDs"
 BAD_REANALYZE_VIDEO = "video id must be 11 characters of A-Z, a-z, 0-9, '_' or '-'"
 
 
@@ -613,6 +617,88 @@ def delete_stored_video(
                 error_class=type(exc).__name__,
             )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+class BulkDeleteRequest(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    video_ids: list[str] = Field(min_length=1)
+
+    @field_validator("video_ids")
+    @classmethod
+    def _unique_valid_ids(cls, values: list[str]) -> list[str]:
+        if len(set(values)) != len(values) or not all(is_video_id(v) for v in values):
+            raise ValueError(BAD_BULK_DELETE_IDS)
+        return values
+
+
+class BulkDeleteItem(BaseModel):
+    video_id: str
+    outcome: Literal["deleted", "not_found"]
+
+
+class BulkDeleteCounts(BaseModel):
+    deleted: int
+    not_found: int
+
+
+class BulkDeleteResponse(BaseModel):
+    results: list[BulkDeleteItem]
+    counts: BulkDeleteCounts
+
+
+@router.post(
+    "/videos/delete",
+    response_model=BulkDeleteResponse,
+    dependencies=[Depends(_require_json_content_type)],
+    responses={
+        415: {"description": "The body is not JSON"},
+        422: {"description": "Empty, too long, duplicated or malformed video_ids"},
+    },
+)
+def post_videos_delete(
+    body: BulkDeleteRequest,
+    conn: Annotated[psycopg.Connection[Any], Depends(get_conn)],
+) -> BulkDeleteResponse:
+    """Delete several videos in one transaction, all or nothing (#238).
+
+    Each video gets exactly what ``DELETE /videos/{id}`` does (#303). Outcomes come
+    back in request order: ``deleted``, or ``not_found`` for an unknown or already
+    deleted video (no tombstone is written for an unknown one).
+    """
+    if len(body.video_ids) > MAX_BULK_DELETE:
+        raise RequestValidationError(
+            [
+                {
+                    "loc": ("body", "video_ids"),
+                    "msg": BULK_DELETE_TOO_MANY.format(limit=MAX_BULK_DELETE),
+                    "type": "value_error",
+                }
+            ]
+        )
+    _require_idle(conn)
+    try:
+        result = delete_videos(conn, body.video_ids)
+    except psycopg.OperationalError as exc:
+        raise DatabaseUnavailable from exc
+    audio_dir = get_settings().AUDIO_DIR
+    for video_id, rel_path in result.media:
+        try:
+            resolve_media_path(audio_dir, rel_path).unlink(missing_ok=True)
+        except (OSError, UnsafeMediaPath) as exc:
+            _log.warning(
+                "video.delete.unlink_failed",
+                video_id=video_id,
+                error_class=type(exc).__name__,
+            )
+    deleted = set(result.deleted)
+    return BulkDeleteResponse(
+        results=[
+            BulkDeleteItem(video_id=v, outcome="deleted" if v in deleted else "not_found")
+            for v in body.video_ids
+        ],
+        counts=BulkDeleteCounts(deleted=len(result.deleted), not_found=len(result.not_found)),
+    )
 
 
 class CancelVideoRequest(BaseModel):

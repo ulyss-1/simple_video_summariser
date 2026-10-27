@@ -725,6 +725,84 @@
         "title": "BackfillVideo",
         "type": "object"
       },
+      "BulkDeleteCounts": {
+        "properties": {
+          "deleted": {
+            "title": "Deleted",
+            "type": "integer"
+          },
+          "not_found": {
+            "title": "Not Found",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "deleted",
+          "not_found"
+        ],
+        "title": "BulkDeleteCounts",
+        "type": "object"
+      },
+      "BulkDeleteItem": {
+        "properties": {
+          "outcome": {
+            "enum": [
+              "deleted",
+              "not_found"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "video_id": {
+            "title": "Video Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "video_id",
+          "outcome"
+        ],
+        "title": "BulkDeleteItem",
+        "type": "object"
+      },
+      "BulkDeleteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "video_ids": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Video Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "video_ids"
+        ],
+        "title": "BulkDeleteRequest",
+        "type": "object"
+      },
+      "BulkDeleteResponse": {
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/BulkDeleteCounts"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/BulkDeleteItem"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "results",
+          "counts"
+        ],
+        "title": "BulkDeleteResponse",
+        "type": "object"
+      },
       "BulkRetryBody": {
         "additionalProperties": false,
         "description": "``POST /ops/jobs/retry`` body (#113): strict types, no unknown keys.\n\nA typo such as ``error_clas`` must be a 422, never a silently wider\nfilter. ``state`` exists only so a client can send the listing's filter\nunchanged; ``None`` is the same as omitting a key.",
@@ -3996,6 +4074,41 @@
           }
         },
         "summary": "Post Videos"
+      }
+    },
+    "/videos/delete": {
+      "post": {
+        "description": "Delete several videos in one transaction, all or nothing (#238).\n\nEach video gets exactly what ``DELETE /videos/{id}`` does (#303). Outcomes come\nback in request order: ``deleted``, or ``not_found`` for an unknown or already\ndeleted video (no tombstone is written for an unknown one).",
+        "operationId": "post_videos_delete_videos_delete_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkDeleteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "description": "The body is not JSON"
+          },
+          "422": {
+            "description": "Empty, too long, duplicated or malformed video_ids"
+          }
+        },
+        "summary": "Post Videos Delete"
       }
     },
     "/videos/{video_id}": {
