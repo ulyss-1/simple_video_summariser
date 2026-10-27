@@ -1,0 +1,23 @@
+{
+ "_fixture": "real recording, --playlist-end 3",
+ "id": "PLAqhIrjkxbuWI23v9cThsA9GvCAUhRvKZ",
+ "title": "Neural Networks: Zero to Hero",
+ "playlist_count": 10,
+ "entries": [
+  {
+   "id": "VMj-3S1tku0",
+   "title": "The spelled-out intro to neural networks and backpropagation: building micrograd",
+   "duration": 8752
+  },
+  {
+   "id": "PaCmpygFfXo",
+   "title": "The spelled-out intro to language modeling: building makemore",
+   "duration": 7065
+  },
+  {
+   "id": "TCH_1BHY58I",
+   "title": "Building makemore Part 2: MLP",
+   "duration": 4540
+  }
+ ]
+}

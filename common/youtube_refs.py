@@ -20,6 +20,11 @@ from urllib.parse import SplitResult, unquote, urlsplit
 # ``$``, it never accepts a trailing newline.
 CHANNEL_ID_PATTERN = re.compile(r"UC[A-Za-z0-9_-]{22}")
 VIDEO_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{11}")
+# A public, bounded playlist (#342): a user playlist (PL), an album or artist
+# mix-in (OL), a channel's uploads (UU) or a favourites list (FL). 12 to 64
+# characters in all. Mixes (RD), liked videos (LL) and watch later (WL) are
+# personalised, private or endless, so they are not matched.
+PLAYLIST_ID_PATTERN = re.compile(r"(?:PL|OL|UU|FL)[A-Za-z0-9_-]{10,62}")
 _CHANNEL_ID = CHANNEL_ID_PATTERN
 _VIDEO_ID = VIDEO_ID_PATTERN
 
@@ -38,6 +43,17 @@ def is_channel_id(value: object) -> bool:
 def is_video_id(value: object) -> bool:
     """A video ID may start with ``-``; never pass a bare one to a process."""
     return isinstance(value, str) and _VIDEO_ID.fullmatch(value) is not None
+
+
+def is_playlist_id(value: object) -> bool:
+    return isinstance(value, str) and PLAYLIST_ID_PATTERN.fullmatch(value) is not None
+
+
+def playlist_url(playlist_id: str) -> str:
+    """The only form of playlist reference a process may get (#342)."""
+    if not is_playlist_id(playlist_id):
+        raise ValueError(f"not a YouTube playlist ID: {playlist_id!r}")
+    return f"https://www.youtube.com/playlist?list={playlist_id}"
 
 
 def validate_channel_id(value: object) -> str:
@@ -97,6 +113,47 @@ def parse_video_ref(text: str) -> str:
     if candidate is None or not is_video_id(candidate):
         raise ValueError(f"no single valid video ID in the input: {shown}")
     return candidate
+
+
+def parse_playlist_ref(text: str) -> str:
+    """The playlist ID in ``text``: a bare ID, a ``/playlist?list=`` or a ``watch?v=&list=`` URL.
+
+    Accepts ``youtube.com``, ``www.youtube.com`` and ``m.youtube.com`` (http,
+    https or no scheme; host case-insensitive), as ``parse_video_ref`` does. The
+    ID must match ``PLAYLIST_ID_PATTERN``: mixes (``RD``), liked videos (``LL``),
+    watch later (``WL``) and any other prefix are refused (#342). A missing,
+    empty or repeated ``list``, another host (also one with a port or user info),
+    another scheme and input over ``MAX_REF_CHARS`` raise ``ValueError`` with a
+    one-line message that never echoes more than a short, escaped prefix.
+
+    A process must get ``playlist_url(id)``, never the bare ID.
+    """
+    raw = text if isinstance(text, str) else ""
+    if len(raw) > MAX_REF_CHARS:
+        raise ValueError(f"input is longer than {MAX_REF_CHARS} characters")
+    ref = raw.strip()
+    if not ref:
+        raise ValueError("a playlist ID or URL is required")
+    shown = repr(ref[:60]) + ("..." if len(ref) > 60 else "")
+    if is_playlist_id(ref):
+        return ref
+    if _BAD_CHARS.search(ref):
+        raise ValueError(f"not a YouTube playlist ID or URL: {shown}")
+
+    parts = _split_url(ref, shown, what="playlist ID or URL")
+    host = parts.netloc.lower()
+    if host not in _HOSTS:
+        raise ValueError(f"not a YouTube playlist URL (host {host[:60]!r}): {shown}")
+    segments = parts.path.split("/")[1:]
+    if segments and segments[-1] == "":
+        segments.pop()
+    if segments not in (["playlist"], ["watch"]):
+        raise ValueError(f"not a YouTube playlist URL: {shown}")
+    # Raw, not ``parse_qsl``: that would decode ``%50`` into ``P``.
+    values = [p[5:] for p in parts.query.split("&") if p.startswith("list=") or p == "list"]
+    if len(values) != 1 or not is_playlist_id(values[0]):
+        raise ValueError(f"no single supported playlist ID in the input: {shown}")
+    return values[0]
 
 
 def parse_channel_ref(text: str) -> str:

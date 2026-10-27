@@ -427,6 +427,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/playlists/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Playlists Resolve
+         * @description List a public playlist's first videos and mark the known ones (#342).
+         *
+         *     One yt-dlp flat listing (bounded by ``deps.BACKFILL_LIST_TIMEOUT_SEC``, below the
+         *     proxy timeout; at most ``playlists.MAX_PLAYLIST_ENTRIES`` entries) like catalog
+         *     discovery, so it departs from "the API performs no processing" in the same way.
+         *     It writes nothing and stores nothing: the person picks videos and submits them
+         *     through ``POST /videos/batch``. Mixes, liked videos and watch later are refused
+         *     before any process starts. No pooled connection is held while yt-dlp runs.
+         */
+        post: operations["post_playlists_resolve_playlists_resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/search": {
         parameters: {
             query?: never;
@@ -1401,6 +1428,45 @@ export interface components {
             last_started_at: string | null;
             /** Task Name */
             task_name: string;
+        };
+        /**
+         * PlaylistEntryOut
+         * @description One listed video. ``url`` is built from the validated ``video_id``.
+         *
+         *     ``known`` is true for a library row or a deletion tombstone; ``processing_status``
+         *     is the library status, ``deleted`` for a tombstone and null when not known.
+         */
+        PlaylistEntryOut: {
+            /** Known */
+            known: boolean;
+            /** Position */
+            position: number;
+            /** Processing Status */
+            processing_status: ("done" | "processing" | "unavailable" | "failed" | "idle" | "deleted") | null;
+            /** Title */
+            title: string | null;
+            /** Url */
+            url: string;
+            /** Video Id */
+            video_id: string;
+        };
+        /** PlaylistResolveRequest */
+        PlaylistResolveRequest: {
+            /** Url */
+            url: string;
+        };
+        /** PlaylistResolveResponse */
+        PlaylistResolveResponse: {
+            /** Entries */
+            entries: components["schemas"]["PlaylistEntryOut"][];
+            /** Playlist Id */
+            playlist_id: string;
+            /** Title */
+            title: string | null;
+            /** Total Count */
+            total_count: number | null;
+            /** Truncated */
+            truncated: boolean;
         };
         /**
          * ProgressOut
@@ -2401,6 +2467,65 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["PlannerRunsOut"];
                 };
+            };
+        };
+    };
+    post_playlists_resolve_playlists_resolve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlaylistResolveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlaylistResolveResponse"];
+                };
+            };
+            /** @description The playlist does not exist or is not public */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The body is not JSON */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not a supported public playlist reference */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The YouTube listing failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description YouTube is unavailable or rate limiting */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

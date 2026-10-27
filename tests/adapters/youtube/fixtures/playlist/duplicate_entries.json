@@ -1,0 +1,273 @@
+{
+ "_fixture": "real recording, entries up to the second occurrence of a repeated video",
+ "id": "PLwP_SiAcdui0KVebT0mU9Apz359a4ubsC",
+ "title": "29C3: Not my department",
+ "playlist_count": 96,
+ "entries": [
+  {
+   "id": "6ueeeG0TBjs",
+   "title": "29C3: \"How I met your pointer\" (EN)",
+   "duration": 3359
+  },
+  {
+   "id": "6RR00hxX7W0",
+   "title": "29C3: The (In)Security of Hardware-based Disk Encryption",
+   "duration": 2036
+  },
+  {
+   "id": "ZKa86zAWmQY",
+   "title": "29C3 GSM: Cell phone network review (EN)",
+   "duration": 3475
+  },
+  {
+   "id": "VdNm9JJmCzg",
+   "title": "29C3: A Rambling Walk Through an EMV Transaction (EN)",
+   "duration": 3574
+  },
+  {
+   "id": "n82AxvFDCbU",
+   "title": "29C3: An Overview of Secure Name Resolution (EN)",
+   "duration": 3580
+  },
+  {
+   "id": "imB6KAyX-Dg",
+   "title": "29C3: Analytical Summary of the BlackHole Exploit Kit (EN)",
+   "duration": 3081
+  },
+  {
+   "id": "2jwqaJk6ebY",
+   "title": "29C3: Best of ... Verfassungsschutz (DE)",
+   "duration": 3561
+  },
+  {
+   "id": "06JWpYkPT5k",
+   "title": "29C3: CCC-Jahresrückblick (DE)",
+   "duration": 5611
+  },
+  {
+   "id": "VyjAcv4QPHU",
+   "title": "29C3: Certificate Authority Collapse (EN)",
+   "duration": 3661
+  },
+  {
+   "id": "z93v9MFOkzk",
+   "title": "29C3: chmod o+rw bundestag (DE)",
+   "duration": 3814
+  },
+  {
+   "id": "P593Ie43SRw",
+   "title": "29C3: Closing Event (EN)",
+   "duration": 2431
+  },
+  {
+   "id": "QjBNuIkq064",
+   "title": "29C3: CVE-2011-3402 Technical Analysis (EN)",
+   "duration": 3538
+  },
+  {
+   "id": "gQviayNGjXU",
+   "title": "29C3: Cyberpeace statt Cyberwar (DE)",
+   "duration": 2545
+  },
+  {
+   "id": "KwEaRKBWsaw",
+   "title": "29C3: Defeating Windows memory forensics (EN)",
+   "duration": 3258
+  },
+  {
+   "id": "JBhQ1REReKw",
+   "title": "29C3: Defend your Freedoms Online: It's Political, Stupid! (EN)",
+   "duration": 3710
+  },
+  {
+   "id": "qVPL6PLuZVY",
+   "title": "29C3: Der Mord fällt aus (DE)",
+   "duration": 3543
+  },
+  {
+   "id": "4g2Gz-x7sMc",
+   "title": "29C3: Die Antiterrordatei (DE)",
+   "duration": 3399
+  },
+  {
+   "id": "AQUcRi1gGsE",
+   "title": "29C3: The truth, what really happened and what was in the newspaper (DE)",
+   "duration": 3402
+  },
+  {
+   "id": "gCl64j5Xbj4",
+   "title": "29C3: ESXi Beast (EN)",
+   "duration": 2737
+  },
+  {
+   "id": "grzgYphb-Fo",
+   "title": "29C3: Ethics in Security Research (EN)",
+   "duration": 1882
+  },
+  {
+   "id": "05rT5r0SLwg",
+   "title": "29C3: EveryCook (EN)",
+   "duration": 3285
+  },
+  {
+   "id": "95N2KXqH5cs",
+   "title": "29C3: FactHacks (EN)",
+   "duration": 4570
+  },
+  {
+   "id": "WRkWuqxDlR0",
+   "title": "29C3: Fnord-Jahresrückblick (DE)",
+   "duration": 5151
+  },
+  {
+   "id": "xFjVcxMpA6c",
+   "title": "29C3: Further hacks on the Calypso platform (EN)",
+   "duration": 2756
+  },
+  {
+   "id": "t3faBggEv2U",
+   "title": "29C3: Hacker Jeopardy (DE)",
+   "duration": 9760
+  },
+  {
+   "id": "OnfQ1NTS8wM",
+   "title": "29C3: Hackers As A High-Risk Population (EN)",
+   "duration": 3670
+  },
+  {
+   "id": "liW_u4vjdVs",
+   "title": "29C3: Hacking Cisco Phones (EN)",
+   "duration": 3271
+  },
+  {
+   "id": "c0jY2srjO9U",
+   "title": "29C3: Hacking Philosophy (DE)",
+   "duration": 3501
+  },
+  {
+   "id": "NP0UD8gr7NA",
+   "title": "29C3: Hanussen's mindreading (DE)",
+   "duration": 2707
+  },
+  {
+   "id": "Vdrab3sB7MU",
+   "title": "29C3: Hash-flooding DoS reloaded: attacks and defenses (EN)",
+   "duration": 3414
+  },
+  {
+   "id": "S6_xKckf_mA",
+   "title": "29C3: IFG: Chance oder Bürgerbluff? (DE)",
+   "duration": 2570
+  },
+  {
+   "id": "kiyKj3Xuqjc",
+   "title": "29C3: INDECT, Verhaltenserkennung & Co (DE)",
+   "duration": 3815
+  },
+  {
+   "id": "0pd3c-sPGpQ",
+   "title": "29C3: ISP's black box (EN)",
+   "duration": 3240
+  },
+  {
+   "id": "aMNszUbgef0",
+   "title": "29C3: Let Me Answer That for You (EN)",
+   "duration": 2939
+  },
+  {
+   "id": "jVOmrwbaTsE",
+   "title": "29C3: Lightning Talks 1 (EN)",
+   "duration": 7606
+  },
+  {
+   "id": "kwNce0sPJBM",
+   "title": "29C3:  Lightning Talks 2 (EN)",
+   "duration": 8809
+  },
+  {
+   "id": "hOAayjwuGzE",
+   "title": "29C3:  Lightning Talks 3 (EN)",
+   "duration": 9789
+  },
+  {
+   "id": "x5N5jwyynGY",
+   "title": "29C3: Long live the protocoletariat! (EN)",
+   "duration": 3838
+  },
+  {
+   "id": "-s56DmLTOio",
+   "title": "29C3: Low-Cost Chip Microprobing (EN)",
+   "duration": 3641
+  },
+  {
+   "id": "c4PkcZScBV8",
+   "title": "29C3: Many Tamagotchis Were Harmed in the Making of this Presentation (EN)",
+   "duration": 2718
+  },
+  {
+   "id": "6MvcgxP6LLE",
+   "title": "29C3: Marvin und der Blues (DE)",
+   "duration": 2446
+  },
+  {
+   "id": "IuLxAAK6_eI",
+   "title": "29C3: My clothes are transmitting (DE)",
+   "duration": 3494
+  },
+  {
+   "id": "RM9cEykutfU",
+   "title": "29C3: Meldegesetz (DE)",
+   "duration": 3575
+  },
+  {
+   "id": "iOASpb_swr0",
+   "title": "29C3: Men who stare at bits (DE)",
+   "duration": 2960
+  },
+  {
+   "id": "GynPbvfyHxs",
+   "title": "29C3: Milking the Digital Cash Cow (EN)",
+   "duration": 3559
+  },
+  {
+   "id": "V5QLNmEf5Ak",
+   "title": "29C3: Millions of Lessons Learned on Electronic Napkins (EN)",
+   "duration": 3574
+  },
+  {
+   "id": "zRHC0OAsB0M",
+   "title": "29C3: Netzaktivisten! Ist das alles, was wir drauf haben? (DE)",
+   "duration": 3574
+  },
+  {
+   "id": "c6gRbEG63Dk",
+   "title": "29C3: New Human Interfaces for Music (EN)",
+   "duration": 2737
+  },
+  {
+   "id": "MU7KZiCL9fg",
+   "title": "29C3: NOC Review (EN)",
+   "duration": 2290
+  },
+  {
+   "id": "ShVg0Zzcv9s",
+   "title": "29C3: Not my department (EN)",
+   "duration": 3357
+  },
+  {
+   "id": "MxMrnsxX9ZA",
+   "title": "29C3: Nougatbytes 10 (DE)",
+   "duration": 5384
+  },
+  {
+   "id": "MxMrnsxX9ZA",
+   "title": "29C3: Nougatbytes 10 (DE)",
+   "duration": 5384
+  },
+  {
+   "id": "2bvGYhitVDU",
+   "title": "29C3: OMG! OER! (EN)",
+   "duration": 2456
+  }
+ ]
+}

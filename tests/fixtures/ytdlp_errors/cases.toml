@@ -390,3 +390,29 @@ ERROR: [youtube:tab] zzqxnotarealname9981: Unable to download API page: HTTP Err
 returncode = 1
 error_class = "PERMANENT_SOURCE"
 reason = "removed"
+
+[[case]]
+# live run on 2026-10-27, yt-dlp 2026.10.21, https://www.youtube.com/playlist?list=PL0123456789ABCDEF (well-formed playlist ID, no such playlist) (#342)
+stderr = '''
+ERROR: [youtube:tab] PL0123456789ABCDEF: YouTube said: The playlist does not exist.
+'''
+returncode = 1
+error_class = "PERMANENT_SOURCE"
+reason = "removed"
+
+[[case]]
+# live run on 2026-10-27, yt-dlp 2026.10.21, https://www.youtube.com/playlist?list=PLtPgu7CB4gbY9oDN3drwC3cMbJggS7dKl (yt-dlp's own "private playlist" test URL: a private playlist reads as a missing one) (#342)
+stderr = '''
+ERROR: [youtube:tab] PLtPgu7CB4gbY9oDN3drwC3cMbJggS7dKl: YouTube said: The playlist does not exist.
+'''
+returncode = 1
+error_class = "PERMANENT_SOURCE"
+reason = "removed"
+
+[[case]]
+# live run on 2026-10-27, yt-dlp 2026.10.21, https://www.youtube.com/playlist?list=PLaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa (shape-valid ID that YouTube rejects outright: HTTP 400, not "does not exist") (#342)
+stderr = '''
+ERROR: [youtube:tab] PLaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: Unable to download API page: HTTP Error 400: Bad Request (caused by <HTTPError 400: Bad Request>)
+'''
+returncode = 1
+error_class = "TOOL_FAILURE"

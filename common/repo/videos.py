@@ -493,6 +493,36 @@ _VIDEO_READ = f"""
 """
 
 
+def library_statuses(
+    conn: psycopg.Connection[Any], video_ids: Sequence[str]
+) -> dict[str, str]:
+    """Map each of ``video_ids`` the library knows to its processing status (#342).
+
+    A ``videos`` row gives the shared status (``done``, ``processing``,
+    ``unavailable``, ``failed`` or ``idle``); an ID with only a deletion tombstone
+    gives ``deleted``. Unknown IDs are absent. One read-only query for the whole
+    list, writing nothing.
+    """
+    ids = list(video_ids)
+    if not ids:
+        return {}
+    rows = conn.execute(
+        f"""
+        SELECT v.video_id, {_VIDEO_STATUS_SQL} AS status
+        FROM videos v
+        {_VIDEO_STATUS_JOINS}
+        WHERE v.video_id = ANY(%(ids)s)
+        UNION ALL
+        SELECT d.video_id, 'deleted'
+        FROM deleted_videos d
+        WHERE d.video_id = ANY(%(ids)s)
+          AND NOT EXISTS (SELECT 1 FROM videos x WHERE x.video_id = d.video_id)
+        """,
+        {"ids": ids, "prefer_model": None, "prefer_prompt_version": None},
+    ).fetchall()
+    return {str(row[0]): str(row[1]) for row in rows}
+
+
 def list_videos(
     conn: psycopg.Connection[Any],
     *,

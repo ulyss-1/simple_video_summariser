@@ -12,6 +12,8 @@
   up to 5000 uploads; the planner runs it (#115).
 - ``POST /channels/{channel_id}/backfill/cancel`` deletes one real backfill's
   still-pending ``ingest`` jobs (#116).
+- ``POST /playlists/resolve`` lists a public playlist's first videos and marks the
+  known ones; it writes nothing (#342; logic in ``services.api.playlists``).
 - ``POST /channels/{channel_id}/catalog/discover``, ``.../catalog/process`` and
   ``.../catalog/{video_id}/metadata/retry`` store a channel's flat upload listing,
   queue selected videos from it, and requeue a failed metadata lookup (#242).
@@ -30,7 +32,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 
 import psycopg
 import structlog
@@ -54,7 +56,7 @@ from common.errors import (
     ToolFailureError,
     TransientNetworkError,
 )
-from common.models import CatalogSource
+from common.models import CatalogSource, PlaylistSource
 from common.queue import (
     PRIORITY_INTERACTIVE,
     PRIORITY_NORMAL,
@@ -76,6 +78,7 @@ from common.youtube_refs import (
     is_channel_id,
     is_video_id,
     parse_channel_input,
+    parse_playlist_ref,
     parse_video_ref,
 )
 from services.api.backfill import (
@@ -97,8 +100,10 @@ from services.api.deps import (
     get_channel_resolver,
     get_conn,
     get_conn_provider,
+    get_playlist_source,
     rate_limit,
 )
+from services.api.playlists import resolve_playlist
 from services.api.schemas import CatalogLimit, CatalogPageOut, catalog_page_out
 
 _log = structlog.get_logger(__name__)
@@ -1498,3 +1503,113 @@ def post_catalog_metadata_retry(
     if state is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, CATALOG_ROW_NOT_FOUND)
     raise HTTPException(status.HTTP_409_CONFLICT, CATALOG_RETRY_NOT_FAILED)
+
+
+# --- playlist resolve (#342) --------------------------------------------------
+
+BAD_PLAYLIST_REF = (
+    "url must be a public YouTube playlist ID or playlist URL "
+    "(not a mix, liked videos or watch later)"
+)
+PLAYLIST_NOT_FOUND = "playlist not found or not public"
+PlaylistProcessingStatus = Literal[
+    "done", "processing", "unavailable", "failed", "idle", "deleted"
+]
+
+
+class PlaylistResolveRequest(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    url: str
+
+
+class PlaylistEntryOut(BaseModel):
+    """One listed video. ``url`` is built from the validated ``video_id``.
+
+    ``known`` is true for a library row or a deletion tombstone; ``processing_status``
+    is the library status, ``deleted`` for a tombstone and null when not known.
+    """
+
+    position: int
+    video_id: str
+    title: str | None
+    url: str
+    known: bool
+    processing_status: PlaylistProcessingStatus | None
+
+
+class PlaylistResolveResponse(BaseModel):
+    playlist_id: str
+    title: str | None
+    total_count: int | None
+    truncated: bool
+    entries: list[PlaylistEntryOut]
+
+
+@router.post(
+    "/playlists/resolve",
+    dependencies=[Depends(_require_json_content_type)],
+    response_model=PlaylistResolveResponse,
+    responses={
+        404: {"description": "The playlist does not exist or is not public"},
+        415: {"description": "The body is not JSON"},
+        422: {"description": "Not a supported public playlist reference"},
+        502: {"description": "The YouTube listing failed"},
+        503: {"description": "YouTube is unavailable or rate limiting"},
+    },
+)
+def post_playlists_resolve(
+    body: PlaylistResolveRequest,
+    provider: Annotated[ConnectionProvider, Depends(get_conn_provider)],
+    source: Annotated[PlaylistSource, Depends(get_playlist_source)],
+) -> PlaylistResolveResponse:
+    """List a public playlist's first videos and mark the known ones (#342).
+
+    One yt-dlp flat listing (bounded by ``deps.BACKFILL_LIST_TIMEOUT_SEC``, below the
+    proxy timeout; at most ``playlists.MAX_PLAYLIST_ENTRIES`` entries) like catalog
+    discovery, so it departs from "the API performs no processing" in the same way.
+    It writes nothing and stores nothing: the person picks videos and submits them
+    through ``POST /videos/batch``. Mixes, liked videos and watch later are refused
+    before any process starts. No pooled connection is held while yt-dlp runs.
+    """
+    try:
+        playlist_id = parse_playlist_ref(body.url)
+    except ValueError:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, BAD_PLAYLIST_REF) from None
+    try:
+        resolved = resolve_playlist(provider, source, playlist_id)
+    except PermanentSourceError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, PLAYLIST_NOT_FOUND) from None
+    except (TransientNetworkError, RateLimitedError, ToolFailureError) as exc:
+        _log.warning(
+            "playlist.resolve.failed", playlist_id=playlist_id, error_class=type(exc).__name__
+        )
+        if isinstance(exc, ToolFailureError):
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, LISTING_FAILED) from None
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, LISTING_UNAVAILABLE
+        ) from None
+    _log.info(
+        "playlist.resolve",
+        playlist_id=playlist_id,
+        listed=len(resolved.entries),
+        total_count=resolved.total_count,
+        truncated=resolved.truncated,
+    )
+    return PlaylistResolveResponse(
+        playlist_id=resolved.playlist_id,
+        title=resolved.title,
+        total_count=resolved.total_count,
+        truncated=resolved.truncated,
+        entries=[
+            PlaylistEntryOut(
+                position=entry.position,
+                video_id=entry.video_id,
+                title=entry.title,
+                url=f"https://www.youtube.com/watch?v={entry.video_id}",
+                known=entry.known,
+                processing_status=cast(PlaylistProcessingStatus | None, entry.processing_status),
+            )
+            for entry in resolved.entries
+        ],
+    )
