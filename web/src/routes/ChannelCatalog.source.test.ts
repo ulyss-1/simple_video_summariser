@@ -6,6 +6,9 @@ const FILES = [
   'AddChannel.tsx',
   '../hooks/useChannelCatalog.ts',
   '../hooks/useRegisterChannel.ts',
+  '../hooks/useChannelDetail.ts',
+  '../hooks/useUnfollowChannel.ts',
+  '../hooks/useDeleteChannel.ts',
   '../lib/channelCatalog.ts',
 ]
 

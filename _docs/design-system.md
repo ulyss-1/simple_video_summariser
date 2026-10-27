@@ -349,6 +349,39 @@ changes; `--selected`, `--known` and `--failed` add an edge, never the only cue:
 
 The stripes use the existing `--color-bg` and `--color-th-bg` tokens (light theme only, as the rest of the stylesheet is for v1).
 
+#### Channel section and its two actions (#340)
+
+Above the range buttons, a `<section class="card" aria-labelledby>` with
+`<h2>Channel</h2>` reads "{title} · Following since {YYYY-MM-DD} · {N} videos in
+the Library" (UTC; the channel ID when the title is null or empty; "Not followed"
+for an unfollowed channel, which also shows "New uploads are not checked. Add the
+channel again to follow it from now on." and a link to `/channels/add`). A 404 shows
+"Channel not found" + "Back to Library"; 503 and network errors use the 7.5 alert
+with Retry.
+
+`Unfollow channel` (followed channels only) and `Delete channel and its videos` each
+open an inline sentence (7.7, never a modal), one at a time, with the opener
+`disabled` while its confirmation is open:
+
+- unfollow: "Stop following {title}? Its {N} videos stay in the Library. New uploads
+  are no longer checked, and an unfinished backfill is cancelled." with `Confirm
+  unfollow` and `Keep following`; focus goes to `Keep following`, and Escape or
+  `Keep following` returns it to `Unfollow channel`. Success announces "Channel
+  unfollowed" (plus " · Backfill cancelled") in the section's polite live line
+  (`tabIndex={-1}`, focused), and the section then reads "Not followed";
+- delete: "Delete {title} and all {N} of its videos, including videos you added by
+  URL? Their transcripts, summaries and stored audio are permanently removed and any
+  processing is stopped. Following the channel again will not bring these videos
+  back; adding a video by its URL processes it again." (with no videos: "Delete
+  {title}? It has no videos in the Library.") with `Confirm delete` and `Cancel`;
+  focus goes to `Cancel`. Success opens the Library with the one-shot notice
+  "Channel deleted · {N} videos removed" (a 404 counts as deleted: "Channel deleted").
+
+Both buttons are `disabled` while a request runs, and a failure (429, 503, other)
+keeps the confirmation open with a `role="alert"` and a fixed text. The Library's
+"Active filters" group shows a "Manage channel" link to the channel's page next to
+Clear.
+
 ### 7.12 Library bulk delete (#234)
 
 The Library table has a first column `<th scope="col">Select</th>` with a native
