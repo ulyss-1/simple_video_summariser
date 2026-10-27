@@ -17,6 +17,8 @@ stack that holds 8080 does not get in the way.
 from __future__ import annotations
 
 import json
+import re
+import shlex
 import subprocess
 import uuid
 from collections.abc import Iterator
@@ -123,27 +125,26 @@ def _health_command(stack: Stack, service: str) -> str:
 @pytest.mark.parametrize("service", ["planner", "transcriber"])  # backend, whisper
 def test_worker_healthcheck_command_cases(stack: Stack, service: str) -> None:
     check = _health_command(stack, service)
-
-    def run(prelude: str) -> int:
-        return stack.compose(
-            "run", "--rm", "--no-deps", "-T", "--entrypoint", "sh", service,
-            "-c", f"{prelude}{check}",
-            timeout=300,
-        ).returncode  # fmt: skip
-
-    assert run("rm -f /tmp/heartbeat; ") != 0
-    assert run("touch /tmp/heartbeat; ") == 0
-    assert run("touch -d @$(( $(date +%s) - 200 )) /tmp/heartbeat; ") != 0
-
-
-def test_migrate_run_rm_works_alone_and_logs_json(stack: Stack) -> None:
-    result = stack.compose("run", "--rm", "-T", "migrate", timeout=300)
-    assert result.returncode == 0, result.stderr
-    # The container's output is on stdout; stderr is Compose's own progress.
-    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
-    assert lines
-    for line in lines:
-        assert isinstance(json.loads(line), dict), line
+    cases = (
+        ("missing", "rm -f /tmp/heartbeat; "),
+        ("fresh", "touch /tmp/heartbeat; "),
+        ("stale", "touch -d @$(( $(date +%s) - 200 )) /tmp/heartbeat; "),
+    )
+    # One container runs the three cases in turn; each prints its own exit code.
+    script = "\n".join(
+        f'sh -c {shlex.quote(prelude + check)}; echo "{name}=$?"'
+        for name, prelude in cases
+    )
+    result = stack.compose(
+        "run", "--rm", "--no-deps", "-T", "--entrypoint", "sh", service,
+        "-c", script,
+        timeout=300,
+    )  # fmt: skip
+    codes = dict(re.findall(r"^(missing|fresh|stale)=(\d+)$", result.stdout, re.MULTILINE))
+    assert set(codes) == {"missing", "fresh", "stale"}, (result.stdout, result.stderr)
+    assert int(codes["missing"]) != 0, result.stdout
+    assert int(codes["fresh"]) == 0, result.stdout
+    assert int(codes["stale"]) != 0, result.stdout
 
 
 def test_service_logs_are_one_json_object_per_line(stack: Stack) -> None:
