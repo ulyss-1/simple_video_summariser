@@ -379,8 +379,10 @@ Both discovery paths read the channel list before they fetch, so an unfollow
 that first reads the channel row `FOR SHARE` and finds `active = true`; the
 unfollow takes the same row `FOR UPDATE`, so the two serialize either way. An
 inactive channel is skipped for the rest of that pass, logged once at INFO as
-`planner.poll.channel_unfollowed` / `planner.reconcile.channel_unfollowed`, and
-the poll records no health for it. Lock order is the channel row, then request,
+`planner.poll.channel_unfollowed` / `planner.reconcile.channel_unfollowed`. The
+same guard covers the poll's health write (success or failure, `record_poll`)
+and the feed-gap writes of both paths, so an unfollowed channel never gets poll
+health or a gap marker back. Lock order is the channel row, then request,
 video and job rows.
 
 The channel gap columns are current state, not event history (#156). Polling's

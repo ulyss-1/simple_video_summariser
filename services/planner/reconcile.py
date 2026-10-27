@@ -183,6 +183,10 @@ def reconcile_channels(
     return result
 
 
+def _log_unfollowed(channel: Channel) -> None:
+    _logger.info("planner.reconcile.channel_unfollowed", extra={"channel_id": channel.channel_id})
+
+
 def _log_failure(channel: Channel, exc: Exception, event: str) -> None:
     _logger.warning(
         event, extra={"channel_id": channel.channel_id, "error_class": type(exc).__name__}
@@ -225,6 +229,9 @@ def _reconcile_channel(
             extra={"channel_id": channel.channel_id, "listed": len(entries)},
         )
         with conn.transaction():
+            if not lock_active_channel(conn, channel.channel_id):
+                _log_unfollowed(channel)
+                return
             set_feed_gap_reason(conn, channel.channel_id, "no_anchor", source="reconcile")
         return
 
@@ -233,10 +240,7 @@ def _reconcile_channel(
     try:
         with conn.transaction():
             if not lock_active_channel(conn, channel.channel_id):
-                _logger.info(
-                    "planner.reconcile.channel_unfollowed",
-                    extra={"channel_id": channel.channel_id},
-                )
+                _log_unfollowed(channel)
                 return
             for entry in entries[:anchor]:
                 if entry.video_id in known:

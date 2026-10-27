@@ -381,6 +381,7 @@ def test_a_fetch_failure_rolls_back_before_recording_the_poll(
 
     monkeypatch.setattr(poll, "list_active_channels", lambda _c: [_channel("UCa")])
     monkeypatch.setattr(poll, "record_poll", record_poll)
+    monkeypatch.setattr(poll, "lock_active_channel", lambda _c, _id: True)
 
     poll_channels(conn, FakeFeed({"UCa": ValueError("boom")}), FakeQueue())  # type: ignore[arg-type]
 

@@ -185,3 +185,76 @@ def test_an_insert_that_commits_first_keeps_its_video_and_job_after_the_unfollow
         assert unfollow_future.result(DEADLINE_SEC).changed is True
 
     assert _state(observer) == (False, [KNOWN, NEW], [NEW])
+
+
+# --- the other guarded writes: poll health and the no_anchor marker -------------------
+
+
+class _HookedFeed:
+    def __init__(self, on_fetch: Callable[[], None], *, fail: bool) -> None:
+        self.on_fetch = on_fetch
+        self.fail = fail
+
+    def fetch(self, channel_id: str) -> list[FeedEntry]:
+        self.on_fetch()
+        if self.fail:
+            raise RuntimeError("feed down")
+        return []
+
+
+def _poll_failure(
+    conn: psycopg.Connection[Any], hook: Callable[[], None], queue: PostgresQueue
+) -> object:
+    return poll_channels(conn, _HookedFeed(hook, fail=True), queue)
+
+
+def _poll_success_without_entries(
+    conn: psycopg.Connection[Any], hook: Callable[[], None], queue: PostgresQueue
+) -> object:
+    return poll_channels(conn, _HookedFeed(hook, fail=False), queue)
+
+
+class _NoAnchorCatalog:
+    def __init__(self, on_list: Callable[[], None]) -> None:
+        self.on_list = on_list
+
+    def list_uploads(self, channel_id: str, *, limit: int) -> ChannelCatalog:
+        self.on_list()
+        entries = (CatalogEntry("other000001", "Unknown", 60),)
+        return ChannelCatalog(channel_id, entries, 1)
+
+
+def _reconcile_no_anchor(
+    conn: psycopg.Connection[Any], hook: Callable[[], None], queue: PostgresQueue
+) -> object:
+    return reconcile_channels(conn, _NoAnchorCatalog(hook), queue, clock=lambda: 0.0)
+
+
+@pytest.mark.parametrize(
+    "run",
+    [_poll_failure, _poll_success_without_entries, _reconcile_no_anchor],
+    ids=["poll_failure", "poll_success_no_entries", "reconcile_no_anchor"],
+)
+def test_an_unfollow_held_open_blocks_health_and_marker_writes_which_then_write_nothing(
+    run: Run, conns: tuple[psycopg.Connection[Any], ...]
+) -> None:
+    planner, unfollower, observer = conns
+
+    def unfollow_without_commit() -> None:
+        assert deactivate_channel(unfollower, CHANNEL) is True
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(run, planner, unfollow_without_commit, PostgresQueue(planner))
+        _wait_until(
+            _blocked_by(observer, planner.info.backend_pid, unfollower.info.backend_pid),
+            "the planner write blocked behind the open unfollow",
+        )
+        assert not future.done()
+        unfollower.commit()
+        future.result(DEADLINE_SEC)
+
+    row = observer.execute(
+        "SELECT active, last_polled, last_poll_err, poll_failing_since, poll_failures,"
+        " feed_gap_reason FROM channels"
+    ).fetchone()
+    assert row == (False, None, None, None, 0, None)
