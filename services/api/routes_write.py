@@ -530,7 +530,11 @@ def post_video_reanalyze(
     if not result.created:
         response.status_code = status.HTTP_200_OK
     return VideoSubmission(
-        video_id=video_id, job_id=result.job_id, state=result.state, created=result.created
+        video_id=video_id,
+        job_id=result.job_id,
+        state=result.state,
+        created=result.created,
+        restarted=False,
     )
 
 

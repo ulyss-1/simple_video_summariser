@@ -209,6 +209,7 @@ def test_a_video_with_a_transcript_and_no_analysis_gets_one_forced_interactive_j
         "job_id": job_id,
         "state": "pending",
         "created": True,
+        "restarted": False,
     }
     assert (video_id, kind, dedupe_key, state, priority, payload) == (
         VID,
@@ -293,6 +294,7 @@ def test_a_pending_forced_job_is_reused_unchanged(
         "job_id": job_id,
         "state": "pending",
         "created": False,
+        "restarted": False,
     }
     assert jobs(db) == before
 
@@ -312,6 +314,7 @@ def test_a_pending_unforced_job_is_upgraded_in_place_and_never_lowered(
         "job_id": job_id,
         "state": "pending",
         "created": False,
+        "restarted": False,
     }
     assert jobs(db) == [
         (job_id, VID, "analyze", key, "pending", expected, {"other": 3, "force": True})
@@ -333,6 +336,7 @@ def test_a_running_forced_job_is_reused(
         "job_id": job_id,
         "state": "running",
         "created": False,
+        "restarted": False,
     }
     assert jobs(db) == before
 
