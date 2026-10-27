@@ -101,8 +101,8 @@ Keep it to tables and short lists. Do not pad it with per-issue detail.
 Lifecycle
 
 1. Pick the next open issue from the backlog
-2. PM grooms it. Use Opus 5 model with high effort for it
-3. Engineer implements it. Use Sonnet 5 model with medium effort for it
+2. PM grooms it. Use Sonnet 5 model with medium effort for it
+3. Engineer implements it. Use Sonnet 5 model with low effort for it
 4. QA verifies it. Use Sonnet 5 model with low effort for it. It checks the
    changed functionality only; the PR's CI result covers the rest
 5. On FAIL, back to step 3 with the QA comment as input
