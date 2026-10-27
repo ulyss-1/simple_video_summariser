@@ -54,6 +54,14 @@ class LastFailureOut(BaseModel):
     finished_at: UtcDatetime | None
 
 
+class LastCancelledOut(BaseModel):
+    """The newest job of a video, when it ended ``CANCELLED`` (#300)."""
+
+    job_id: int
+    kind: str
+    finished_at: UtcDatetime | None
+
+
 class ProgressOut(BaseModel):
     """Progress of a transcribe job (#245).
 
@@ -259,6 +267,8 @@ class VideoDetail(VideoItem):
     analysis: AnalysisOut | None
     #: The active transcribe job's figures, else ``None`` (#245).
     progress: ProgressOut | None
+    #: Non-null exactly when the newest job ended CANCELLED (#300).
+    last_cancelled: LastCancelledOut | None
 
 
 class AnalysisList(BaseModel):
@@ -353,9 +363,16 @@ def video_detail(
     run: AnalysisRun | None,
     progress: ProgressOut | None = None,
 ) -> VideoDetail:
+    cancelled = video.last_cancelled
     return VideoDetail(
         **_video_fields(video),
         progress=progress,
+        last_cancelled=(
+            None if cancelled is None
+            else LastCancelledOut(
+                job_id=cancelled.job_id, kind=cancelled.kind, finished_at=cancelled.finished_at
+            )
+        ),
         transcript=None if transcript is None else transcript_summary(transcript),
         analysis=None if run is None else analysis_out(run),
     )

@@ -439,3 +439,22 @@ def test_delete_after_a_cancel_of_only_pending_jobs_is_204(
     assert api.post(f"/videos/{VID}/cancel", json={}).status_code == 200
 
     assert api.delete(f"/videos/{VID}").status_code == 204
+
+
+def test_detail_exposes_last_cancelled_only_for_a_cancelled_newest_job(
+    api: TestClient, db: psycopg.Connection[Any]
+) -> None:
+    seed_video(db)
+    job_id = add_job(db, "pending")
+
+    assert api.get(f"/videos/{VID}").json()["last_cancelled"] is None
+
+    api.post(f"/videos/{VID}/cancel", json={})
+
+    detail = api.get(f"/videos/{VID}").json()
+    assert detail["status"] == "idle"
+    assert detail["last_cancelled"]["job_id"] == job_id
+    assert detail["last_cancelled"]["kind"] == "ingest"
+    assert detail["last_cancelled"]["finished_at"] is not None
+    assert set(detail["last_cancelled"]) == {"job_id", "kind", "finished_at"}
+    assert "last_cancelled" not in api.get("/videos").json()["items"][0]

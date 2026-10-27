@@ -1072,6 +1072,18 @@ export interface components {
             video_title: string | null;
         };
         JsonValue: unknown;
+        /**
+         * LastCancelledOut
+         * @description The newest job of a video, when it ended ``CANCELLED`` (#300).
+         */
+        LastCancelledOut: {
+            /** Finished At */
+            finished_at: string | null;
+            /** Job Id */
+            job_id: number;
+            /** Kind */
+            kind: string;
+        };
         /** LastFailureOut */
         LastFailureOut: {
             /** Error Class */
@@ -1335,6 +1347,7 @@ export interface components {
             duration_sec: number | null;
             /** Has Transcript */
             has_transcript: boolean;
+            last_cancelled: components["schemas"]["LastCancelledOut"] | null;
             last_failure: components["schemas"]["LastFailureOut"] | null;
             /** Latest Analysis At */
             latest_analysis_at: string | null;
