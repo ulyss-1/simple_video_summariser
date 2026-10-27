@@ -7,10 +7,11 @@ export type BatchSubmitResponse = components['schemas']['BatchSubmitResponse']
 export function batchSubmitErrorMessage(error: unknown): string {
   if (error instanceof ApiError && error.kind === 'http') {
     switch (error.status) {
+      case 415:
       case 422:
-        return 'Could not add these videos. Check the list and try again.'
+        return 'Could not read the list. Check it and try again.'
       case 429:
-        return 'Too many requests. Wait a moment and try again.'
+        return 'Too many requests. Try again shortly.'
       case 503:
         return 'The service is unavailable. Try again shortly.'
     }
