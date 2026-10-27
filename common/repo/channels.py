@@ -107,6 +107,39 @@ def lock_active_channel(conn: psycopg.Connection[Any], channel_id: str) -> bool:
     return row is not None and bool(row[0])
 
 
+def lock_registered_channel(conn: psycopg.Connection[Any], channel_id: str) -> bool:
+    """Read ``channel_id`` ``FOR SHARE`` and say whether the row exists, active or not (#339).
+
+    The guard for writes that may run for an unfollowed channel (a backfill, a
+    catalog selection) but must not recreate a deleted one: ``delete_channel`` takes the
+    row ``FOR NO KEY UPDATE``, so such a write either holds the share lock and
+    commits first, or waits and then finds no row. The lock lasts until the
+    surrounding transaction ends.
+    """
+    row = conn.execute(
+        "SELECT 1 FROM channels WHERE channel_id = %s FOR SHARE", (channel_id,)
+    ).fetchone()
+    return row is not None
+
+
+def lock_channel_for_delete(conn: psycopg.Connection[Any], channel_id: str) -> bool:
+    """Lock the ``channels`` row ``FOR NO KEY UPDATE``; whether it exists (#339).
+
+    Not ``FOR UPDATE``: an ingest holding its job lock takes ``KEY SHARE`` on the
+    channel through the ``videos`` foreign key, which ``FOR UPDATE`` would deadlock
+    with. ``FOR NO KEY UPDATE`` still conflicts with the ``FOR SHARE`` guards.
+    """
+    row = conn.execute(
+        "SELECT 1 FROM channels WHERE channel_id = %s FOR NO KEY UPDATE", (channel_id,)
+    ).fetchone()
+    return row is not None
+
+
+def delete_channel_row(conn: psycopg.Connection[Any], channel_id: str) -> None:
+    """Delete the ``channels`` row (catalog entries cascade); its videos must be gone (#339)."""
+    conn.execute("DELETE FROM channels WHERE channel_id = %s", (channel_id,))
+
+
 def deactivate_channel(conn: psycopg.Connection[Any], channel_id: str) -> bool | None:
     """Unfollow ``channel_id`` (#235); ``None`` if it has no row, else whether it changed.
 

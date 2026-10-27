@@ -83,6 +83,7 @@ from services.api.backfill import (
     SubtitleProbe,
     backfill,
     cancel_backfill,
+    delete_channel,
     unfollow_channel,
 )
 from services.api.deps import (
@@ -801,6 +802,20 @@ def _backfill_channel_id(channel_id: str) -> str:
     return channel_id
 
 
+def _delete_channel_id(request: Request, channel_id: str) -> str:
+    """Like ``_backfill_channel_id``, for a route whose path ends with the ID (#339).
+
+    The ``untrusted`` convertor's ``$`` also matches before a trailing newline, and a
+    delete is destructive, so the ID must also appear verbatim as a raw path segment:
+    a percent-encoded one (``%0A`` or an encoded valid ID) is a 422, nothing echoed.
+    """
+    raw_path = request.scope.get("raw_path")
+    raw_ok = not isinstance(raw_path, bytes) or channel_id.encode() in raw_path.split(b"/")
+    if not raw_ok:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, BAD_BACKFILL_CHANNEL)
+    return _backfill_channel_id(channel_id)
+
+
 def get_subtitle_probe() -> SubtitleProbe:
     """The dry run's subtitle probe (#117), built per request.
 
@@ -1109,6 +1124,75 @@ def post_channel_unfollow(
             None
             if cancel is None
             else UnfollowBackfill(backfill_id=cancel.backfill_id, cancelled_jobs=cancel.cancelled)
+        ),
+    )
+
+
+class DeleteChannelBackfill(BaseModel):
+    backfill_id: str
+    cancelled_jobs: int
+
+
+class DeleteChannelResponse(BaseModel):
+    channel_id: str
+    deleted_videos: int
+    cancelled_backfill: DeleteChannelBackfill | None
+
+
+@router.delete(
+    "/channels/{channel_id:untrusted}",
+    response_model=DeleteChannelResponse,
+    responses={
+        404: {"description": "Unknown channel"},
+        422: {"description": "Malformed channel ID"},
+    },
+)
+def delete_stored_channel(
+    channel_id: Annotated[str, Depends(_delete_channel_id)],
+    conn: Annotated[psycopg.Connection[Any], Depends(get_conn)],
+) -> DeleteChannelResponse:
+    """Delete a channel and every video of it, whatever their origin (#339).
+
+    Each video gets exactly what ``POST /videos/delete`` does (#238, #303: a
+    tombstone, derived data gone, pending jobs gone, running jobs asked to stop).
+    The channel's pending or running backfill request is ended first (#116), its
+    request rows and catalog snapshot go, and so does the channel itself. All or
+    nothing. Following the channel again later is forward-only and the deleted videos
+    stay deleted; only an explicit ``POST /videos`` restores one.
+    """
+    _require_idle(conn)
+    try:
+        result = delete_channel(conn, channel_id)
+    except ChannelNotRegistered:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, CHANNEL_NOT_REGISTERED) from None
+    except psycopg.OperationalError as exc:
+        raise DatabaseUnavailable from exc
+    audio_dir = get_settings().AUDIO_DIR
+    for video_id, rel_path in result.media:
+        try:
+            resolve_media_path(audio_dir, rel_path).unlink(missing_ok=True)
+        except (OSError, UnsafeMediaPath) as exc:
+            _log.warning(
+                "video.delete.unlink_failed",
+                video_id=video_id,
+                error_class=type(exc).__name__,
+            )
+    cancel = result.cancel
+    _log.info(
+        "channel.deleted",
+        channel_id=channel_id,
+        deleted_videos=result.deleted_videos,
+        backfill_cancelled_jobs=None if cancel is None else cancel.cancelled,
+    )
+    return DeleteChannelResponse(
+        channel_id=channel_id,
+        deleted_videos=result.deleted_videos,
+        cancelled_backfill=(
+            None
+            if cancel is None
+            else DeleteChannelBackfill(
+                backfill_id=cancel.backfill_id, cancelled_jobs=cancel.cancelled
+            )
         ),
     )
 

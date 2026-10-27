@@ -33,7 +33,7 @@ from common.repo.channel_catalog import (
     get_catalog_page,
     replace_catalog_snapshot,
 )
-from common.repo.channels import channel_exists
+from common.repo.channels import channel_exists, lock_registered_channel
 from common.repo.jobs import active_job, latest_job
 from common.repo.videos import insert_backfill_video
 from common.youtube_refs import is_video_id
@@ -88,6 +88,8 @@ def discover_catalog(
     entries = _canonical(listing.entries)[:limit]
     listing = ChannelCatalog(channel_id, entries, listing.total_count)
     with conn.transaction():
+        if not lock_registered_channel(conn, channel_id):  # #339
+            raise ChannelNotRegistered(channel_id)
         replace_catalog_snapshot(conn, channel_id, listing, limit=limit)
         page = get_catalog_page(conn, channel_id, limit=limit)
     if page is None:  # an empty listing leaves no rows
@@ -158,6 +160,8 @@ def _process_one(
     conn: psycopg.Connection[Any], queue: JobQueue, channel_id: str, video_id: str
 ) -> BulkCatalogResult:
     with conn.transaction():
+        if not lock_registered_channel(conn, channel_id):  # #339
+            raise ChannelNotRegistered(channel_id)
         member = conn.execute(
             """
             SELECT title FROM channel_catalog_entries

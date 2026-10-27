@@ -8,6 +8,7 @@ share them; this module re-exports the names the routes and tests use and keeps
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -34,8 +35,18 @@ from common.backfill import (
     backfill,
 )
 from common.queue import PostgresQueue
-from common.repo.backfill_requests import cancel_active, lock_active_backfill_id
-from common.repo.channels import channel_exists, deactivate_channel
+from common.repo.backfill_requests import (
+    cancel_active,
+    delete_for_channel,
+    lock_active_backfill_id,
+)
+from common.repo.channels import (
+    channel_exists,
+    deactivate_channel,
+    delete_channel_row,
+    lock_channel_for_delete,
+)
+from common.repo.deleted_videos import delete_videos
 from common.repo.videos import delete_unused_backfill_video
 
 __all__ = [
@@ -52,6 +63,7 @@ __all__ = [
     "BackfillResult",
     "CancelResult",
     "ChannelNotRegistered",
+    "DeleteChannelResult",
     "Estimate",
     "LlmEstimate",
     "SubtitleProbe",
@@ -59,6 +71,7 @@ __all__ = [
     "VideoEstimate",
     "backfill",
     "cancel_backfill",
+    "delete_channel",
     "unfollow_channel",
 ]
 
@@ -143,3 +156,69 @@ def unfollow_channel(conn: psycopg.Connection[Any], channel_id: str) -> Unfollow
             None if backfill_id is None else _cancel_in_transaction(conn, channel_id, backfill_id)
         )
     return UnfollowResult(channel_id=channel_id, changed=changed, cancel=cancel)
+
+
+@dataclass(frozen=True, slots=True)
+class DeleteChannelResult:
+    channel_id: str
+    deleted_videos: int
+    cancel: CancelResult | None  # the active request that was ended; ``videos_*`` are 0
+    media: tuple[tuple[str, str], ...]  # (video_id, relative path) to unlink after the commit
+
+
+def delete_channel(
+    conn: psycopg.Connection[Any],
+    channel_id: str,
+    *,
+    before_commit: Callable[[], None] | None = None,
+) -> DeleteChannelResult:
+    """Delete ``channel_id`` and every video of it, all or nothing (#339, #231, #303).
+
+    One transaction. Lock order: the ``channels`` row ``FOR NO KEY UPDATE`` first (see
+    ``lock_channel_for_delete``), then the active backfill request, then what
+    ``delete_videos`` locks (the channel's jobs by ``id``, its ``videos`` rows by
+    ``video_id``), then the row delete of ``channels``. The request goes before the jobs
+    because unfollow and the backfill cancel take them in that order. An active
+    request is ended with the #116 rule and its pending jobs are deleted (counted in
+    ``cancel.cancelled``); the videos are then deleted by ``delete_videos`` exactly as
+    ``POST /videos/delete`` does, whatever their ``origin``, each with a tombstone
+    (so the #116 sweep of unused backfill videos is not used here). The channel's backfill
+    request rows go explicitly and its catalog snapshot by cascade. ``conn`` must have
+    no open transaction. Raises ``ChannelNotRegistered`` for an unknown channel.
+    """
+    if conn.info.transaction_status != TransactionStatus.IDLE:
+        raise RuntimeError("delete_channel expects a connection with no open transaction")
+    with conn.transaction():
+        if not lock_channel_for_delete(conn, channel_id):
+            raise ChannelNotRegistered(channel_id)
+        backfill_id = lock_active_backfill_id(conn, channel_id)
+        cancel: CancelResult | None = None
+        if backfill_id is not None:
+            cancel_active(conn, channel_id, backfill_id)
+            jobs = PostgresQueue(conn).cancel_backfill(channel_id, backfill_id)
+            cancel = CancelResult(
+                channel_id=channel_id,
+                backfill_id=backfill_id,
+                cancelled=len(jobs),
+                videos_removed=0,
+                videos_kept=len(jobs),
+                video_ids=tuple(job.video_id for job in jobs),
+            )
+        video_ids = [
+            str(row[0])
+            for row in conn.execute(
+                "SELECT video_id FROM videos WHERE channel_id = %s ORDER BY video_id",
+                (channel_id,),
+            ).fetchall()
+        ]
+        deleted = delete_videos(conn, video_ids)
+        delete_for_channel(conn, channel_id)
+        delete_channel_row(conn, channel_id)
+        if before_commit is not None:
+            before_commit()
+    return DeleteChannelResult(
+        channel_id=channel_id,
+        deleted_videos=len(deleted.deleted),
+        cancel=cancel,
+        media=deleted.media,
+    )

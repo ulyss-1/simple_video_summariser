@@ -1436,6 +1436,53 @@
         "title": "ClaimOut",
         "type": "object"
       },
+      "DeleteChannelBackfill": {
+        "properties": {
+          "backfill_id": {
+            "title": "Backfill Id",
+            "type": "string"
+          },
+          "cancelled_jobs": {
+            "title": "Cancelled Jobs",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "backfill_id",
+          "cancelled_jobs"
+        ],
+        "title": "DeleteChannelBackfill",
+        "type": "object"
+      },
+      "DeleteChannelResponse": {
+        "properties": {
+          "cancelled_backfill": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeleteChannelBackfill"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "channel_id": {
+            "title": "Channel Id",
+            "type": "string"
+          },
+          "deleted_videos": {
+            "title": "Deleted Videos",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "channel_id",
+          "deleted_videos",
+          "cancelled_backfill"
+        ],
+        "title": "DeleteChannelResponse",
+        "type": "object"
+      },
       "ExcerptOut": {
         "properties": {
           "spans": {
@@ -3147,6 +3194,40 @@
       }
     },
     "/channels/{channel_id}": {
+      "delete": {
+        "description": "Delete a channel and every video of it, whatever their origin (#339).\n\nEach video gets exactly what ``POST /videos/delete`` does (#238, #303: a\ntombstone, derived data gone, pending jobs gone, running jobs asked to stop).\nThe channel's pending or running backfill request is ended first (#116), its\nrequest rows and catalog snapshot go, and so does the channel itself. All or\nnothing. Following the channel again later is forward-only and the deleted videos\nstay deleted; only an explicit ``POST /videos`` restores one.",
+        "operationId": "delete_stored_channel_channels__channel_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteChannelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "Unknown channel"
+          },
+          "422": {
+            "description": "Malformed channel ID"
+          }
+        },
+        "summary": "Delete Stored Channel"
+      },
       "get": {
         "description": "One channel's state, active or not, with its video count (#235).",
         "operationId": "get_channel_detail_channels__channel_id__get",

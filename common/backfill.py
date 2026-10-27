@@ -57,7 +57,7 @@ from common.models import (
 )
 from common.queue import PRIORITY_BACKFILL, JobQueue
 from common.repo.analyses import median_cost_per_char
-from common.repo.channels import channel_exists, clear_feed_gap
+from common.repo.channels import channel_exists, clear_feed_gap, lock_registered_channel
 from common.repo.transcripts import median_chars_per_audio_sec, median_whisper_rtf
 from common.repo.videos import insert_backfill_video, known_video_ids
 
@@ -271,6 +271,10 @@ def backfill(
             job_queue = make_queue(c)
             for entry in new if max_enqueue is None else new[: max(max_enqueue, 0)]:
                 with c.transaction():
+                    # #339: a deleted channel is not recreated by a listing that
+                    # finished before the delete.
+                    if not lock_registered_channel(c, channel_id):
+                        raise ChannelNotRegistered(channel_id)
                     if insert_backfill_video(c, entry, channel_id=channel_id):
                         job = job_queue.enqueue(
                             "ingest", entry.video_id, payload=payload, priority=PRIORITY_BACKFILL
