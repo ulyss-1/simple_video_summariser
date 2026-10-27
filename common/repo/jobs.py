@@ -89,6 +89,33 @@ def latest_job(conn: psycopg.Connection[Any], video_id: str, kind: str) -> tuple
     return None if row is None else (int(row[0]), str(row[1]))
 
 
+def cancelled_restart_job(conn: psycopg.Connection[Any], video_id: str) -> int | None:
+    """Id of the job ``POST /videos`` may revive for ``video_id``, or ``None`` (#304).
+
+    The video's newest job of any kind (``created_at DESC, id DESC``) when it is
+    ``dead`` with ``error_class = 'CANCELLED'`` and the video reads ``idle``
+    (``_VIDEO_STATUS_SQL``): no ``pending`` or ``running`` job (a ``running`` one
+    that is winding down is still active), no analysis and ``unavailable`` unset.
+    Read-only; the caller holds the video's locks.
+    """
+    row = conn.execute(
+        """
+        SELECT j.id FROM jobs j
+        JOIN videos v ON v.video_id = j.video_id
+        WHERE j.video_id = %(video_id)s
+          AND j.state = 'dead' AND j.error_class = 'CANCELLED'
+          AND v.unavailable IS NULL
+          AND NOT EXISTS (SELECT 1 FROM analyses a WHERE a.video_id = j.video_id)
+          AND NOT EXISTS (SELECT 1 FROM jobs x
+                          WHERE x.video_id = j.video_id AND x.state IN ('pending', 'running'))
+          AND j.id = (SELECT n.id FROM jobs n WHERE n.video_id = j.video_id
+                      ORDER BY n.created_at DESC, n.id DESC LIMIT 1)
+        """,
+        {"video_id": video_id},
+    ).fetchone()
+    return None if row is None else int(row[0])
+
+
 @dataclass(frozen=True, slots=True)
 class ActiveJob:
     """The ``pending`` or ``running`` job at one ``(video, kind, key)`` (#101).

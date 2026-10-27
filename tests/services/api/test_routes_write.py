@@ -190,6 +190,7 @@ def test_a_new_video_creates_a_bare_row_and_one_interactive_ingest_job(
         "job_id": job_id,
         "state": "pending",
         "created": True,
+        "restarted": False,
     }
     assert (video_id, kind, key, priority, payload, state) == (
         VID,
@@ -228,6 +229,7 @@ def test_resubmitting_an_active_job_returns_it_unchanged(
         "job_id": first["job_id"],
         "state": state,
         "created": False,
+        "restarted": False,
     }
     assert len(_jobs(db)) == 1
     assert len(_videos(db)) == 1
@@ -249,6 +251,7 @@ def test_resubmitting_a_pending_lower_priority_ingest_raises_it_in_place(
         "job_id": job_id,
         "state": "pending",
         "created": False,
+        "restarted": False,
     }
     assert db.execute("SELECT id, priority, attempts FROM jobs").fetchall() == [
         (job_id, PRIORITY_INTERACTIVE, 2)
@@ -269,6 +272,7 @@ def test_resubmitting_a_running_ingest_raises_its_priority(
         "job_id": job_id,
         "state": "running",
         "created": False,
+        "restarted": False,
     }
     assert db.execute("SELECT priority FROM jobs").fetchall() == [(PRIORITY_INTERACTIVE,)]
 
@@ -290,6 +294,7 @@ def test_resubmitting_after_a_done_ingest_raises_the_pending_transcribe(
         "job_id": ingest,
         "state": "done",
         "created": False,
+        "restarted": False,
     }
     assert db.execute("SELECT id, state, priority FROM jobs ORDER BY id").fetchall() == [
         (ingest, "done", -10),
@@ -396,6 +401,7 @@ def test_resubmitting_after_a_finished_job_enqueues_nothing(
         "job_id": first["job_id"],
         "state": state,
         "created": False,
+        "restarted": False,
     }
     assert len(_jobs(db)) == 1
 

@@ -286,6 +286,8 @@ sweeps and lifecycle) stay off it.
   `InProcessQueue.fail_job` is a no-op, matching its no-retry contract.
 - `PostgresQueue` only: `close` (#106), `retry_dead`, `retry_dead_matching`,
   `cancel_backfill`, `resolve_stale_analyze` (ops routes and planner loop).
+  `submit_video` also needs `retry_dead` (the #304 restart of a cancelled video), so
+  it takes a `PostgresQueue` rather than the port; the CLI never calls it.
 
 `ChunkBatchSummarizer` (#88) is an optional extension: it adds
 `analyze_chunks(chunks, roster, meta) -> list[ChunkAnalysis]`, one analysis per
@@ -464,8 +466,10 @@ transaction. Each `pending` job of the video ends at once as `dead` with
 (`attempts` unchanged). Each `running` job gets `cancel_requested_at = now()`
 (the first value is kept). There is no new job state: `CANCELLED` rides on
 `dead`, so every rule that keeps dead work dead (the sweeps, `stale_analyze`,
-`jobs_active_uniq`) applies, and `POST /ops/jobs/{id}/retry` is the resume path
-and clears `cancel_requested_at`. The database row is the source of truth. The
+`jobs_active_uniq`) applies, and there are two resume paths, both
+`retry_dead` and both clearing `cancel_requested_at`: `POST /ops/jobs/{id}/retry`
+and `POST /videos` (#304), which revives the video's newest job in place when it
+is a cancelled one (see the `POST /videos` row in §8.3). The database row is the source of truth. The
 worker learns of it on its next heartbeat tick (60 s) and the handler stops at
 its next checkpoint. Every outcome write of a job with a request becomes the
 cancelled outcome: a raised `Cancelled`, any other exception, `Defer`, the
@@ -1031,7 +1035,7 @@ separated per D13.
 
 | Method | Path | Notes |
 |---|---|---|
-| `POST` | `/videos` | body `{url}`; priority `+10`; returns job id; clears a matching deletion tombstone atomically and, in the same transaction, deletes the video's remaining job rows (locks: jobs by id, then the `videos` row), so a fresh `ingest` is enqueued. `409 cancellation in progress` (nothing written, tombstone kept) while the deleted video still has a `running` job carrying a cancel request (#303) |
+| `POST` | `/videos` | body `{url}`; priority `+10`; returns job id (`restarted` is `false` unless the call revived a cancelled job); restarts a cancelled video (#304): when the video has no `pending`/`running` job, no analysis and is not `unavailable`, and its newest job of any kind is `dead` with `error_class = 'CANCELLED'`, that job is revived in place with `retry_dead` (same id, kind, key and payload; no new row; priority raised to `+10`) and the answer is `202` with `restarted: true`; any other state, a failed (non-cancelled) dead job, a cancelled re-analysis of an analysed video (#323) and a job still `running` with a cancel request answer `200`, `restarted: false`, so a repeat restarts once; `retry_dead` reporting `superseded` falls through to the `200` answer; delete keeps priority, since a tombstoned video has no jobs left and gets the fresh `ingest` below; clears a matching deletion tombstone atomically and, in the same transaction, deletes the video's remaining job rows (locks: jobs by id, then the `videos` row), so a fresh `ingest` is enqueued. `409 cancellation in progress` (nothing written, tombstone kept) while the deleted video still has a `running` job carrying a cancel request (#303) |
 | `DELETE` | `/videos/{id}` | permanently deletes the video and derived data, at once and also with a running job (#303, owner decision: delete has priority over a running job): `204`, never `409`. In one transaction it cancels the video's jobs with the #237 rules, deletes every job row that is not `running`, keeps each `running` row as a `CANCELLED` record (its worker ends it at the next checkpoint and carries on), and records a tombstone so only explicit `POST /videos` can restore it. `404` for an unknown or already deleted video, `422` for a malformed ID |
 | `POST` | `/videos/{id}/cancel` | body `{}`, JSON only (`415` otherwise); stores a cancel request for every `pending` or `running` job of the video (#237). Pending jobs end `CANCELLED` at once; running ones get `cancel_requested_at` and stop at their next checkpoint. Answers `{video_id, jobs: [{job_id, kind, outcome}]}` with `outcome` `cancelled` or `cancel_requested`: `202` if any is `cancel_requested`, else `200` (`jobs: []` when nothing was active); `404` for an unknown or deleted video (so a cancel after `DELETE` is `404`, #303), `422` for a malformed ID. Deletes nothing |
 | `POST` | `/channels` | forward-only; sets `monitor_from`. Accepts a channel ID, `youtube.com/channel/` URL, or `@handle`, `/c/` or `/user/` reference; a name is resolved synchronously with one bounded yt-dlp call (at most 20 s, #81, an exception to the no-processing rule in §1): `404` if it does not exist, `503` on timeout or rate limit, `502` on bad output |

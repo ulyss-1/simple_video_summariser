@@ -62,7 +62,7 @@ from common.repo.backfill_requests import create_request
 from common.repo.channel_catalog import get_enrichment_state, retry_enrichment
 from common.repo.channels import channel_exists, fill_channel_title, register_channel
 from common.repo.deleted_videos import VideoNotFound, delete_video
-from common.repo.jobs import active_job, cancel_video, latest_job
+from common.repo.jobs import active_job, cancel_video, cancelled_restart_job, latest_job
 from common.repo.media import UnsafeMediaPath, resolve_media_path
 from common.repo.transcripts import get_best_transcript
 from common.repo.videos import insert_submitted_video, video_exists
@@ -258,6 +258,7 @@ class VideoSubmission(BaseModel):
     job_id: int
     state: str
     created: bool
+    restarted: bool
 
 
 class ChannelRegistration(BaseModel):
@@ -275,6 +276,7 @@ class SubmitResult:
     job_id: int
     state: str
     created: bool
+    restarted: bool = False
 
 
 def _require_idle(conn: psycopg.Connection[Any]) -> None:
@@ -292,13 +294,20 @@ class CancellationInProgress(Exception):
 
 
 def submit_video(
-    conn: psycopg.Connection[Any], video_id: str, *, queue: JobQueue
+    conn: psycopg.Connection[Any], video_id: str, *, queue: PostgresQueue
 ) -> SubmitResult:
     """Record ``video_id`` and give it one ``ingest`` job, unless it already has one.
 
     In one transaction: a bare ``adhoc`` row (an existing row is kept as it
     is), then the latest ``ingest`` job is returned if there is one, whatever
-    its state; a finished job is not resubmitted (retry is #44). Then every
+    its state; a finished or failed job is not resubmitted (retry is #44).
+    The one exception is a cancelled video (#304): when the newest job of any
+    kind is ``dead`` / ``CANCELLED`` and the video has no active job, no
+    analysis and is not ``unavailable``, that job is revived in place with
+    ``PostgresQueue.retry_dead`` (same id, kind and key, no new row) and the
+    result has ``restarted=True``; a ``superseded`` refusal falls through to
+    the answer below. This is why ``queue`` is a ``PostgresQueue``: ``retry_dead``
+    is not on the ``JobQueue`` port. Then every
     ``pending`` job of the video below ``PRIORITY_INTERACTIVE`` is raised to
     it (#103), whatever its kind; running ``ingest`` and ``transcribe`` jobs
     are also raised so their successors inherit it (#155). Otherwise one job
@@ -331,6 +340,12 @@ def submit_video(
                 raise CancellationInProgress(video_id)
             conn.execute("DELETE FROM jobs WHERE video_id = %s AND state <> 'running'", (video_id,))
         insert_submitted_video(conn, video_id)
+        cancelled = cancelled_restart_job(conn, video_id)
+        if cancelled is not None:
+            revived = queue.retry_dead(cancelled)
+            if revived.status == "retried":
+                queue.raise_priority(video_id, PRIORITY_INTERACTIVE)
+                return SubmitResult(video_id, cancelled, "pending", created=False, restarted=True)
         existing = latest_job(conn, video_id, "ingest")
         if existing is None:
             job_id = queue.enqueue("ingest", video_id, priority=PRIORITY_INTERACTIVE)
@@ -361,7 +376,7 @@ def _require_json_content_type(request: Request) -> None:
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(_require_json_content_type)],
     responses={
-        200: {"model": VideoSubmission, "description": "Already submitted"},
+        200: {"model": VideoSubmission, "description": "Already submitted (not restarted)"},
         409: {
             "description": "The video was deleted and its running job is still being cancelled"
         },
@@ -383,13 +398,14 @@ def post_videos(
         result = submit_video(conn, video_id, queue=PostgresQueue(conn))
     except CancellationInProgress:
         raise HTTPException(status.HTTP_409_CONFLICT, CANCELLATION_IN_PROGRESS) from None
-    if not result.created:
+    if not result.created and not result.restarted:
         response.status_code = status.HTTP_200_OK
     return VideoSubmission(
         video_id=result.video_id,
         job_id=result.job_id,
         state=result.state,
         created=result.created,
+        restarted=result.restarted,
     )
 
 
@@ -657,8 +673,8 @@ def post_video_cancel(
     Pending jobs end at once as ``CANCELLED``. A running job is asked to stop and
     ends at its next checkpoint (``cancel_requested``, status 202). Repeating the
     request is safe. Nothing is deleted (``DELETE /videos/{id}`` works with a running
-    job too, #303; a cancel after it is 404). Resume a cancelled job with
-    ``POST /ops/jobs/{id}/retry``.
+    job too, #303; a cancel after it is 404). Resume a cancelled video with
+    ``POST /videos`` (#304) or a cancelled job with ``POST /ops/jobs/{id}/retry``.
     """
     _require_idle(conn)
     try:
