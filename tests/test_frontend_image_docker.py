@@ -91,10 +91,13 @@ def tags() -> Iterator[dict[str, str]]:
 
 @pytest.fixture(scope="module")
 def image(tags: dict[str, str]) -> str:
-    """The shipped image, built on a clean cache with the repo root as context."""
+    """The shipped image, built with the repo root as context.
+
+    Uses the layer cache: a fresh CI runner has none, so its first build is
+    from scratch anyway, and a compose-stack test may already have built it.
+    """
     result = _docker(
         "build",
-        "--no-cache",
         "-f",
         "ops/Dockerfile.frontend",
         "-t",
