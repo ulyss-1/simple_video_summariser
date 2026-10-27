@@ -144,6 +144,20 @@ class VideoList(BaseModel):
     limit: int
 
 
+class DeletedVideoItem(BaseModel):
+    video_id: str
+    title: str | None
+    channel_id: str | None
+    channel_title: str | None
+    deleted_at: datetime
+    restorable: bool
+
+
+class DeletedVideoList(BaseModel):
+    items: list[DeletedVideoItem]
+    total: int
+
+
 class ChannelItem(BaseModel):
     channel_id: str
     title: str | None

@@ -21,6 +21,7 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Callable
+from dataclasses import asdict
 from datetime import UTC, date, datetime
 from typing import Annotated, Any, Literal
 
@@ -50,6 +51,7 @@ from common.repo.analyses import (
 from common.repo.backfill_requests import get_request
 from common.repo.channel_catalog import get_catalog_page
 from common.repo.channels import get_channel, get_channel_title, list_channels
+from common.repo.deleted_videos import list_deleted_videos
 from common.repo.jobs import get_job
 from common.repo.search import search_transcripts
 from common.repo.transcripts import best_transcript_info, best_transcript_page
@@ -296,6 +298,13 @@ class TranscriptQuery(BaseModel):
     limit: QueryInt = Field(200, ge=1, le=1000)
 
 
+class DeletedVideosQuery(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    offset: QueryInt = Field(0, ge=0, le=MAX_OFFSET)
+    limit: QueryInt = Field(50, ge=1, le=200)
+
+
 def _gate(model: type[BaseModel]) -> Callable[[Request], None]:
     """A dependency that validates the query string and *raises* on failure.
 
@@ -386,6 +395,19 @@ def get_videos(
         total=page.total,
         offset=params.offset,
         limit=params.limit,
+    )
+
+
+@router.get("/deleted-videos", response_model=schemas.DeletedVideoList)
+def get_deleted_videos(
+    _: Annotated[None, Depends(_gate(DeletedVideosQuery))],
+    params: Annotated[DeletedVideosQuery, Query()],
+    conn: ReadConn,
+) -> schemas.DeletedVideoList:
+    """The deletion tombstones, newest first (#239). Restore is ``POST /videos``."""
+    items, total = list_deleted_videos(conn, offset=params.offset, limit=params.limit)
+    return schemas.DeletedVideoList(
+        items=[schemas.DeletedVideoItem(**asdict(i)) for i in items], total=total
     )
 
 

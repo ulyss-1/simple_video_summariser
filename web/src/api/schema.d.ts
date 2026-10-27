@@ -297,6 +297,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/deleted-videos": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Deleted Videos
+         * @description The deletion tombstones, newest first (#239). Restore is ``POST /videos``.
+         */
+        get: operations["get_deleted_videos_deleted_videos_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -1266,6 +1286,31 @@ export interface components {
             channel_id: string;
             /** Deleted Videos */
             deleted_videos: number;
+        };
+        /** DeletedVideoItem */
+        DeletedVideoItem: {
+            /** Channel Id */
+            channel_id: string | null;
+            /** Channel Title */
+            channel_title: string | null;
+            /**
+             * Deleted At
+             * Format: date-time
+             */
+            deleted_at: string;
+            /** Restorable */
+            restorable: boolean;
+            /** Title */
+            title: string | null;
+            /** Video Id */
+            video_id: string;
+        };
+        /** DeletedVideoList */
+        DeletedVideoList: {
+            /** Items */
+            items: components["schemas"]["DeletedVideoItem"][];
+            /** Total */
+            total: number;
         };
         /** ExcerptOut */
         ExcerptOut: {
@@ -2292,6 +2337,38 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    get_deleted_videos_deleted_videos_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletedVideoList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };
