@@ -1233,6 +1233,14 @@ web/src/
   polls `GET /channels/{id}/catalog` every 5 s while any row is `pending` or
   `running`; the selected IDs are route-local state and are reconciled against
   every response.
+- **Channel controls (#340).** The catalog page loads `GET /channels/{id}`
+  (`useChannelDetail`) and shows a Channel section with `Unfollow channel`
+  (`POST /channels/{id}/unfollow`, `useUnfollowChannel`) and `Delete channel and its
+  videos` (`DELETE /channels/{id}`, `useDeleteChannel`), each behind an inline
+  confirmation. A delete leaves for the Library with a one-shot notice, then
+  removes the channel's cached queries and those of its videos found in the cache
+  (`forgetChannel` in `hooks/forgetVideos.ts`). The Library's active channel filter
+  links to the page ("Manage channel").
 - **Video page cancel (#300).** With `active_job` set and no `cancel_requested_at`,
   the page offers `Cancel processing` (inline confirmation, `POST /videos/{id}/cancel`,
   hook `useCancelProcessing`), then invalidates `['video', id]`. While

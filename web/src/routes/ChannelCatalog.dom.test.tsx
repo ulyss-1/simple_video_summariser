@@ -74,6 +74,15 @@ class FakeApi {
 
   handle(url: URL, method: string, body: Record<string, unknown> | null): Response | Promise<Response> {
     const path = url.pathname
+    if (method === 'GET' && path === `/api/channels/${UC}`)
+      return json({
+        channel_id: UC,
+        title: 'Example channel',
+        active: true,
+        added_at: '2026-09-01T00:00:00Z',
+        monitor_from: '2026-09-01T00:00:00Z',
+        video_count: 2,
+      })
     if (method === 'POST' && path === '/api/channels') return this.register()
     if (method === 'POST' && path === `/api/channels/${UC}/catalog/discover`)
       return this.discover(body?.limit as CatalogLimit)

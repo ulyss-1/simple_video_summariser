@@ -24,6 +24,12 @@ import {
   type VideoStatus,
 } from '../lib/library'
 
+// The notices a delete elsewhere may hand over: #232 (video), #340 (channel).
+const NOTICE = /^(Video deleted|Channel deleted( · \d+ videos? removed)?)$/
+function isNotice(value: unknown): value is string {
+  return typeof value === 'string' && NOTICE.test(value)
+}
+
 // Semantic HTML first; styling is class hooks into web/index.css (design-system
 // §11, #120). Filter and page state lives in the URL only; TanStack Query owns
 // the server state (architecture §9).
@@ -37,7 +43,7 @@ export function Library() {
   const navigate = useNavigate()
   const [notice] = useState(() => {
     const value = (location.state as { notice?: unknown } | null)?.notice
-    return value === 'Video deleted' ? value : null
+    return isNotice(value) ? value : null
   })
   const hasNotice = location.state !== null && location.state !== undefined
   useEffect(() => {
@@ -306,7 +312,8 @@ export function Library() {
           Channel: <strong>{channelTitle ?? state.channel}</strong>{' '}
           <button className="btn" type="button" onClick={() => go({ channel: null })}>
             Clear
-          </button>
+          </button>{' '}
+          <Link to={`/channels/${state.channel}/catalog`}>Manage channel</Link>
         </div>
       )}
 

@@ -1,5 +1,13 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router'
+import { Link, useNavigate, useParams } from 'react-router'
+import {
+  channelDetailErrorMessage,
+  isChannelNotFound,
+  useChannelDetail,
+  type ChannelDetail,
+} from '../hooks/useChannelDetail'
+import { channelDeletedNotice, deleteChannelErrorMessage, useDeleteChannel } from '../hooks/useDeleteChannel'
+import { unfollowErrorMessage, useUnfollowChannel } from '../hooks/useUnfollowChannel'
 import {
   useChannelCatalog,
   useDiscoverCatalog,
@@ -22,6 +30,7 @@ import {
   type CatalogItem,
   type CatalogLimit,
 } from '../lib/channelCatalog'
+import { publishedDate } from '../lib/library'
 
 /** Longer descriptions are cut to this many characters until the reader expands them. */
 const DESCRIPTION_PREVIEW_CHARS = 240
@@ -33,17 +42,19 @@ const DESCRIPTION_PREVIEW_CHARS = 240
 export function ChannelCatalog() {
   const { channelId: raw } = useParams()
   const channelId = parseChannelId(raw)
-  if (channelId === null) {
-    return (
-      <section className="page">
-        <h1>Channel not found</h1>
-        <p>
-          <Link to="/channels/add">Add a channel</Link> · <Link to="/">Back to Library</Link>
-        </p>
-      </section>
-    )
-  }
+  if (channelId === null) return <ChannelNotFound />
   return <CatalogView key={channelId} channelId={channelId} />
+}
+
+function ChannelNotFound() {
+  return (
+    <section className="page">
+      <h1>Channel not found</h1>
+      <p>
+        <Link to="/channels/add">Add a channel</Link> · <Link to="/">Back to Library</Link>
+      </p>
+    </section>
+  )
 }
 
 function CatalogView({ channelId }: { channelId: string }) {
@@ -57,6 +68,7 @@ function CatalogView({ channelId }: { channelId: string }) {
   const [results, setResults] = useState<BulkCatalogResponse | null>(null)
 
   const catalog = useChannelCatalog(channelId, shownLimit)
+  const channel = useChannelDetail(channelId)
 
   const startedRef = useRef(false)
   const sentRef = useRef(false)
@@ -133,6 +145,8 @@ function CatalogView({ channelId }: { channelId: string }) {
     })
   }
 
+  if (isChannelNotFound(channel.error)) return <ChannelNotFound />
+
   const newIds = items.filter((item) => !item.known).map((item) => item.video_id)
   const total = catalog.data?.total_count ?? null
 
@@ -143,6 +157,19 @@ function CatalogView({ channelId }: { channelId: string }) {
         Channel <code>{channelId}</code> · <Link to={`/?channel=${channelId}`}>Videos from this channel</Link> ·{' '}
         <Link to="/channels/add">Add another channel</Link>
       </p>
+
+      {channel.data !== undefined ? (
+        <ChannelSection channelId={channelId} detail={channel.data} />
+      ) : channel.isError ? (
+        <div className="alert alert--danger" role="alert">
+          <p>{channelDetailErrorMessage(channel.error)}</p>
+          <button className="btn" type="button" onClick={() => void channel.refetch()}>
+            Retry
+          </button>
+        </div>
+      ) : (
+        <p role="status">Loading channel…</p>
+      )}
 
       <div className="row" role="group" aria-label="Range">
         {CATALOG_RANGES.map(([label, limit]) => (
@@ -295,6 +322,182 @@ function CatalogView({ channelId }: { channelId: string }) {
       )}
 
       <ProcessingResults results={results} />
+    </section>
+  )
+}
+
+type Confirmation = 'unfollow' | 'delete'
+
+/**
+ * Follow state and the two costly actions of one channel (#340): unfollow keeps
+ * the videos, delete removes them too. Each opens an inline confirmation
+ * (design-system 7.7, never a modal) with focus on the safe button.
+ */
+function ChannelSection({ channelId, detail }: { channelId: string; detail: ChannelDetail }) {
+  const navigate = useNavigate()
+  const headingId = useId()
+  const unfollow = useUnfollowChannel(channelId)
+  const del = useDeleteChannel(channelId, (deletedVideos) =>
+    navigate('/', { state: { notice: channelDeletedNotice(deletedVideos) } }),
+  )
+  const [open, setOpen] = useState<Confirmation | null>(null)
+  const [announcement, setAnnouncement] = useState('')
+
+  // Set synchronously on click: isPending only turns true on a later render.
+  const sentRef = useRef(false)
+  const unfollowRef = useRef<HTMLButtonElement>(null)
+  const deleteRef = useRef<HTMLButtonElement>(null)
+  const keepRef = useRef<HTMLButtonElement>(null)
+  const cancelRef = useRef<HTMLButtonElement>(null)
+  const statusRef = useRef<HTMLParagraphElement>(null)
+  const restoreRef = useRef<Confirmation | null>(null)
+
+  useEffect(() => {
+    if (open === 'unfollow') keepRef.current?.focus()
+    else if (open === 'delete') cancelRef.current?.focus()
+    else if (restoreRef.current !== null) {
+      const target = restoreRef.current === 'unfollow' ? unfollowRef : deleteRef
+      restoreRef.current = null
+      target.current?.focus()
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (announcement !== '') statusRef.current?.focus()
+  }, [announcement])
+
+  const busy = unfollow.isPending || del.isPending
+  const title = detail.title === null || detail.title === '' ? detail.channel_id : detail.title
+  const count = detail.video_count
+
+  const openConfirm = (kind: Confirmation) => {
+    unfollow.reset()
+    del.reset()
+    setOpen(kind)
+  }
+
+  const close = () => {
+    restoreRef.current = open
+    setOpen(null)
+  }
+
+  const confirmUnfollow = () => {
+    if (sentRef.current) return
+    sentRef.current = true
+    unfollow.mutate(undefined, {
+      onSuccess: (response) => {
+        setAnnouncement(`Channel unfollowed${response.backfill === null ? '' : ' · Backfill cancelled'}`)
+        setOpen(null)
+      },
+      // Latched after a success (the channel is no longer followed); only a failure re-arms it.
+      onError: () => {
+        sentRef.current = false
+      },
+    })
+  }
+
+  const confirmDelete = () => {
+    if (sentRef.current) return
+    sentRef.current = true
+    del.mutate(undefined, {
+      // Latched after a success: the page is about to unmount, and between the
+      // settled request and the unmount a second click must not send again.
+      onError: () => {
+        sentRef.current = false
+      },
+    })
+  }
+
+  return (
+    <section className="card" aria-labelledby={headingId}>
+      <h2 id={headingId}>Channel</h2>
+      <p>
+        <strong>{title}</strong> ·{' '}
+        {detail.active ? `Following since ${publishedDate(detail.monitor_from) ?? 'an unknown date'}` : 'Not followed'}{' '}
+        · {count} video{count === 1 ? '' : 's'} in the Library
+      </p>
+      {!detail.active && (
+        <p>
+          New uploads are not checked. Add the channel again to follow it from now on.{' '}
+          <Link to="/channels/add">Add a channel</Link>
+        </p>
+      )}
+      <div className="row">
+        {detail.active && (
+          <button
+            ref={unfollowRef}
+            className="btn"
+            type="button"
+            disabled={busy || open === 'unfollow'}
+            onClick={() => openConfirm('unfollow')}
+          >
+            Unfollow channel
+          </button>
+        )}
+        <button
+          ref={deleteRef}
+          className="btn"
+          type="button"
+          disabled={busy || open === 'delete'}
+          onClick={() => openConfirm('delete')}
+        >
+          Delete channel and its videos
+        </button>
+      </div>
+      <p ref={statusRef} tabIndex={-1} aria-live="polite">
+        {announcement}
+      </p>
+      {open !== null && (
+        <div
+          className="row"
+          onKeyDown={(e) => {
+            if (e.key === 'Escape' && !busy) close()
+          }}
+        >
+          {open === 'unfollow' ? (
+            <>
+              <p>
+                {`Stop following ${title}? Its ${count} video${count === 1 ? '' : 's'} stay in the Library. New uploads are no longer checked, and an unfinished backfill is cancelled.`}
+              </p>
+              <button className="btn btn--primary" type="button" disabled={busy} onClick={confirmUnfollow}>
+                Confirm unfollow
+              </button>
+              <button ref={keepRef} className="btn" type="button" disabled={busy} onClick={close}>
+                Keep following
+              </button>
+            </>
+          ) : (
+            <>
+              <p>
+                {count === 0
+                  ? `Delete ${title}? It has no videos in the Library.`
+                  : `Delete ${title} and all ${count} of its videos, including videos you added by URL? Their transcripts, summaries and stored audio are permanently removed and any processing is stopped. Following the channel again will not bring these videos back; adding a video by its URL processes it again.`}
+              </p>
+              <button
+                className="btn btn--primary"
+                type="button"
+                disabled={busy || del.isSuccess}
+                onClick={confirmDelete}
+              >
+                Confirm delete
+              </button>
+              <button ref={cancelRef} className="btn" type="button" disabled={busy} onClick={close}>
+                Cancel
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      {open === 'unfollow' && unfollow.isError && (
+        <p className="alert alert--danger" role="alert">
+          {unfollowErrorMessage(unfollow.error)}
+        </p>
+      )}
+      {open === 'delete' && del.isError && (
+        <p className="alert alert--danger" role="alert">
+          {deleteChannelErrorMessage(del.error)}
+        </p>
+      )}
     </section>
   )
 }
