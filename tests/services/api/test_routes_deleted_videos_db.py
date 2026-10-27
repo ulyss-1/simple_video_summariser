@@ -42,9 +42,9 @@ def api(dsn: str, logs: LogSink) -> Iterator[TestClient]:
 
 
 def seed(db: psycopg.Connection[Any], video_id: str, title: str = "Title") -> None:
-    db.execute("INSERT INTO channels (channel_id, title) VALUES ('UCkeep', 'Keep') ON CONFLICT DO NOTHING")
+    db.execute("INSERT INTO channels (channel_id, title) VALUES ('UCkeepkeepkeepkeepkeepkp', 'Keep') ON CONFLICT DO NOTHING")
     db.execute(
-        "INSERT INTO videos (video_id, channel_id, title, origin) VALUES (%s, 'UCkeep', %s, 'adhoc')",
+        "INSERT INTO videos (video_id, channel_id, title, origin) VALUES (%s, 'UCkeepkeepkeepkeepkeepkp', %s, 'adhoc')",
         (video_id, title),
     )
 
@@ -65,7 +65,7 @@ def test_delete_copies_title_and_channel_and_the_list_shows_them(
     item = body["items"][0]
     assert item["video_id"] == A
     assert item["title"] == "Hello"
-    assert item["channel_id"] == "UCkeep"
+    assert item["channel_id"] == "UCkeepkeepkeepkeepkeepkp"
     assert item["channel_title"] == "Keep"
     assert item["restorable"] is True
     assert item["deleted_at"]
@@ -78,16 +78,16 @@ def test_bulk_delete_fills_the_columns_too(api: TestClient, db: psycopg.Connecti
     assert api.post("/videos/delete", json={"video_ids": [A, B]}).status_code == 200
 
     rows = db.execute("SELECT video_id, title, channel_id FROM deleted_videos ORDER BY video_id").fetchall()
-    assert rows == [(A, "One", "UCkeep"), (B, "Two", "UCkeep")]
+    assert sorted(rows) == sorted([(A, "One", "UCkeepkeepkeepkeepkeepkp"), (B, "Two", "UCkeepkeepkeepkeepkeepkp")])
 
 
 def test_channel_delete_fills_the_columns_too(api: TestClient, db: psycopg.Connection[Any]) -> None:
     seed(db, A, "One")
 
-    assert api.delete("/channels/UCkeep").status_code == 200
+    assert api.delete("/channels/UCkeepkeepkeepkeepkeepkp").status_code == 200
 
     assert db.execute("SELECT video_id, title, channel_id FROM deleted_videos").fetchall() == [
-        (A, "One", "UCkeep")
+        (A, "One", "UCkeepkeepkeepkeepkeepkp")
     ]
     item = api.get("/deleted-videos").json()["items"][0]
     assert item["channel_title"] is None  # the channel is gone
@@ -128,11 +128,11 @@ def test_order_ties_and_pagination_one_past_the_boundary(
     db.execute("INSERT INTO deleted_videos (video_id, deleted_at) VALUES (%s, '2026-01-01')", (B,))
     db.execute("INSERT INTO deleted_videos (video_id, deleted_at) VALUES (%s, '2026-01-01')", (A,))
 
-    assert ids(api) == [C, A, B]  # newest first, the tie by video_id
+    assert ids(api) == [C, B, A]  # newest first, the tie by video_id in byte order
     page1 = api.get("/deleted-videos?limit=2").json()
-    assert [i["video_id"] for i in page1["items"]] == [C, A]
+    assert [i["video_id"] for i in page1["items"]] == [C, B]
     assert page1["total"] == 3
-    assert ids(api, "?limit=2&offset=2") == [B]
+    assert ids(api, "?limit=2&offset=2") == [A]
     assert ids(api, "?limit=2&offset=3") == []
 
 

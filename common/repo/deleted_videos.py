@@ -148,7 +148,7 @@ def list_deleted_videos(
                )
         FROM deleted_videos d
         LEFT JOIN channels c ON c.channel_id = d.channel_id
-        ORDER BY d.deleted_at DESC, d.video_id ASC
+        ORDER BY d.deleted_at DESC, d.video_id COLLATE "C" ASC
         LIMIT %s OFFSET %s
         """,
         (limit, offset),
