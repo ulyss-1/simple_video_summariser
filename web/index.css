@@ -315,6 +315,12 @@ a:focus {
   line-height: 1.5;
 }
 
+.input--multiline {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+}
+
 .filters {
   display: flex;
   flex-wrap: wrap;
