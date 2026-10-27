@@ -1685,6 +1685,38 @@
         "type": "object"
       },
       "JsonValue": {},
+      "LastCancelledOut": {
+        "description": "The newest job of a video, when it ended ``CANCELLED`` (#300).",
+        "properties": {
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "kind",
+          "finished_at"
+        ],
+        "title": "LastCancelledOut",
+        "type": "object"
+      },
       "LastFailureOut": {
         "properties": {
           "error_class": {
@@ -2713,6 +2745,16 @@
             "title": "Has Transcript",
             "type": "boolean"
           },
+          "last_cancelled": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LastCancelledOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "last_failure": {
             "anyOf": [
               {
@@ -2825,7 +2867,8 @@
           "has_transcript",
           "transcript",
           "analysis",
-          "progress"
+          "progress",
+          "last_cancelled"
         ],
         "title": "VideoDetail",
         "type": "object"

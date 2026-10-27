@@ -14,6 +14,7 @@ from common.models import (
     ActiveJob,
     CatalogEntry,
     FeedEntry,
+    JobCancelled,
     JobFailure,
     VideoMeta,
     VideoPage,
@@ -457,7 +458,7 @@ _VIDEO_STATUS_JOINS = """
         LIMIT 1
     ) aj ON true
     LEFT JOIN LATERAL (
-        SELECT j.state, j.error_class FROM jobs j
+        SELECT j.id, j.kind, j.state, j.error_class, j.finished_at FROM jobs j
         WHERE j.video_id = v.video_id
         ORDER BY j.created_at DESC, j.id DESC LIMIT 1
     ) nj ON true
@@ -479,7 +480,13 @@ _VIDEO_READ = f"""
            lf.finished_at AS lf_finished_at,
            la.created_at AS latest_analysis_at,
            v.discovered_at,
-           EXISTS (SELECT 1 FROM transcripts t WHERE t.video_id = v.video_id) AS has_transcript
+           EXISTS (SELECT 1 FROM transcripts t WHERE t.video_id = v.video_id) AS has_transcript,
+           CASE WHEN nj.state = 'dead' AND nj.error_class = 'CANCELLED' THEN nj.id END
+               AS nc_id,
+           CASE WHEN nj.state = 'dead' AND nj.error_class = 'CANCELLED' THEN nj.kind END
+               AS nc_kind,
+           CASE WHEN nj.state = 'dead' AND nj.error_class = 'CANCELLED' THEN nj.finished_at END
+               AS nc_finished_at
     FROM videos v
     LEFT JOIN channels c ON c.channel_id = v.channel_id
     {_VIDEO_STATUS_JOINS}
@@ -571,6 +578,7 @@ def _summary(row: Sequence[Any]) -> VideoSummary:
         video_id, title, channel_id, channel_title, published_at, duration_sec, origin,
         unavailable, status, aj_id, aj_kind, aj_state, aj_cancel_requested_at, lf_id, lf_kind,
         lf_class, lf_finished, latest_analysis_at, _discovered_at, has_transcript,
+        nc_id, nc_kind, nc_finished,
     ) = row
     return VideoSummary(
         video_id=video_id,
@@ -592,5 +600,8 @@ def _summary(row: Sequence[Any]) -> VideoSummary:
         ),
         latest_analysis_at=latest_analysis_at,
         has_transcript=has_transcript,
+        last_cancelled=(
+            None if nc_id is None else JobCancelled(int(nc_id), nc_kind, nc_finished)
+        ),
     )
 

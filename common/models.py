@@ -510,6 +510,15 @@ class JobFailure:
 
 
 @dataclass(frozen=True, slots=True)
+class JobCancelled:
+    """A video's newest job, when it ended ``CANCELLED`` (#300)."""
+
+    job_id: int
+    kind: str
+    finished_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
 class VideoSummary:
     """One ``videos`` row plus its derived processing status (#42)."""
 
@@ -526,6 +535,7 @@ class VideoSummary:
     last_failure: JobFailure | None
     latest_analysis_at: datetime | None
     has_transcript: bool = False
+    last_cancelled: JobCancelled | None = None
 
 
 @dataclass(frozen=True, slots=True)

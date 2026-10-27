@@ -9,7 +9,7 @@ from typing import Any
 import psycopg
 import pytest
 
-from common.models import ActiveJob, JobFailure
+from common.models import ActiveJob, JobCancelled, JobFailure
 from common.repo.videos import get_video, list_videos
 from tests.common.repo import read_seed as seed
 
@@ -532,3 +532,54 @@ def test_a_cancelled_job_is_idle_not_failed_and_never_the_last_failure(
     older = get_video(conn, "cn_fail00001")
     assert older is not None
     assert older.last_failure is not None and older.last_failure.error_class == "BUG"
+
+
+def test_last_cancelled_is_set_exactly_when_the_newest_job_was_cancelled(
+    conn: psycopg.Connection[Any],
+) -> None:
+    """#300: the page tells a cancelled video from a never-processed one."""
+    seed.video(conn, "lc_newest001")
+    seed.job(conn, "lc_newest001", "ingest", "done", created=1)
+    newest = seed.job(
+        conn, "lc_newest001", "transcribe", "dead", created=2, error_class="CANCELLED",
+        finished_at=seed.at(5),
+    )
+    seed.video(conn, "lc_pending01")
+    seed.job(conn, "lc_pending01", "ingest", "dead", created=1, error_class="CANCELLED")
+    seed.job(conn, "lc_pending01", "ingest", "pending", created=2)
+    seed.video(conn, "lc_done00001")
+    seed.job(conn, "lc_done00001", "ingest", "dead", created=1, error_class="CANCELLED")
+    seed.job(conn, "lc_done00001", "ingest", "done", created=2)
+    seed.video(conn, "lc_other0001")
+    seed.job(conn, "lc_other0001", "ingest", "dead", created=1, error_class="CANCELLED")
+    seed.job(conn, "lc_other0001", "ingest", "dead", created=2, error_class="BUG")
+    seed.video(conn, "lc_nojobs001")
+
+    cancelled = get_video(conn, "lc_newest001")
+    others = {
+        v: get_video(conn, v)
+        for v in ("lc_pending01", "lc_done00001", "lc_other0001", "lc_nojobs001")
+    }
+
+    assert cancelled is not None
+    assert cancelled.last_cancelled == JobCancelled(newest, "transcribe", seed.at(5))
+    assert cancelled.status == "idle"
+    for video_id, detail in others.items():
+        assert detail is not None
+        assert detail.last_cancelled is None, video_id
+    other = others["lc_other0001"]
+    assert other is not None and other.last_failure is not None
+    assert other.status == "failed"
+
+
+def test_two_jobs_created_at_the_same_instant_use_the_higher_id_for_last_cancelled(
+    conn: psycopg.Connection[Any],
+) -> None:
+    seed.video(conn, "lc_tie000001")
+    seed.job(conn, "lc_tie000001", "ingest", "dead", created=1, error_class="CANCELLED")
+    seed.job(conn, "lc_tie000001", "ingest", "done", created=1, dedupe_key="b")
+
+    detail = get_video(conn, "lc_tie000001")
+
+    assert detail is not None
+    assert detail.last_cancelled is None
