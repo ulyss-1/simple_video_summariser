@@ -1050,7 +1050,7 @@ separated per D13.
 | `POST` | `/channels/{id}/backfill/cancel` | `{backfill_id}`; ends the matching active request and deletes only its pending backfill-priority `ingest` jobs; a matching running `ingest` finishes normally and is excluded from `cancelled`, while already-created `transcribe` and `analyze` jobs are not cancelled (#116, #166) |
 | `POST` | `/videos/{id}/reanalyze` | force new `analyze` at current version |
 | `GET` | `/videos` | paginated library view; filters: channel, state, date; repeated paired `sort=title|published|status|channel`, `order=asc|desc` (up to four unique keys) |
-| `GET` | `/videos/{id}` | latest analysis + job state |
+| `GET` | `/videos/{id}` | latest analysis + job state. Also `last_cancelled: {job_id, kind, finished_at} \| null` (#300): non-null exactly when the video's newest job (`created_at DESC, id DESC`) is `dead` with `error_class = 'CANCELLED'`, so a page can tell a cancelled video from a never-processed one (`status` stays `idle`/`done`, `last_failure` is unchanged). `GET /videos` does not carry it |
 | `GET` | `/videos/{id}/analyses` | all runs (Compare view, D7) |
 | `GET` | `/videos/{id}/transcript` | paginated segments |
 | `GET` | `/videos/{id}/render` | **server-side HTML render** (D12c) |
@@ -1193,6 +1193,13 @@ web/src/
   polls `GET /channels/{id}/catalog` every 5 s while any row is `pending` or
   `running`; the selected IDs are route-local state and are reconciled against
   every response.
+- **Video page cancel (#300).** With `active_job` set and no `cancel_requested_at`,
+  the page offers `Cancel processing` (inline confirmation, `POST /videos/{id}/cancel`,
+  hook `useCancelProcessing`), then invalidates `['video', id]`. While
+  `cancel_requested_at` is set the status line reads `Cancelling: <stage>…` and the
+  page keeps polling; once the job is terminal, `last_cancelled` makes it read
+  `Processing cancelled (<kind>)`. `Delete video` is available in every state and
+  answers `204` also during processing (#303), so the delete flow has no `409` case.
 - **Transcript virtualization deferred** (D12b) by paginating segments
   server-side — `GET /videos/{id}/transcript?offset=&limit=`.
 - **Stack:** React 19.3 + Vite 8 (Rolldown) + TypeScript; React Compiler

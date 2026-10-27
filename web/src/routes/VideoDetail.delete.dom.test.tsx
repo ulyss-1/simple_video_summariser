@@ -26,6 +26,7 @@ function video(over: Partial<VideoDetailOut> = {}): VideoDetailOut {
     status: 'done',
     active_job: null,
     last_failure: null,
+    last_cancelled: null,
     transcript: null,
     analysis: null,
     progress: null,
@@ -224,7 +225,7 @@ describe('delete request', () => {
   })
 
   it.each([
-    [409, 'This video is being processed. Try again when it finishes.'],
+    [500, 'Could not delete the video. Check your connection and try again.'],
     [429, 'Too many requests. Try again shortly.'],
     [503, 'The database is unavailable. Try again shortly.'],
   ])('on %s shows a fixed alert and keeps everything', async (status, message) => {
@@ -263,7 +264,7 @@ describe('delete request', () => {
   })
 
   it('closing the confirmation clears a previous error', async () => {
-    deleteResponder = () => json({}, 409)
+    deleteResponder = () => json({}, 503)
     await mount()
     open()
     fireEvent.click(confirmBtn())

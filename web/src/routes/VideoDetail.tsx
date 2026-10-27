@@ -7,6 +7,7 @@ import { Player } from '../components/Player'
 import { buildWatchUrl } from '../components/player/youtubeTransport'
 import { formatTimestamp, useMomentSeek } from '../components/Timestamp'
 import { useAnalysisTotal } from '../hooks/useAnalyses'
+import { cancelProcessingErrorMessage, useCancelProcessing } from '../hooks/useCancelProcessing'
 import { deleteErrorMessage, useDeleteVideo } from '../hooks/useDeleteVideo'
 import { reanalyzeErrorMessage, useReanalyze } from '../hooks/useReanalyze'
 import { useVideo, VideoApiError } from '../hooks/useVideo'
@@ -26,6 +27,7 @@ const UNAVAILABLE_NOTE = 'This video is no longer available on YouTube'
 function pipelineStatus(v: Video): string {
   switch (v.status) {
     case 'processing': {
+      if (v.active_job?.cancel_requested_at != null) return cancellingText(v.active_job.kind)
       const stage = (v.active_job && STAGES[v.active_job.kind]) ?? 'Processing'
       return v.active_job?.state === 'pending' ? `Queued: ${stage}` : stage
     }
@@ -37,9 +39,19 @@ function pipelineStatus(v: Video): string {
     case 'unavailable':
       return UNAVAILABLE_NOTE
     default:
-      return 'Not analysed yet'
+      return v.last_cancelled == null ? 'Not analysed yet' : cancelledText(v.last_cancelled.kind)
   }
 }
+
+function cancellingText(kind: string): string {
+  const stage = STAGES[kind]
+  return stage === undefined ? 'Cancelling…' : `Cancelling: ${stage}…`
+}
+
+const cancelledText = (kind: string) => `Processing cancelled (${kind})`
+
+const CANCELLING_HINT =
+  'This usually takes up to a minute: the worker learns of the request on its next heartbeat, then stops its download or model call.'
 
 /** `YYYY-MM-DD` in UTC, or null when absent or unparsable. */
 function utcDate(value: string | null): string | null {
@@ -65,7 +77,17 @@ function NotFound() {
 }
 
 /** Inline confirmation for deleting the video (design-system §7.7), never a modal. */
-function DeleteVideo({ videoId, name, onGone }: { videoId: string; name: string; onGone: () => void }) {
+function DeleteVideo({
+  videoId,
+  name,
+  processing,
+  onGone,
+}: {
+  videoId: string
+  name: string
+  processing: boolean
+  onGone: () => void
+}) {
   const navigate = useNavigate()
   const del = useDeleteVideo(videoId, () => {
     onGone()
@@ -119,12 +141,84 @@ function DeleteVideo({ videoId, name, onGone }: { videoId: string; name: string;
     >
       <p>Delete {name}?</p>
       <p>The transcript, summaries and stored audio will be permanently removed.</p>
+      {processing && <p>Processing is stopped and any running work is discarded.</p>}
       {del.isError && <p role="alert">{deleteErrorMessage(del.error)}</p>}
       <button type="button" disabled={del.isPending} onClick={confirm}>
         Delete video
       </button>{' '}
       <button type="button" ref={cancelRef} disabled={del.isPending} onClick={close}>
         Cancel
+      </button>
+    </div>
+  )
+}
+
+/**
+ * Inline confirmation for stopping a video's jobs without deleting it (#300,
+ * design-system §7.7), never a modal. The request lives in the page so that it
+ * survives this control disappearing when the refetch shows the new state.
+ */
+function CancelProcessing({
+  name,
+  kind,
+  cancel,
+}: {
+  name: string
+  kind: string
+  cancel: ReturnType<typeof useCancelProcessing>
+}) {
+  const [confirming, setConfirming] = useState(false)
+  const openRef = useRef<HTMLButtonElement>(null)
+  const keepRef = useRef<HTMLButtonElement>(null)
+  const restoreFocus = useRef(false)
+  // Set synchronously on click: isPending only turns true on a later render.
+  const sent = useRef(false)
+
+  useEffect(() => {
+    if (confirming) keepRef.current?.focus()
+    else if (restoreFocus.current) {
+      restoreFocus.current = false
+      openRef.current?.focus()
+    }
+  }, [confirming])
+
+  const close = () => {
+    restoreFocus.current = true
+    cancel.reset()
+    setConfirming(false)
+  }
+
+  const confirm = () => {
+    if (sent.current) return
+    sent.current = true
+    cancel.mutate(undefined, {
+      onSettled: () => {
+        sent.current = false
+      },
+    })
+  }
+
+  if (!confirming) {
+    return (
+      <button type="button" ref={openRef} onClick={() => setConfirming(true)}>
+        Cancel processing
+      </button>
+    )
+  }
+  return (
+    <div
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && !cancel.isPending) close()
+      }}
+    >
+      <p>Cancel processing of {name}? Nothing is deleted.</p>
+      {kind === 'transcribe' && <p>A running transcription starts over if it is resumed.</p>}
+      {cancel.isError && <p role="alert">{cancelProcessingErrorMessage(cancel.error)}</p>}
+      <button type="button" disabled={cancel.isPending} onClick={confirm}>
+        Confirm cancel
+      </button>{' '}
+      <button type="button" ref={keepRef} disabled={cancel.isPending} onClick={close}>
+        Keep processing
       </button>
     </div>
   )
@@ -143,6 +237,14 @@ function VideoPage({ videoId }: { videoId: string }) {
   const [gone, setGone] = useState(false)
   const query = useVideo(gone ? null : videoId)
   const reanalyze = useReanalyze(videoId)
+  // Bumped when a cancel has been answered and the page refetched: the status
+  // line then takes focus, since the control that had it is gone.
+  const [focusStatus, setFocusStatus] = useState(0)
+  const cancel = useCancelProcessing(videoId, () => setFocusStatus((n) => n + 1))
+  const statusRef = useRef<HTMLParagraphElement>(null)
+  useEffect(() => {
+    if (focusStatus > 0) statusRef.current?.focus()
+  }, [focusStatus])
   // Only the count is needed for the Compare link; a failure just hides it.
   const analysisTotal = useAnalysisTotal(gone ? null : videoId).data
   const video = query.data
@@ -155,9 +257,10 @@ function VideoPage({ videoId }: { videoId: string }) {
     if (heading !== null) document.title = heading
   }, [heading])
 
+  // A 404 after earlier data (a cancel or poll found the video gone) ends the page too.
+  if (query.isError && query.error instanceof VideoApiError && query.error.status === 404) return <NotFound />
   if (video === undefined) {
     if (query.isError) {
-      if (query.error instanceof VideoApiError && query.error.status === 404) return <NotFound />
       return (
         <section className="page">
           <h1>Could not load this video</h1>
@@ -244,14 +347,36 @@ function VideoPage({ videoId }: { videoId: string }) {
       <Player videoId={videoId} title={heading ?? undefined} />
       {/* Any non-null `unavailable`, including '', means unavailable. */}
       {video.unavailable !== null && analysis !== null && <p className="alert">{UNAVAILABLE_NOTE}</p>}
-      {analysis !== null && video.active_job !== null && <p className="alert">Re-analysis in progress</p>}
-      {analysis === null ? <p className="alert" role="status">{pipelineStatus(video)}</p> : <AnalysisView analysis={analysis} />}
+      {analysis !== null && video.active_job !== null && (
+        <p className="alert" tabIndex={-1} ref={statusRef}>
+          {video.active_job.cancel_requested_at == null ? 'Re-analysis in progress' : 'Cancelling re-analysis…'}
+        </p>
+      )}
+      {analysis !== null && video.active_job === null && video.last_cancelled != null && (
+        <p className="alert" tabIndex={-1} ref={statusRef}>{cancelledText(video.last_cancelled.kind)}</p>
+      )}
+      {analysis === null ? (
+        <p className="alert" role="status" tabIndex={-1} ref={statusRef}>{pipelineStatus(video)}</p>
+      ) : (
+        <AnalysisView analysis={analysis} />
+      )}
+      {video.active_job?.cancel_requested_at != null && <p className="muted">{CANCELLING_HINT}</p>}
       {video.active_job !== null && video.progress != null && (
         <div>
           <JobProgress kind={video.active_job.kind} state={video.active_job.state} progress={video.progress} />
         </div>
       )}
-      <DeleteVideo videoId={videoId} name={heading ?? videoId} onGone={() => setGone(true)} />
+      <div className="row">
+        {video.active_job !== null && video.active_job.cancel_requested_at == null && (
+          <CancelProcessing name={heading ?? videoId} kind={video.active_job.kind} cancel={cancel} />
+        )}
+        <DeleteVideo
+          videoId={videoId}
+          name={heading ?? videoId}
+          processing={video.active_job !== null}
+          onGone={() => setGone(true)}
+        />
+      </div>
     </article>
   )
 }

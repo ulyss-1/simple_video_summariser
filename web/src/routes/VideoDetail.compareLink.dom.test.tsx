@@ -28,6 +28,7 @@ function video(id = ID): VideoDetailOut {
     status: 'idle',
     active_job: null,
     last_failure: null,
+    last_cancelled: null,
     transcript: null,
     analysis: null,
     progress: null,

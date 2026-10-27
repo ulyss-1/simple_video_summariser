@@ -67,6 +67,7 @@ function video(over: Partial<VideoDetailOut> = {}): VideoDetailOut {
     status: 'done',
     active_job: null,
     last_failure: null,
+    last_cancelled: null,
     transcript: null,
     analysis: null,
     progress: null,

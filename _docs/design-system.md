@@ -278,6 +278,19 @@ back to "Retry" on Cancel. Both are `disabled` while the request runs. The
 outcome is announced in an `aria-live="polite"` span in the row, or in a
 section-level live region if the row has disappeared.
 
+#### Cancel processing on the video page (#300)
+
+Same pattern, on the video detail page only. `Cancel processing` (shown while
+`active_job` is set and has no `cancel_requested_at`) opens an inline sentence:
+"Cancel processing of {title}? Nothing is deleted." plus "A running transcription
+starts over if it is resumed." for a `transcribe` job, with `Confirm cancel` and
+`Keep processing`. Focus moves to `Keep processing`; `Escape` or `Keep processing`
+returns it to `Cancel processing`. Errors are fixed `role="alert"` texts. On success
+the status line (`tabIndex={-1}`) takes focus: "Cancelling: {stage}…" with the
+heartbeat hint underneath, later "Processing cancelled ({kind})". Deleting a
+video that is processing adds "Processing is stopped and any running work is
+discarded." to the delete confirmation.
+
 ### 7.8 Disclosure
 
 Ops `last_error`: the first line, cut to 200 characters with `…`, plus a

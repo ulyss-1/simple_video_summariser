@@ -5,8 +5,6 @@ import { api, ApiError } from '../api'
 export function deleteErrorMessage(error: unknown): string {
   if (error instanceof ApiError && error.kind === 'http') {
     switch (error.status) {
-      case 409:
-        return 'This video is being processed. Try again when it finishes.'
       case 429:
         return 'Too many requests. Try again shortly.'
       case 503:
