@@ -26,6 +26,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/channels/{channel_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Channel Detail
+         * @description One channel's state, active or not, with its video count (#235).
+         */
+        get: operations["get_channel_detail_channels__channel_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/channels/{channel_id}/backfill": {
         parameters: {
             query?: never;
@@ -234,6 +254,32 @@ export interface paths {
          *     left as it is.
          */
         post: operations["post_catalog_metadata_retry_channels__channel_id__catalog__video_id__metadata_retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/channels/{channel_id}/unfollow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Channel Unfollow
+         * @description Stop following a channel and keep everything it produced (#235).
+         *
+         *     Sets ``active = false`` and ends the channel's pending or running backfill
+         *     request like ``POST /channels/{id}/backfill/cancel``; RSS polling and gap
+         *     reconciliation then skip the channel. Videos, transcripts, analyses and
+         *     other jobs are untouched. Repeating it is safe (``changed: false``);
+         *     ``POST /channels`` follows the channel again, forward-only.
+         */
+        post: operations["post_channel_unfollow_channels__channel_id__unfollow_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -989,6 +1035,27 @@ export interface components {
             /** Results */
             results: components["schemas"]["CatalogProcessItemOut"][];
         };
+        /** ChannelDetailOut */
+        ChannelDetailOut: {
+            /** Active */
+            active: boolean;
+            /**
+             * Added At
+             * Format: date-time
+             */
+            added_at: string;
+            /** Channel Id */
+            channel_id: string;
+            /**
+             * Monitor From
+             * Format: date-time
+             */
+            monitor_from: string;
+            /** Title */
+            title: string | null;
+            /** Video Count */
+            video_count: number;
+        };
         /** ChannelItem */
         ChannelItem: {
             /** Active */
@@ -1343,6 +1410,31 @@ export interface components {
             /** Speaker Source */
             speaker_source: string;
         };
+        /** UnfollowBackfill */
+        UnfollowBackfill: {
+            /** Backfill Id */
+            backfill_id: string;
+            /** Cancelled Jobs */
+            cancelled_jobs: number;
+        };
+        /**
+         * UnfollowRequest
+         * @description The body of ``POST /channels/{id}/unfollow`` is ``{}``; anything else is a 422.
+         */
+        UnfollowRequest: Record<string, never>;
+        /** UnfollowResponse */
+        UnfollowResponse: {
+            /**
+             * Active
+             * @constant
+             */
+            active: false;
+            backfill: components["schemas"]["UnfollowBackfill"] | null;
+            /** Changed */
+            changed: boolean;
+            /** Channel Id */
+            channel_id: string;
+        };
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -1530,6 +1622,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChannelRegistration"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_channel_detail_channels__channel_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channel_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelDetailOut"];
                 };
             };
             /** @description Validation Error */
@@ -1877,6 +2000,53 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    post_channel_unfollow_channels__channel_id__unfollow_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channel_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UnfollowRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnfollowResponse"];
+                };
+            };
+            /** @description Unknown channel */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The body is not JSON */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Malformed channel ID */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

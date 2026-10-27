@@ -373,6 +373,16 @@ history. Only uploads positioned above a known post-`monitor_from` video (the
 anchor) in the channel's newest-50 listing are recovered; anything below it may
 be pre-cutoff history and stays for an explicit backfill (D9b, #41).
 
+Both discovery paths read the channel list before they fetch, so an unfollow
+(#235) can land in between. To keep an unfollowed channel from gaining videos,
+`poll_channels` and `reconcile_channels` write a video only inside a transaction
+that first reads the channel row `FOR SHARE` and finds `active = true`; the
+unfollow takes the same row `FOR UPDATE`, so the two serialize either way. An
+inactive channel is skipped for the rest of that pass, logged once at INFO as
+`planner.poll.channel_unfollowed` / `planner.reconcile.channel_unfollowed`, and
+the poll records no health for it. Lock order is the channel row, then request,
+video and job rows.
+
 The channel gap columns are current state, not event history (#156). Polling's
 existing possible-gap condition sets `suspected` without moving an existing
 start time. Reconciliation changes only an existing marker: no valid anchor is
@@ -570,6 +580,14 @@ CREATE INDEX videos_channel_pub_idx ON videos (channel_id, published_at DESC);
 
 `channels.monitor_from` is what makes D9b's forward-only rule explicit and
 auditable, rather than implicit in "whatever RSS returned first".
+
+`channels.active` is true for a followed channel and false for one known only
+through an ad-hoc video (`upsert_video` creates it that way) or one the user
+unfollowed (`POST /channels/{id}/unfollow`, #235). Only `POST /channels` sets it
+true again, with `monitor_from = now()`. Inactive stops exactly two things:
+RSS polling and gap reconciliation add no videos for the channel, and it has no
+poll health or feed-gap state (unfollow clears both). Everything explicit still
+works for it: backfill, backfill requests, the catalog and `POST /videos`.
 
 ```sql
 -- ============ transcripts ============
@@ -1037,6 +1055,8 @@ separated per D13.
 | `POST` | `/videos/{id}/cancel` | body `{}`, JSON only (`415` otherwise); stores a cancel request for every `pending` or `running` job of the video (#237). Pending jobs end `CANCELLED` at once; running ones get `cancel_requested_at` and stop at their next checkpoint. Answers `{video_id, jobs: [{job_id, kind, outcome}]}` with `outcome` `cancelled` or `cancel_requested`: `202` if any is `cancel_requested`, else `200` (`jobs: []` when nothing was active); `404` for an unknown or deleted video (so a cancel after `DELETE` is `404`, #303), `422` for a malformed ID. Deletes nothing |
 | `POST` | `/channels` | forward-only; sets `monitor_from`. Accepts a channel ID, `youtube.com/channel/` URL, or `@handle`, `/c/` or `/user/` reference; a name is resolved synchronously with one bounded yt-dlp call (at most 20 s, #81, an exception to the no-processing rule in §1): `404` if it does not exist, `503` on timeout or rate limit, `502` on bad output |
 | `GET` | `/channels` | paginated channel list (id, title, active, video count), powers the Library channel filter |
+| `GET` | `/channels/{id}` | one channel, active or not: `{channel_id, title, active, monitor_from, added_at, video_count}` (`video_count` counts its `videos` rows as `GET /channels` does); no subprocess, no write; `404` unknown, `422` malformed ID (#235) |
+| `POST` | `/channels/{id}/unfollow` | body `{}`, JSON only (`415` otherwise); unfollow and keep the videos (#235). In one transaction, channel row first: `active = false`, poll health and feed-gap columns reset, and the channel's pending or running backfill request ended exactly as `backfill/cancel` does. Answers `200` `{channel_id, active: false, changed, backfill: {backfill_id, cancelled_jobs} \| null}`; `changed: false` and nothing else written for an already inactive channel (an ad-hoc stub's request is still ended), so repeating is safe. Videos, transcripts, analyses, tombstones, the catalog snapshot and every other job are untouched. `POST /channels` follows it again, forward-only from `now()`. `404` unknown, `422` malformed ID. Deleting the channel with its videos is #339 |
 | `POST` | `/channels/{id}/backfill` | `{limit, dry_run}`; priority `-10` (D9b) |
 | `POST` | `/channels/{id}/backfill-requests` | `{limit <= 5000, dry_run}`; only records a request, the planner `channel_backfill` task runs it (#115); `409` while the channel has a pending or running one |
 | `GET` | `/channels/{id}/backfill-requests/{request_id}` | state, attempts, enqueued, timestamps and `result` (the shape of the synchronous response) (#115) |

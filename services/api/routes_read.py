@@ -49,7 +49,7 @@ from common.repo.analyses import (
 )
 from common.repo.backfill_requests import get_request
 from common.repo.channel_catalog import get_catalog_page
-from common.repo.channels import get_channel_title, list_channels
+from common.repo.channels import get_channel, get_channel_title, list_channels
 from common.repo.jobs import get_job
 from common.repo.search import search_transcripts
 from common.repo.transcripts import best_transcript_info, best_transcript_page
@@ -111,6 +111,7 @@ VIDEO_NOT_FOUND = "video not found"
 BAD_BACKFILL_CHANNEL = "channel_id must be a canonical YouTube channel ID (UC + 22 characters)"
 BAD_REQUEST_ID = "request id must be a positive integer"
 BACKFILL_REQUEST_NOT_FOUND = "backfill request not found"
+CHANNEL_NOT_FOUND = "channel not found"
 CATALOG_NOT_FOUND = "channel catalog not found; discover it first"
 TRANSCRIPT_NOT_FOUND = "transcript not found"
 NO_ANALYSIS_YET = "no analysis yet"
@@ -397,6 +398,22 @@ def get_channels(
     """Every channel, active or not, by title; ``total`` counts them all (#119)."""
     page = list_channels(conn, offset=params.offset, limit=params.limit)
     return schemas.channel_list(page, offset=params.offset, limit=params.limit)
+
+
+@router.get("/channels/{channel_id}", response_model=schemas.ChannelDetailOut)
+def get_channel_detail(channel_id: BackfillChannelId, conn: ReadConn) -> schemas.ChannelDetailOut:
+    """One channel's state, active or not, with its video count (#235)."""
+    channel = get_channel(conn, channel_id)
+    if channel is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, CHANNEL_NOT_FOUND)
+    return schemas.ChannelDetailOut(
+        channel_id=channel.channel_id,
+        title=channel.title,
+        active=channel.active,
+        monitor_from=channel.monitor_from,
+        added_at=channel.added_at,
+        video_count=channel.video_count,
+    )
 
 
 @router.get(

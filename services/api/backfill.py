@@ -34,8 +34,8 @@ from common.backfill import (
     backfill,
 )
 from common.queue import PostgresQueue
-from common.repo.backfill_requests import cancel_active
-from common.repo.channels import channel_exists
+from common.repo.backfill_requests import cancel_active, lock_active_backfill_id
+from common.repo.channels import channel_exists, deactivate_channel
 from common.repo.videos import delete_unused_backfill_video
 
 __all__ = [
@@ -55,9 +55,11 @@ __all__ = [
     "Estimate",
     "LlmEstimate",
     "SubtitleProbe",
+    "UnfollowResult",
     "VideoEstimate",
     "backfill",
     "cancel_backfill",
+    "unfollow_channel",
 ]
 
 
@@ -92,9 +94,16 @@ def cancel_backfill(
     with conn.transaction():
         if not channel_exists(conn, channel_id):
             raise ChannelNotRegistered(channel_id)
-        cancel_active(conn, channel_id, backfill_id)
-        jobs = PostgresQueue(conn).cancel_backfill(channel_id, backfill_id)
-        removed = sum(delete_unused_backfill_video(conn, job.video_id) for job in jobs)
+        return _cancel_in_transaction(conn, channel_id, backfill_id)
+
+
+def _cancel_in_transaction(
+    conn: psycopg.Connection[Any], channel_id: str, backfill_id: str
+) -> CancelResult:
+    """The cancel itself; the caller owns the transaction (shared with unfollow, #235)."""
+    cancel_active(conn, channel_id, backfill_id)
+    jobs = PostgresQueue(conn).cancel_backfill(channel_id, backfill_id)
+    removed = sum(delete_unused_backfill_video(conn, job.video_id) for job in jobs)
     return CancelResult(
         channel_id=channel_id,
         backfill_id=backfill_id,
@@ -103,3 +112,34 @@ def cancel_backfill(
         videos_kept=len(jobs) - removed,
         video_ids=tuple(job.video_id for job in jobs),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class UnfollowResult:
+    channel_id: str
+    changed: bool
+    cancel: CancelResult | None  # None when the channel had no active request
+
+
+def unfollow_channel(conn: psycopg.Connection[Any], channel_id: str) -> UnfollowResult:
+    """Stop following ``channel_id`` and end its active backfill request (#235).
+
+    One transaction. The channel row is locked first (``deactivate_channel``),
+    then the active request, then the jobs, as ``cancel_backfill`` does. A
+    pending or running request is ended exactly as ``cancel_backfill`` with its
+    ``backfill_id`` does, also for a channel that was already inactive. Videos,
+    transcripts, analyses and every other job are left alone. ``conn`` must
+    have no open transaction. Raises ``ChannelNotRegistered`` for an unknown
+    channel.
+    """
+    if conn.info.transaction_status != TransactionStatus.IDLE:
+        raise RuntimeError("unfollow_channel expects a connection with no open transaction")
+    with conn.transaction():
+        changed = deactivate_channel(conn, channel_id)
+        if changed is None:
+            raise ChannelNotRegistered(channel_id)
+        backfill_id = lock_active_backfill_id(conn, channel_id)
+        cancel = (
+            None if backfill_id is None else _cancel_in_transaction(conn, channel_id, backfill_id)
+        )
+    return UnfollowResult(channel_id=channel_id, changed=changed, cancel=cancel)

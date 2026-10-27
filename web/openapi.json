@@ -1223,6 +1223,53 @@
         "title": "CatalogProcessResponse",
         "type": "object"
       },
+      "ChannelDetailOut": {
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "added_at": {
+            "format": "date-time",
+            "title": "Added At",
+            "type": "string"
+          },
+          "channel_id": {
+            "title": "Channel Id",
+            "type": "string"
+          },
+          "monitor_from": {
+            "format": "date-time",
+            "title": "Monitor From",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "video_count": {
+            "title": "Video Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "channel_id",
+          "title",
+          "active",
+          "monitor_from",
+          "added_at",
+          "video_count"
+        ],
+        "title": "ChannelDetailOut",
+        "type": "object"
+      },
       "ChannelItem": {
         "properties": {
           "active": {
@@ -2459,6 +2506,66 @@
         "title": "TranscriptSummary",
         "type": "object"
       },
+      "UnfollowBackfill": {
+        "properties": {
+          "backfill_id": {
+            "title": "Backfill Id",
+            "type": "string"
+          },
+          "cancelled_jobs": {
+            "title": "Cancelled Jobs",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "backfill_id",
+          "cancelled_jobs"
+        ],
+        "title": "UnfollowBackfill",
+        "type": "object"
+      },
+      "UnfollowRequest": {
+        "additionalProperties": false,
+        "description": "The body of ``POST /channels/{id}/unfollow`` is ``{}``; anything else is a 422.",
+        "properties": {},
+        "title": "UnfollowRequest",
+        "type": "object"
+      },
+      "UnfollowResponse": {
+        "properties": {
+          "active": {
+            "const": false,
+            "title": "Active",
+            "type": "boolean"
+          },
+          "backfill": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UnfollowBackfill"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "changed": {
+            "title": "Changed",
+            "type": "boolean"
+          },
+          "channel_id": {
+            "title": "Channel Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel_id",
+          "active",
+          "changed",
+          "backfill"
+        ],
+        "title": "UnfollowResponse",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -3034,6 +3141,46 @@
         "summary": "Post Channels"
       }
     },
+    "/channels/{channel_id}": {
+      "get": {
+        "description": "One channel's state, active or not, with its video count (#235).",
+        "operationId": "get_channel_detail_channels__channel_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Channel Detail"
+      }
+    },
     "/channels/{channel_id}/backfill": {
       "post": {
         "description": "Backfill a registered channel's newest ``limit`` uploads (#41, D9b).\n\nThis is the one API route that runs a subprocess: the catalog is a\nyt-dlp flat listing, bounded by ``deps.BACKFILL_LIST_TIMEOUT_SEC`` and\n``MAX_BACKFILL_LIMIT``. It departs from \"the API performs no processing\"\nbecause architecture.md 8.3 wants a synchronous dry-run answer, and a\nflat listing is network-bound, not CPU work (owner decision; moving it\nto a worker is #115). A dry run (the default) writes nothing; a real run\nanswers 202 when it enqueued at least one job, else 200.\n\nA dry run also checks each new video's subtitles, newest first, within a\n100 s budget (#117); the rest are reported as ``unchecked``. It writes\nnothing.\n\nThe pooled connection is borrowed per short DB phase and returned across\nthe listing and the probes (#204), so a slow dry run cannot exhaust the\npool.",
@@ -3470,6 +3617,55 @@
           }
         },
         "summary": "Post Catalog Metadata Retry"
+      }
+    },
+    "/channels/{channel_id}/unfollow": {
+      "post": {
+        "description": "Stop following a channel and keep everything it produced (#235).\n\nSets ``active = false`` and ends the channel's pending or running backfill\nrequest like ``POST /channels/{id}/backfill/cancel``; RSS polling and gap\nreconciliation then skip the channel. Videos, transcripts, analyses and\nother jobs are untouched. Repeating it is safe (``changed: false``);\n``POST /channels`` follows the channel again, forward-only.",
+        "operationId": "post_channel_unfollow_channels__channel_id__unfollow_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnfollowRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnfollowResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "Unknown channel"
+          },
+          "415": {
+            "description": "The body is not JSON"
+          },
+          "422": {
+            "description": "Malformed channel ID"
+          }
+        },
+        "summary": "Post Channel Unfollow"
       }
     },
     "/healthz": {

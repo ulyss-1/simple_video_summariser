@@ -56,6 +56,7 @@ from common.queue import PRIORITY_NORMAL, JobQueue
 from common.repo.channels import (
     clear_feed_gap,
     list_active_channels,
+    lock_active_channel,
     set_feed_gap_reason,
 )
 from common.repo.videos import insert_catalog_video, known_videos
@@ -231,6 +232,12 @@ def _reconcile_channel(
     enqueued_here = 0
     try:
         with conn.transaction():
+            if not lock_active_channel(conn, channel.channel_id):
+                _logger.info(
+                    "planner.reconcile.channel_unfollowed",
+                    extra={"channel_id": channel.channel_id},
+                )
+                return
             for entry in entries[:anchor]:
                 if entry.video_id in known:
                     continue

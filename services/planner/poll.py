@@ -32,6 +32,7 @@ from common.models import Channel, FeedSource
 from common.queue import PRIORITY_NORMAL, JobQueue
 from common.repo.channels import (
     list_active_channels,
+    lock_active_channel,
     mark_feed_gap_suspected,
     record_poll,
 )
@@ -87,7 +88,7 @@ def poll_channels(
     for channel in channels:
         try:
             entries = feed.fetch(channel.channel_id)
-            _process_entries(conn, queue, channel, entries, counts, skip_shorts)
+            still_followed = _process_entries(conn, queue, channel, entries, counts, skip_shorts)
         except psycopg.OperationalError:
             raise
         except Exception as exc:
@@ -107,8 +108,9 @@ def poll_channels(
             )
             failed += 1
         else:
-            record_poll(conn, channel.channel_id)
-            polled += 1
+            if still_followed:
+                record_poll(conn, channel.channel_id)
+                polled += 1
         conn.commit()
     result = PollResult(polled, failed, counts.discovered, counts.enqueued, counts.shorts_skipped)
     _logger.info(
@@ -131,7 +133,13 @@ def _process_entries(
     entries: list[Any],
     counts: _Counts,
     skip_shorts: bool,
-) -> None:
+) -> bool:
+    """Record the channel's new entries; False when it was unfollowed meanwhile (#235).
+
+    The channel list was read before the fetch, so an unfollow can land in
+    between. Every write block first reads the channel row ``FOR SHARE`` and
+    stops the channel's pass if it is no longer active.
+    """
     seen: set[str] = set()
     all_new = True
     considered = 0
@@ -164,6 +172,9 @@ def _process_entries(
         skip = should_skip_short(is_short=entry.is_short, origin=_ORIGIN, skip_shorts=skip_shorts)
         job_id = None
         with conn.transaction():
+            if not lock_active_channel(conn, channel.channel_id):
+                _log_unfollowed(channel)
+                return False
             if skip:
                 inserted = insert_discovered_video(
                     conn, entry, _ORIGIN, unavailable=UnavailableReason.SHORT.value
@@ -192,11 +203,19 @@ def _process_entries(
             floor = channel.last_polled
         if oldest > floor:
             with conn.transaction():
+                if not lock_active_channel(conn, channel.channel_id):
+                    _log_unfollowed(channel)
+                    return False
                 mark_feed_gap_suspected(conn, channel.channel_id, source="poll")
             _logger.warning(
                 "possible feed gap",
                 extra={"channel_id": channel.channel_id, "oldest_published_at": oldest},
             )
+    return True
+
+
+def _log_unfollowed(channel: Channel) -> None:
+    _logger.info("planner.poll.channel_unfollowed", extra={"channel_id": channel.channel_id})
 
 
 def _error_text(exc: Exception) -> str:

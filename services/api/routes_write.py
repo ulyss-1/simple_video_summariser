@@ -83,6 +83,7 @@ from services.api.backfill import (
     SubtitleProbe,
     backfill,
     cancel_backfill,
+    unfollow_channel,
 )
 from services.api.deps import (
     ChannelResolver,
@@ -1024,6 +1025,71 @@ def _cancel_response(result: CancelResult) -> CancelBackfillResponse:
         videos_removed=result.videos_removed,
         videos_kept=result.videos_kept,
         video_ids=list(result.video_ids),
+    )
+
+
+class UnfollowRequest(BaseModel):
+    """The body of ``POST /channels/{id}/unfollow`` is ``{}``; anything else is a 422."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+
+class UnfollowBackfill(BaseModel):
+    backfill_id: str
+    cancelled_jobs: int
+
+
+class UnfollowResponse(BaseModel):
+    channel_id: str
+    active: Literal[False]
+    changed: bool
+    backfill: UnfollowBackfill | None
+
+
+@router.post(
+    "/channels/{channel_id:untrusted}/unfollow",
+    response_model=UnfollowResponse,
+    dependencies=[Depends(_require_json_content_type)],
+    responses={
+        404: {"description": "Unknown channel"},
+        415: {"description": "The body is not JSON"},
+        422: {"description": "Malformed channel ID"},
+    },
+)
+def post_channel_unfollow(
+    channel_id: Annotated[str, Depends(_backfill_channel_id)],
+    body: UnfollowRequest,
+    conn: Annotated[psycopg.Connection[Any], Depends(get_conn)],
+) -> UnfollowResponse:
+    """Stop following a channel and keep everything it produced (#235).
+
+    Sets ``active = false`` and ends the channel's pending or running backfill
+    request like ``POST /channels/{id}/backfill/cancel``; RSS polling and gap
+    reconciliation then skip the channel. Videos, transcripts, analyses and
+    other jobs are untouched. Repeating it is safe (``changed: false``);
+    ``POST /channels`` follows the channel again, forward-only.
+    """
+    _require_idle(conn)
+    try:
+        result = unfollow_channel(conn, channel_id)
+    except ChannelNotRegistered:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, CHANNEL_NOT_REGISTERED) from None
+    cancel = result.cancel
+    _log.info(
+        "channel.unfollowed",
+        channel_id=channel_id,
+        changed=result.changed,
+        backfill_cancelled_jobs=None if cancel is None else cancel.cancelled,
+    )
+    return UnfollowResponse(
+        channel_id=channel_id,
+        active=False,
+        changed=result.changed,
+        backfill=(
+            None
+            if cancel is None
+            else UnfollowBackfill(backfill_id=cancel.backfill_id, cancelled_jobs=cancel.cancelled)
+        ),
     )
 
 

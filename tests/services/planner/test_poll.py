@@ -124,6 +124,10 @@ class FakeRepo:
         self.polls: list[tuple[str, str | None]] = []
         self.health: dict[str, PollHealth] = {}
         self.gaps: list[tuple[str, str]] = []
+        self.unfollowed: set[str] = set()
+
+    def lock_active_channel(self, conn: Any, channel_id: str) -> bool:
+        return channel_id not in self.unfollowed
 
     def list_active_channels(self, conn: Any) -> list[Channel]:
         return list(self.channels)
@@ -163,6 +167,7 @@ def make_repo(monkeypatch: pytest.MonkeyPatch) -> Any:
         repo = FakeRepo(channels, known)
         monkeypatch.setattr(poll, "list_active_channels", repo.list_active_channels)
         monkeypatch.setattr(poll, "insert_discovered_video", repo.insert_discovered_video)
+        monkeypatch.setattr(poll, "lock_active_channel", repo.lock_active_channel)
         monkeypatch.setattr(poll, "record_poll", repo.record_poll)
         monkeypatch.setattr(poll, "mark_feed_gap_suspected", repo.mark_feed_gap_suspected)
         return repo
@@ -679,6 +684,32 @@ def test_a_skipped_short_counts_as_new_for_the_feed_gap_check(
     _run(FakeFeed({"UCa": [_entry(published_at=late, is_short=True)]}), skip_shorts=True)
 
     assert len(_gap_warnings(caplog)) == 1
+
+
+# -- unfollowed channels (#235) ---------------------------------------------
+
+
+def test_a_channel_unfollowed_after_the_list_was_read_is_skipped_and_logged_once(
+    make_repo: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    repo = make_repo([_channel("UCa"), _channel("UCb")])
+    repo.unfollowed.add("UCa")
+    feed = FakeFeed(
+        {
+            "UCa": [_entry("vid00000001", "UCa"), _entry("vid00000002", "UCa")],
+            "UCb": [_entry("vid00000003", "UCb")],
+        }
+    )
+
+    with caplog.at_level(logging.INFO, logger="services.planner.poll"):
+        result, queue = _run(feed)
+
+    assert [e.video_id for e, _ in repo.inserted] == ["vid00000003"]
+    assert queue.calls == [("ingest", "vid00000003", {"priority": 0})]
+    assert repo.polls == [("UCb", None)]  # no poll health for the unfollowed channel
+    assert result == PollResult(1, 0, 1, 1)
+    skipped = [r for r in caplog.records if r.getMessage() == "planner.poll.channel_unfollowed"]
+    assert [r.channel_id for r in skipped] == ["UCa"]  # type: ignore[attr-defined]
 
 
 # -- integration -------------------------------------------------------------

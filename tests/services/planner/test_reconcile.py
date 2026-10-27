@@ -136,6 +136,10 @@ class FakeRepo:
         self.fail_insert: set[str] = set()
         self.insert_losing_race: set[str] = set()
         self.gap_changes: list[tuple[str, str | None, str]] = []
+        self.unfollowed: set[str] = set()
+
+    def lock_active_channel(self, conn: Any, channel_id: str) -> bool:
+        return channel_id not in self.unfollowed
 
     def list_active_channels(self, conn: Any) -> list[Channel]:
         return list(self.channels)
@@ -186,6 +190,7 @@ def make_repo(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeRepo]:
         repo = FakeRepo(channels if channels is not None else [_channel()], known or {})
         monkeypatch.setattr(reconcile, "list_active_channels", repo.list_active_channels)
         monkeypatch.setattr(reconcile, "known_videos", repo.known_videos)
+        monkeypatch.setattr(reconcile, "lock_active_channel", repo.lock_active_channel)
         monkeypatch.setattr(reconcile, "insert_catalog_video", repo.insert_catalog_video)
         monkeypatch.setattr(reconcile, "set_feed_gap_reason", repo.set_feed_gap_reason, raising=False)
         monkeypatch.setattr(reconcile, "clear_feed_gap", repo.clear_feed_gap, raising=False)
@@ -899,3 +904,27 @@ def test_the_pass_does_not_sleep() -> None:
     names |= {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
 
     assert "sleep" not in names
+
+
+def test_a_channel_unfollowed_after_the_list_was_read_recovers_nothing_and_logs_once(
+    make_repo: Callable[..., FakeRepo], caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="services.planner.reconcile")
+    repo = make_repo(
+        [_channel("UCa"), _channel("UCb")],
+        known={_e(3).video_id: _anchor("UCa"), _e(13).video_id: _anchor("UCb")},
+    )
+    repo.unfollowed.add("UCa")
+    catalog = FakeCatalog(
+        {"UCa": [_e(1), _e(2), _e(3)], "UCb": [_e(11), _e(12), _e(13)]}
+    )
+
+    result, queue, _ = _run(catalog)
+
+    assert [e.video_id for e, _, _ in repo.inserted] == [_e(11).video_id, _e(12).video_id]
+    assert len(queue.calls) == 2
+    assert result.channels_checked == 2
+    skipped = [
+        r for r in caplog.records if r.getMessage() == "planner.reconcile.channel_unfollowed"
+    ]
+    assert [r.channel_id for r in skipped] == ["UCa"]  # type: ignore[attr-defined]
