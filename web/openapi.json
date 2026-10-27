@@ -2223,6 +2223,131 @@
         "title": "PlannerTaskRunItem",
         "type": "object"
       },
+      "PlaylistEntryOut": {
+        "description": "One listed video. ``url`` is built from the validated ``video_id``.\n\n``known`` is true for a library row or a deletion tombstone; ``processing_status``\nis the library status, ``deleted`` for a tombstone and null when not known.",
+        "properties": {
+          "known": {
+            "title": "Known",
+            "type": "boolean"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          },
+          "processing_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "done",
+                  "processing",
+                  "unavailable",
+                  "failed",
+                  "idle",
+                  "deleted"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Processing Status"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "video_id": {
+            "title": "Video Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "position",
+          "video_id",
+          "title",
+          "url",
+          "known",
+          "processing_status"
+        ],
+        "title": "PlaylistEntryOut",
+        "type": "object"
+      },
+      "PlaylistResolveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "PlaylistResolveRequest",
+        "type": "object"
+      },
+      "PlaylistResolveResponse": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/PlaylistEntryOut"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "playlist_id": {
+            "title": "Playlist Id",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "total_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Count"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "playlist_id",
+          "title",
+          "total_count",
+          "truncated",
+          "entries"
+        ],
+        "title": "PlaylistResolveResponse",
+        "type": "object"
+      },
       "ProgressOut": {
         "description": "Progress of a transcribe job (#245).\n\nA running job carries every figure. A pending one carries only the estimate\n(``estimated_sec``, ``eta_sec``, ``duration_sec``, ``estimate_source``); the\nrest are ``None``. ``estimate_source`` is ``\"default\"`` when there was no RTF\nhistory, so the UI can call the figure rough.",
         "properties": {
@@ -4267,6 +4392,50 @@
           }
         },
         "summary": "Get Ops Planner"
+      }
+    },
+    "/playlists/resolve": {
+      "post": {
+        "description": "List a public playlist's first videos and mark the known ones (#342).\n\nOne yt-dlp flat listing (bounded by ``deps.BACKFILL_LIST_TIMEOUT_SEC``, below the\nproxy timeout; at most ``playlists.MAX_PLAYLIST_ENTRIES`` entries) like catalog\ndiscovery, so it departs from \"the API performs no processing\" in the same way.\nIt writes nothing and stores nothing: the person picks videos and submits them\nthrough ``POST /videos/batch``. Mixes, liked videos and watch later are refused\nbefore any process starts. No pooled connection is held while yt-dlp runs.",
+        "operationId": "post_playlists_resolve_playlists_resolve_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaylistResolveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaylistResolveResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "The playlist does not exist or is not public"
+          },
+          "415": {
+            "description": "The body is not JSON"
+          },
+          "422": {
+            "description": "Not a supported public playlist reference"
+          },
+          "502": {
+            "description": "The YouTube listing failed"
+          },
+          "503": {
+            "description": "YouTube is unavailable or rate limiting"
+          }
+        },
+        "summary": "Post Playlists Resolve"
       }
     },
     "/search": {

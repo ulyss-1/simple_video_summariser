@@ -1,0 +1,58 @@
+{
+ "_fixture": "real recording, no --playlist-end",
+ "id": "PLAqhIrjkxbuWI23v9cThsA9GvCAUhRvKZ",
+ "title": "Neural Networks: Zero to Hero",
+ "playlist_count": 10,
+ "entries": [
+  {
+   "id": "VMj-3S1tku0",
+   "title": "The spelled-out intro to neural networks and backpropagation: building micrograd",
+   "duration": 8752
+  },
+  {
+   "id": "PaCmpygFfXo",
+   "title": "The spelled-out intro to language modeling: building makemore",
+   "duration": 7065
+  },
+  {
+   "id": "TCH_1BHY58I",
+   "title": "Building makemore Part 2: MLP",
+   "duration": 4540
+  },
+  {
+   "id": "P6sfmUTpUmc",
+   "title": "Building makemore Part 3: Activations & Gradients, BatchNorm",
+   "duration": 6958
+  },
+  {
+   "id": "q8SA3rM6ckI",
+   "title": "Building makemore Part 4: Becoming a Backprop Ninja",
+   "duration": 6924
+  },
+  {
+   "id": "t3YJ5hKiMQ0",
+   "title": "Building makemore Part 5: Building a WaveNet",
+   "duration": 3382
+  },
+  {
+   "id": "kCc8FmEb1nY",
+   "title": "Let's build GPT: from scratch, in code, spelled out.",
+   "duration": 6980
+  },
+  {
+   "id": "bZQun8Y4L2A",
+   "title": "State of GPT | BRK216HFS",
+   "duration": 2560
+  },
+  {
+   "id": "zduSFxRajkE",
+   "title": "Let's build the GPT Tokenizer",
+   "duration": 8015
+  },
+  {
+   "id": "l8pRSuU81PU",
+   "title": "Let's reproduce GPT-2 (124M)",
+   "duration": 14486
+  }
+ ]
+}

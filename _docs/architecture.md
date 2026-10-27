@@ -180,7 +180,7 @@ ytdigest/
 │   │   ├── subtitles.py       # VTT fetch + parse
 │   │   ├── audio.py           # bestaudio → 16 kHz mono opus
 │   │   ├── feed.py            # RSS (monitoring)
-│   │   └── catalog.py         # uploads playlist (channel backfill)
+│   │   └── catalog.py         # uploads playlist (channel backfill); any public playlist (#342)
 │   ├── transcription/
 │   │   └── faster_whisper.py
 │   └── summarize/
@@ -237,6 +237,11 @@ class SubtitleSource(Protocol):
 class AudioSource(Protocol):
     # returns path to 16 kHz mono opus (D6b)
     def fetch_normalized(self, video_id: str, dest: Path) -> AudioRef: ...
+
+class PlaylistSource(Protocol):
+    # a public playlist's first `limit` entries in order (#342); nothing is stored.
+    # PermanentSourceError = missing or private (YouTube does not say which)
+    def list_playlist(self, playlist_id: str, *, limit: int) -> PlaylistListing: ...
 
 class Transcriber(Protocol):
     def transcribe(self, audio: AudioRef) -> TranscriptResult: ...
@@ -1083,6 +1088,7 @@ separated per D13.
 | `POST` | `/channels/{id}/backfill` | `{limit, dry_run}`; priority `-10` (D9b) |
 | `POST` | `/channels/{id}/backfill-requests` | `{limit <= 5000, dry_run}`; only records a request, the planner `channel_backfill` task runs it (#115); `409` while the channel has a pending or running one |
 | `GET` | `/channels/{id}/backfill-requests/{request_id}` | state, attempts, enqueued, timestamps and `result` (the shape of the synchronous response) (#115) |
+| `POST` | `/playlists/resolve` | body `{url}`, JSON only (`415` otherwise): a public playlist ID, a `playlist?list=` URL or a `watch?v=&list=` URL (`parse_playlist_ref`: ID starts `PL`, `OL`, `UU` or `FL`, 12 to 64 characters; mixes `RD`, liked videos `LL`, watch later `WL` and anything else are `422` with one fixed message that echoes nothing). Runs one flat yt-dlp listing of `https://www.youtube.com/playlist?list=<id>` (90 s, inside the proxy timeout; the second API exception to "the API performs no processing" after catalog discovery, #81/#242) of at most `MAX_PLAYLIST_ENTRIES` (200, a module constant read per request) entries, **no database connection held** while it runs, then one short read to mark known videos. Writes and stores nothing. Answers `200` `{playlist_id, title, total_count, truncated, entries: [{position, video_id, title, url, known, processing_status}]}` in playlist order, repeats and non-video IDs dropped; `url` is the canonical watch URL; `known` is true for a `videos` row or a deletion tombstone, `processing_status` is the library status or `deleted`; `truncated` is true when the playlist holds more than was returned. Private and deleted entries are listed as YouTube lists them (`[Private video]`). `404` for a missing or private playlist, `503` timeout or rate limit, `502` bad listing; no yt-dlp text in any response. The UI submits the picked videos through `POST /videos/batch` (#342, #343) |
 | `POST` | `/channels/{id}/catalog/discover` | `{limit}` in `50`, `200`, `500`, `5000` (default `50`); one bounded flat listing (90 s, inside the proxy timeout), stores it and returns the page, newest first; `404` unregistered channel, `502` bad listing, `503` timeout or rate limit; adds nothing to `videos` (#242) |
 | `GET` | `/channels/{id}/catalog?limit=` | the stored snapshot, newest first, no subprocess and no write; each row has `title`, a canonical `url` derived from the validated ID, `description` and `published_at` (null until `enrichment_state` is `done`), `known` and the library `processing_status`; `404` until a discovery stored rows (#242) |
 | `POST` | `/channels/{id}/catalog/{video_id}/metadata/retry` | `202` and `pending` for a `failed` row; `404` if the video is not in the channel's catalog, `409` while the row is not `failed` (#242) |

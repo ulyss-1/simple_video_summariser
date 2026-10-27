@@ -28,7 +28,7 @@ from psycopg_pool import PoolTimeout
 
 from common.backfill import ConnectionProvider
 from common.config import get_settings
-from common.models import CatalogSource
+from common.models import CatalogSource, PlaylistSource
 from common.progress import HISTORY_SIZE
 from common.repo.transcripts import rtf_history
 
@@ -175,6 +175,20 @@ def get_catalog() -> CatalogSource:
 
     The adapter is imported here, not at module level, so importing the app
     loads no ``adapters.*`` or yt-dlp module. Tests override this dependency.
+    """
+    from adapters.youtube.catalog import YouTubeCatalog
+
+    return YouTubeCatalog(
+        timeout=BACKFILL_LIST_TIMEOUT_SEC,
+        cookie_file=get_settings().YTDLP_COOKIE_FILE,
+    )
+
+
+def get_playlist_source() -> PlaylistSource:
+    """The playlist lister for ``POST /playlists/resolve`` (#342).
+
+    The same adapter and 90 s timeout as ``get_catalog``, imported here for the same
+    reason. Tests override this dependency.
     """
     from adapters.youtube.catalog import YouTubeCatalog
 

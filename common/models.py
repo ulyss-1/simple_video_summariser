@@ -113,6 +113,33 @@ VideoProcessingStatus = Literal["done", "processing", "unavailable", "failed", "
 
 
 @dataclass(frozen=True, slots=True)
+class PlaylistListing:
+    """A public playlist's first entries in playlist order (#342).
+
+    ``total_count`` is YouTube's own figure. ``skipped`` counts the listed items
+    that were dropped (not a canonical video ID) or repeated, so a caller can tell
+    "the cap cut the list" from "the list had repeats".
+    """
+
+    playlist_id: str
+    title: str | None
+    entries: tuple[CatalogEntry, ...]
+    total_count: int | None
+    skipped: int = 0
+
+
+class PlaylistSource(Protocol):
+    def list_playlist(self, playlist_id: str, *, limit: int) -> PlaylistListing:
+        """List a public playlist's first ``limit`` entries, or raise on failure.
+
+        ``PermanentSourceError`` means the playlist is missing or private (YouTube
+        does not tell them apart). Private and deleted entries inside a playlist
+        are listed like any other. Nothing is stored (#342).
+        """
+        ...
+
+
+@dataclass(frozen=True, slots=True)
 class CatalogVideo:
     """One row of a persisted channel catalog snapshot joined to library state (#242)."""
 

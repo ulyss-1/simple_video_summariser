@@ -26,8 +26,8 @@ from typing import Any
 from adapters.youtube.errors import decode_ytdlp_json
 from adapters.youtube.ytdlp import ProcessRunner, run_process, run_ytdlp
 from common.errors import ToolFailureError
-from common.models import CatalogEntry, ChannelCatalog
-from common.youtube_refs import is_video_id, validate_channel_id
+from common.models import CatalogEntry, ChannelCatalog, PlaylistListing
+from common.youtube_refs import is_video_id, playlist_url, validate_channel_id
 
 _logger = logging.getLogger(__name__)
 
@@ -52,14 +52,7 @@ class YouTubeCatalog:
 
     def list_uploads(self, channel_id: str, *, limit: int) -> ChannelCatalog:
         validate_channel_id(channel_id)
-        if (
-            not isinstance(limit, int)
-            or isinstance(limit, bool)
-            or not 1 <= limit <= MAX_CATALOG_LIMIT
-        ):
-            raise ValueError(
-                f"limit must be an int in 1..{MAX_CATALOG_LIMIT}: {limit!r}"
-            )
+        _check_limit(limit)
         playlist_id = "UU" + channel_id[2:]
         # Always the full URL: a bare ID starting with "-" would read as an option.
         url = f"https://www.youtube.com/playlist?list={playlist_id}"
@@ -71,8 +64,45 @@ class YouTubeCatalog:
         )
         return _parse(decode_ytdlp_json(stdout), channel_id, playlist_id, limit)
 
+    def list_playlist(self, playlist_id: str, *, limit: int) -> PlaylistListing:
+        """List a public playlist's first ``limit`` entries in playlist order (#342).
 
-def _parse(info: Any, channel_id: str, playlist_id: str, limit: int) -> ChannelCatalog:
+        The same flat listing as ``list_uploads``, for any playlist ID that
+        ``playlist_url`` accepts. Private and deleted entries come back as yt-dlp
+        lists them (a title such as ``[Private video]``); a missing or private
+        playlist is ``PermanentSourceError`` (YouTube does not tell them apart).
+        """
+        url = playlist_url(playlist_id)  # ValueError for anything but a safe ID
+        _check_limit(limit)
+        stdout = run_ytdlp(
+            [*_FLAGS, "--playlist-end", str(limit), "--no-warnings", url],
+            timeout=self._timeout,
+            runner=self._runner,
+            cookie_file=self._cookie_file,
+        )
+        info = decode_ytdlp_json(stdout)
+        entries, skipped = _collect(_listing(info, playlist_id), playlist_id, limit)
+        title = info.get("title")
+        return PlaylistListing(
+            playlist_id,
+            title if isinstance(title, str) and title else None,
+            entries,
+            _count(info.get("playlist_count")),
+            skipped,
+        )
+
+
+def _check_limit(limit: object) -> None:
+    if (
+        not isinstance(limit, int)
+        or isinstance(limit, bool)
+        or not 1 <= limit <= MAX_CATALOG_LIMIT
+    ):
+        raise ValueError(f"limit must be an int in 1..{MAX_CATALOG_LIMIT}: {limit!r}")
+
+
+def _listing(info: Any, playlist_id: str) -> list[Any]:
+    """The ``entries`` of ``info``, once it is known to describe ``playlist_id``."""
     if not isinstance(info, dict):
         raise ToolFailureError(
             f"yt-dlp output is a JSON {type(info).__name__}, not an object"
@@ -84,27 +114,36 @@ def _parse(info: Any, channel_id: str, playlist_id: str, limit: int) -> ChannelC
     raw = info.get("entries")
     if not isinstance(raw, list):
         raise ToolFailureError("yt-dlp output has no 'entries' list")
+    return raw
 
+
+def _collect(
+    raw: list[Any], owner: str, limit: int
+) -> tuple[tuple[CatalogEntry, ...], int]:
+    """The first ``limit`` valid, distinct entries of ``raw``, and how many were skipped."""
     entries: list[CatalogEntry] = []
     seen: set[str] = set()
-    dropped = 0
+    dropped = repeated = 0
     for item in raw:
         if len(entries) >= limit:
             break
         entry = _entry(item)
         if entry is None:
             dropped += 1
-        elif entry.video_id not in seen:
+        elif entry.video_id in seen:
+            repeated += 1
+        else:
             seen.add(entry.video_id)
             entries.append(entry)
     if dropped:
         # Counts only: the raw values are untrusted.
-        _logger.warning(
-            "dropped %d malformed catalog entries for %s", dropped, channel_id
-        )
-    return ChannelCatalog(
-        channel_id, tuple(entries), _count(info.get("playlist_count"))
-    )
+        _logger.warning("dropped %d malformed catalog entries for %s", dropped, owner)
+    return tuple(entries), dropped + repeated
+
+
+def _parse(info: Any, channel_id: str, playlist_id: str, limit: int) -> ChannelCatalog:
+    entries, _skipped = _collect(_listing(info, playlist_id), channel_id, limit)
+    return ChannelCatalog(channel_id, entries, _count(info.get("playlist_count")))
 
 
 def _entry(item: Any) -> CatalogEntry | None:
