@@ -389,7 +389,8 @@ function ChannelSection({ channelId, detail }: { channelId: string; detail: Chan
         setAnnouncement(`Channel unfollowed${response.backfill === null ? '' : ' · Backfill cancelled'}`)
         setOpen(null)
       },
-      onSettled: () => {
+      // Latched after a success (the channel is no longer followed); only a failure re-arms it.
+      onError: () => {
         sentRef.current = false
       },
     })
@@ -399,7 +400,9 @@ function ChannelSection({ channelId, detail }: { channelId: string; detail: Chan
     if (sentRef.current) return
     sentRef.current = true
     del.mutate(undefined, {
-      onSettled: () => {
+      // Latched after a success: the page is about to unmount, and between the
+      // settled request and the unmount a second click must not send again.
+      onError: () => {
         sentRef.current = false
       },
     })
@@ -470,7 +473,12 @@ function ChannelSection({ channelId, detail }: { channelId: string; detail: Chan
                   ? `Delete ${title}? It has no videos in the Library.`
                   : `Delete ${title} and all ${count} of its videos, including videos you added by URL? Their transcripts, summaries and stored audio are permanently removed and any processing is stopped. Following the channel again will not bring these videos back; adding a video by its URL processes it again.`}
               </p>
-              <button className="btn btn--primary" type="button" disabled={busy} onClick={confirmDelete}>
+              <button
+                className="btn btn--primary"
+                type="button"
+                disabled={busy || del.isSuccess}
+                onClick={confirmDelete}
+              >
                 Confirm delete
               </button>
               <button ref={cancelRef} className="btn" type="button" disabled={busy} onClick={close}>
