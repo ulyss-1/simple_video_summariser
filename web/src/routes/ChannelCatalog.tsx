@@ -31,6 +31,7 @@ import {
   type CatalogLimit,
 } from '../lib/channelCatalog'
 import { publishedDate } from '../lib/library'
+import { toggleInSet } from '../lib/selection'
 
 /** Longer descriptions are cut to this many characters until the reader expands them. */
 const DESCRIPTION_PREVIEW_CHARS = 240
@@ -115,11 +116,7 @@ function CatalogView({ channelId }: { channelId: string }) {
   const requested = discover.isPending ? (discover.variables ?? shownLimit) : shownLimit
 
   const toggle = (videoId: string) => {
-    setSelected((current) => {
-      const next = new Set(current)
-      if (!next.delete(videoId)) next.add(videoId)
-      return next
-    })
+    setSelected((current) => toggleInSet(current, videoId))
   }
 
   const cancelConfirm = () => {

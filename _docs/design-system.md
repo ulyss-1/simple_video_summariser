@@ -423,6 +423,37 @@ videos" (plus " · M were already deleted"). Errors keep the confirmation open
 with a `role="alert"` and fixed text per status (422, 429, 503, other); the API
 is all-or-nothing, so nothing is shown as deleted after an error.
 
+### 7.13 Playlist import (#343)
+
+`/playlists/import` (`ImportPlaylist`, linked from the Library as `Import a
+playlist` under the add-video forms) follows the catalog's selection pattern
+(7.11) for a public playlist. A one-field form (7.4) `YouTube playlist URL` +
+`Show videos` sends one `POST /playlists/resolve`; the trimmed URL is kept in the
+`url` search param (7.3, an empty or over-long one is dropped), so a reload shows
+the same listing. While it runs a `role="status"` reads `Loading playlist… This
+can take up to a minute.`; a failure keeps the input and shows a fixed
+`role="alert"` per status (422, 404, 503, 502, 429, network). The listing shows
+the title (`Untitled playlist`), `{n} videos` or `Showing the first 200 of {total}
+videos`, and a table (`Select`, `Title`, `Status`) on the catalog row classes:
+new entries have a checkbox (`aria-label="Select {title}"`, the video ID without a
+title); known ones have it disabled and `Already known · {status}`; a tombstone
+reads `Already known · Deleted` plus `Deleted · restore it from Recently deleted`
+and has no link. An empty playlist reads `This playlist has no videos`.
+
+The `Selection` group (`Select all new`, `Clear selection`, `Add N selected
+videos`, polite `N selected`) is the catalog's; loading another playlist clears
+it. The action follows 7.7: `Add N videos from this playlist? They are queued with
+new uploads and processed in order; this can take a while.` with `Confirm` and
+`Cancel`, focus on `Confirm`, back on the action after `Cancel`, Escape or the
+answer. Confirm sends one `POST /videos/batch` (the Library's hook, #240) with the
+selected IDs in playlist order and disables the whole group while it runs. The
+results are #240's: a polite summary and one `<li>` per ID (`Queued`, `Already
+added`, `still being deleted`, `could not be added`) with `Retry these`; the
+playlist is then re-read so submitted rows read `Already known · Queued`. A
+double-submit guard latches after a success and is released by an error or by a
+change of the selection. `web/src/lib/selection.ts` holds the toggle shared with
+the catalog and `lib/batchSubmit.ts` the summary shared with #240.
+
 ---
 
 ## 8. Accessibility patterns in use

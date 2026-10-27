@@ -190,6 +190,9 @@ export function Library() {
 
       <AddVideoForm />
       <AddVideosForm />
+      <p>
+        <Link to="/playlists/import">Import a playlist</Link>
+      </p>
       <BackfillChannelForm />
 
       <form className="card filters" onSubmit={(e) => e.preventDefault()}>
