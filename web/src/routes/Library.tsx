@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router'
 import { AddVideoForm } from '../components/AddVideoForm'
 import { BackfillChannelForm } from '../components/BackfillChannelForm'
+import { bulkDeleteErrorMessage, useBulkDeleteVideos } from '../hooks/useBulkDeleteVideos'
 import { useChannels } from '../hooks/useChannels'
 import { ApiError, useVideos } from '../hooks/useVideos'
 import {
@@ -56,6 +57,85 @@ export function Library() {
   const reversed = isReversedRange(state)
   const q = useVideos(state, !reversed)
   const channels = useChannels()
+
+  // Bulk-delete selection (#234): route-local, never in the URL. A change of
+  // page, filter or sort drops it (reset while rendering, so no stale frame),
+  // and only IDs still on screen count, so nothing off-screen can be deleted.
+  const bulk = useBulkDeleteVideos()
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
+  const [confirming, setConfirming] = useState(false)
+  const [result, setResult] = useState<string | null>(null)
+  const pageKey = toSearchParams(state).toString()
+  const [selectedKey, setSelectedKey] = useState(pageKey)
+  if (selectedKey !== pageKey) {
+    setSelectedKey(pageKey)
+    setSelected(new Set())
+    setConfirming(false)
+    setResult(null)
+  }
+  const sentRef = useRef(false)
+  const resultRef = useRef<HTMLParagraphElement>(null)
+  const actionRef = useRef<HTMLButtonElement>(null)
+  const cancelRef = useRef<HTMLButtonElement>(null)
+  const returnFocusRef = useRef(false)
+
+  const rows = q.data?.items ?? []
+  const selectedRows = rows.filter((v) => selected.has(v.video_id))
+  const selectedIds = selectedRows.map((v) => v.video_id)
+  const count = selectedIds.length
+  const processingCount = selectedRows.filter((v) => v.status === 'processing').length
+  const confirmOpen = confirming && count > 0
+  const busy = bulk.isPending
+
+  useEffect(() => {
+    if (confirmOpen) cancelRef.current?.focus()
+    else if (returnFocusRef.current) {
+      returnFocusRef.current = false
+      actionRef.current?.focus()
+    }
+  }, [confirmOpen])
+
+  useEffect(() => {
+    if (result !== null) resultRef.current?.focus()
+  }, [result])
+
+  const toggle = (videoId: string) => {
+    setResult(null)
+    setSelected((current) => {
+      const next = new Set(current)
+      if (!next.delete(videoId)) next.add(videoId)
+      return next
+    })
+  }
+
+  const openConfirm = () => {
+    bulk.reset()
+    setConfirming(true)
+  }
+
+  const closeConfirm = () => {
+    returnFocusRef.current = true
+    setConfirming(false)
+  }
+
+  const confirmDelete = () => {
+    if (sentRef.current) return
+    sentRef.current = true
+    bulk.mutate(selectedIds, {
+      onSuccess: (response) => {
+        const { deleted, not_found: notFound } = response.counts
+        setResult(
+          `Deleted ${deleted} video${deleted === 1 ? '' : 's'}` +
+            (notFound > 0 ? ` · ${notFound} were already deleted` : ''),
+        )
+        setSelected(new Set())
+        setConfirming(false)
+      },
+      onSettled: () => {
+        sentRef.current = false
+      },
+    })
+  }
 
   const go = (patch: Partial<LibraryState>) => {
     setParams(toSearchParams({ ...state, page: 1, ...patch }))
@@ -269,11 +349,76 @@ export function Library() {
             </p>
           )}
 
+          {data !== undefined && (data.total > 0 || result !== null) && (
+            <div className="card" role="group" aria-label="Selection">
+              <div className="row">
+                <button
+                  className="btn"
+                  type="button"
+                  disabled={busy || switching || rows.length === 0}
+                  onClick={() => {
+                    setResult(null)
+                    setSelected(new Set(rows.map((v) => v.video_id)))
+                  }}
+                >
+                  Select all on this page
+                </button>
+                <button
+                  className="btn"
+                  type="button"
+                  disabled={busy || count === 0}
+                  onClick={() => setSelected(new Set())}
+                >
+                  Clear selection
+                </button>
+                <button
+                  ref={actionRef}
+                  className="btn btn--primary"
+                  type="button"
+                  disabled={busy || count === 0 || confirmOpen}
+                  onClick={openConfirm}
+                >
+                  {count === 0 ? 'Delete selected videos' : `Delete ${count} selected video${count === 1 ? '' : 's'}`}
+                </button>
+              </div>
+              <p ref={resultRef} tabIndex={-1} aria-live="polite">
+                {result ?? (count === 0 ? 'No videos selected' : `${count} selected`)}
+              </p>
+              {confirmOpen && (
+                <div
+                  className="row"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape' && !busy) closeConfirm()
+                  }}
+                >
+                  <p>
+                    Delete {count} video{count === 1 ? '' : 's'}? Their transcripts, summaries and stored audio
+                    will be permanently removed. RSS and channel backfill will not bring them back; adding a
+                    video by its URL processes it again.
+                    {processingCount > 0 && ` Processing of ${processingCount} of them is stopped.`}
+                  </p>
+                  <button className="btn btn--primary" type="button" disabled={busy} onClick={confirmDelete}>
+                    Confirm delete
+                  </button>
+                  <button ref={cancelRef} className="btn" type="button" disabled={busy} onClick={closeConfirm}>
+                    Cancel
+                  </button>
+                </div>
+              )}
+              {confirmOpen && bulk.isError && (
+                <p className="alert alert--danger" role="alert">
+                  {bulkDeleteErrorMessage(bulk.error)}
+                </p>
+              )}
+            </div>
+          )}
+
           {data !== undefined && data.items.length > 0 && (
             <div className="card card--flush table-scroll" role="region" aria-label="Videos" tabIndex={0}>
               <table className="table">
                 <thead>
                   <tr>
+                    <th scope="col">Select</th>
                     <SortHeader label="Title" sort="title" state={state} onSort={sortBy} />
                     <SortHeader label="Channel" sort="channel" state={state} onSort={sortBy} />
                     <SortHeader label="Published" sort="published" state={state} onSort={sortBy} />
@@ -287,6 +432,15 @@ export function Library() {
                     const id = v.channel_id
                     return (
                       <tr key={v.video_id}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${v.title === null || v.title === '' ? v.video_id : v.title}`}
+                            checked={selected.has(v.video_id)}
+                            disabled={busy}
+                            onChange={() => toggle(v.video_id)}
+                          />
+                        </td>
                         <td>
                           <Link to={`/videos/${v.video_id}`} viewTransition>{v.title ?? v.video_id}</Link>
                         </td>

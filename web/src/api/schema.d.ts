@@ -414,6 +414,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/videos/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Videos Delete
+         * @description Delete several videos in one transaction, all or nothing (#238).
+         *
+         *     Each video gets exactly what ``DELETE /videos/{id}`` does (#303). Outcomes come
+         *     back in request order: ``deleted``, or ``not_found`` for an unknown or already
+         *     deleted video (no tombstone is written for an unknown one).
+         */
+        post: operations["post_videos_delete_videos_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/videos/{video_id}": {
         parameters: {
             query?: never;
@@ -792,6 +816,34 @@ export interface components {
             transcription_sec: number | null;
             /** Video Id */
             video_id: string;
+        };
+        /** BulkDeleteCounts */
+        BulkDeleteCounts: {
+            /** Deleted */
+            deleted: number;
+            /** Not Found */
+            not_found: number;
+        };
+        /** BulkDeleteItem */
+        BulkDeleteItem: {
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "deleted" | "not_found";
+            /** Video Id */
+            video_id: string;
+        };
+        /** BulkDeleteRequest */
+        BulkDeleteRequest: {
+            /** Video Ids */
+            video_ids: string[];
+        };
+        /** BulkDeleteResponse */
+        BulkDeleteResponse: {
+            counts: components["schemas"]["BulkDeleteCounts"];
+            /** Results */
+            results: components["schemas"]["BulkDeleteItem"][];
         };
         /**
          * BulkRetryBody
@@ -2137,6 +2189,44 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    post_videos_delete_videos_delete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkDeleteResponse"];
+                };
+            };
+            /** @description The body is not JSON */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Empty, too long, duplicated or malformed video_ids */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

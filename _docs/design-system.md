@@ -349,6 +349,29 @@ changes; `--selected`, `--known` and `--failed` add an edge, never the only cue:
 
 The stripes use the existing `--color-bg` and `--color-th-bg` tokens (light theme only, as the rest of the stylesheet is for v1).
 
+### 7.12 Library bulk delete (#234)
+
+The Library table has a first column `<th scope="col">Select</th>` with a native
+checkbox per row (`aria-label="Select {title}"`, the video ID without a title).
+Above the table, a `role="group" aria-label="Selection"` holds "Select all on
+this page", "Clear selection", "Delete N selected videos" and a
+`aria-live="polite"` line ("No videos selected" / "N selected"). The selection
+is route-local, never in the URL, and is dropped on any page, filter or sort
+change, so only videos on screen can be deleted. Processing rows are
+selectable (a delete stops their job, #303).
+
+The action follows 7.7 with the safer focus of the detail-page delete: an
+inline sentence ("Delete N videos? Their transcripts, summaries and stored audio
+will be permanently removed. RSS and channel backfill will not bring them back;
+adding a video by its URL processes it again.", plus "Processing of K of them is
+stopped." when any is processing) with "Confirm delete" and "Cancel". Focus moves
+to Cancel when it opens; Escape or Cancel closes it and returns focus to the
+delete button. Every control and checkbox is `disabled` while the request runs.
+On success the same live line, now focused (`tabIndex={-1}`), reads "Deleted N
+videos" (plus " · M were already deleted"). Errors keep the confirmation open
+with a `role="alert"` and fixed text per status (422, 429, 503, other); the API
+is all-or-nothing, so nothing is shown as deleted after an error.
+
 ---
 
 ## 8. Accessibility patterns in use

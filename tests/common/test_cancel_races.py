@@ -32,6 +32,7 @@ from common.queue import _CLAIM_SQL, HeartbeatResult, Job, PostgresQueue
 from common.repo.deleted_videos import (
     VideoNotFound,
     delete_video,
+    delete_videos,
 )
 from common.repo.jobs import cancel_video
 from common.repo.transcripts import save_chunks, save_transcript
@@ -1210,3 +1211,188 @@ def test_a_retryable_failure_after_the_request_ends_cancelled_with_no_retry_sche
     stored = row(conn, job.id)
     assert (stored["state"], stored["error_class"]) == ("dead", "CANCELLED")
     assert active(conn) == []
+
+
+# ---------------------------------------------------------------------------
+# bulk delete (#238) against the other multi-video and single-video writers
+# ---------------------------------------------------------------------------
+
+OTHER = "abcdefghijk"
+
+
+def paused_bulk(
+    connect: Callable[[], psycopg.Connection[Any]], ids: list[str]
+) -> tuple[PausingConn, Call[Any]]:
+    """A real ``delete_videos`` stopped right after it locked the jobs and the video rows."""
+    deleting = PausingConn(
+        connect(), lambda sql: "FROM videos" in sql and "FOR UPDATE" in sql
+    )
+    call = Call(lambda: delete_videos(deleting, ids))  # type: ignore[arg-type]
+    deleting.wait_paused("bulk delete")
+    return deleting, call
+
+
+def test_two_bulk_deletes_in_opposite_order_do_not_deadlock_each_video_is_deleted_by_exactly_one(
+    conn: psycopg.Connection[Any],
+    connect: Callable[[], psycopg.Connection[Any]],
+    queue: PostgresQueue,
+) -> None:
+    # OTHER (B) gets the lower job id, VID (A) the higher one: [A, B] and [B, A] lock
+    # in opposite request order, so only the fixed (jobs by id, videos by video_id) order saves them.
+    seed_video(conn, OTHER)
+    seed_video(conn, VID)
+    assert queue.enqueue("ingest", OTHER) is not None
+    assert queue.enqueue("ingest", VID) is not None
+    first, first_call = paused_bulk(connect, [VID, OTHER])
+    second_conn = connect()
+    second_call = Call(lambda: delete_videos(second_conn, [OTHER, VID]))
+    wait_blocked(conn, second_conn.info.backend_pid, "the second bulk delete")
+
+    first.resume.set()
+
+    one = first_call.result("the first bulk delete")
+    two = second_call.result("the second bulk delete")
+    assert (one.deleted, one.not_found) == ((VID, OTHER), ())
+    assert (two.deleted, two.not_found) == ((), (OTHER, VID))
+    assert_deleted(conn, VID)
+    assert_deleted(conn, OTHER)
+
+
+def test_a_bulk_delete_and_a_single_delete_of_one_video_give_one_deleted_and_one_not_found_both_orders(
+    conn: psycopg.Connection[Any],
+    connect: Callable[[], psycopg.Connection[Any]],
+    queue: PostgresQueue,
+) -> None:
+    seed_video(conn, VID)
+    seed_video(conn, OTHER)
+    assert queue.enqueue("ingest", VID) is not None
+    assert queue.enqueue("ingest", OTHER) is not None
+
+    # bulk first: the single delete waits, then finds no video
+    bulk, bulk_call = paused_bulk(connect, [VID, OTHER])
+    single_conn = connect()
+    single = Call(lambda: delete_video(single_conn, OTHER))
+    wait_blocked(conn, single_conn.info.backend_pid, "the single delete behind the bulk one")
+    bulk.resume.set()
+    assert bulk_call.result("bulk").deleted == (VID, OTHER)
+    with pytest.raises(VideoNotFound):
+        single.result("single")
+
+    # single first: the bulk delete waits, then reports the video not_found
+    seed_video(conn, "bbbbbbbbbbb")
+    seed_video(conn, "ccccccccccc")
+    assert queue.enqueue("ingest", "bbbbbbbbbbb") is not None
+    assert queue.enqueue("ingest", "ccccccccccc") is not None
+    paused = PausingConn(connect(), lambda sql: "FROM videos" in sql and "FOR UPDATE" in sql)
+    single_call = Call(lambda: delete_video(paused, "ccccccccccc"))  # type: ignore[arg-type]
+    paused.wait_paused("single delete")
+    bulk_conn = connect()
+    bulk_call = Call(lambda: delete_videos(bulk_conn, ["bbbbbbbbbbb", "ccccccccccc"]))
+    wait_blocked(conn, bulk_conn.info.backend_pid, "the bulk delete behind the single one")
+    paused.resume.set()
+    single_call.result("single")
+    result = bulk_call.result("bulk")
+    assert (result.deleted, result.not_found) == (("bbbbbbbbbbb",), ("ccccccccccc",))
+    assert_deleted(conn, "bbbbbbbbbbb")
+    assert_deleted(conn, "ccccccccccc")
+
+
+def test_handoff_behind_a_bulk_delete_raises_cancelled_and_inserts_nothing(
+    conn: psycopg.Connection[Any],
+    connect: Callable[[], psycopg.Connection[Any]],
+    queue: PostgresQueue,
+) -> None:
+    seed_video(conn)
+    seed_video(conn, OTHER)
+    assert queue.enqueue("ingest", VID) is not None
+    _manager, parent = claim_job(queue)
+    deleting, delete = paused_bulk(connect, [OTHER, VID])
+    handing = PostgresQueue(connect(), settings=_settings())
+    call = Call(lambda: handing.handoff(parent.id, "transcribe", VID))
+    wait_blocked(conn, handing._conn.info.backend_pid, "handoff behind the bulk delete")
+
+    deleting.resume.set()
+
+    delete.result("bulk delete")
+    with pytest.raises(Cancelled):
+        call.result("handoff")
+    assert active(conn) == [(parent.id, "running")]  # no successor for a deleted video
+    assert_deleted(conn)
+    assert_deleted(conn, OTHER)
+
+
+def test_a_bulk_delete_behind_a_handoff_removes_the_successor_the_handoff_inserted(
+    holder: psycopg.Connection[Any],
+    conn: psycopg.Connection[Any],
+    connect: Callable[[], psycopg.Connection[Any]],
+    queue: PostgresQueue,
+) -> None:
+    seed_video(conn)
+    seed_video(conn, OTHER)
+    assert queue.enqueue("ingest", VID) is not None
+    _manager, parent = claim_job(queue)
+    # What handoff does: the parent row, then the video, then the successor.
+    holder.execute("SELECT 1 FROM jobs WHERE id = %s FOR UPDATE", (parent.id,))
+    holder.execute("SELECT 1 FROM videos WHERE video_id = %s FOR UPDATE", (VID,))
+    holder.execute("INSERT INTO jobs (video_id, kind) VALUES (%s, 'transcribe')", (VID,))
+    deleting = connect()
+    delete = Call(lambda: delete_videos(deleting, [VID, OTHER]))
+    wait_blocked(conn, deleting.info.backend_pid, "bulk delete behind the handoff")
+
+    holder.commit()
+
+    assert delete.result("bulk delete").deleted == (VID, OTHER)
+    assert active(conn) == [(parent.id, "running")]  # the successor went with the delete
+    assert_deleted(conn)
+
+
+def test_a_post_videos_behind_a_bulk_delete_recreates_the_video_with_a_fresh_job(
+    conn: psycopg.Connection[Any],
+    connect: Callable[[], psycopg.Connection[Any]],
+    queue: PostgresQueue,
+) -> None:
+    seed_video(conn)
+    seed_video(conn, OTHER)
+    assert queue.enqueue("ingest", VID) is not None
+    deleting, delete = paused_bulk(connect, [VID, OTHER])
+    submitting = connect()
+    submit = Call(lambda: submit_video(submitting, VID, queue=PostgresQueue(submitting)))
+    wait_blocked(conn, submitting.info.backend_pid, "the submission behind the bulk delete")
+
+    deleting.resume.set()
+
+    delete.result("bulk delete")
+    result = submit.result("the submission")
+    assert result.created
+    assert conn.execute(
+        "SELECT (SELECT count(*) FROM videos WHERE video_id = %s),"
+        " (SELECT count(*) FROM deleted_videos WHERE video_id = %s)",
+        (VID, VID),
+    ).fetchone() == (1, 0)
+    assert active(conn) == [(result.job_id, "pending")]
+
+
+def test_a_bulk_delete_behind_a_post_videos_removes_both_the_video_and_the_job_it_found(
+    conn: psycopg.Connection[Any],
+    connect: Callable[[], psycopg.Connection[Any]],
+    queue: PostgresQueue,
+) -> None:
+    seed_video(conn)
+    seed_video(conn, OTHER)
+    assert queue.enqueue("ingest", VID) is not None
+    inner = connect()
+    submitting = PausingConn(inner, lambda sql: "FROM videos" in sql and "FOR UPDATE" in sql)
+    submit = Call(
+        lambda: submit_video(submitting, VID, queue=PostgresQueue(inner))  # type: ignore[arg-type]
+    )
+    submitting.wait_paused("the submission")
+    deleting = connect()
+    delete = Call(lambda: delete_videos(deleting, [OTHER, VID]))
+    wait_blocked(conn, deleting.info.backend_pid, "bulk delete behind the submission")
+
+    submitting.resume.set()
+
+    assert not submit.result("the submission").created
+    assert delete.result("bulk delete").deleted == (OTHER, VID)
+    assert conn.execute("SELECT count(*) FROM jobs").fetchone() == (0,)
+    assert_deleted(conn)  # a tombstone and no video: never both a tombstone and a row
