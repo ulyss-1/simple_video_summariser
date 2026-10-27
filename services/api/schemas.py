@@ -143,6 +143,15 @@ class ChannelItem(BaseModel):
     video_count: int
 
 
+class ChannelDetailOut(BaseModel):
+    channel_id: str
+    title: str | None
+    active: bool
+    monitor_from: UtcDatetime
+    added_at: UtcDatetime
+    video_count: int
+
+
 class ChannelList(BaseModel):
     items: list[ChannelItem]
     total: int

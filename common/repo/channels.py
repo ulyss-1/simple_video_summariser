@@ -92,6 +92,74 @@ def channel_exists(conn: psycopg.Connection[Any], channel_id: str) -> bool:
     return row is not None
 
 
+def lock_active_channel(conn: psycopg.Connection[Any], channel_id: str) -> bool:
+    """Read ``channel_id`` ``FOR SHARE`` and say whether it is still active (#235).
+
+    The discovery guard: planner paths call this first inside the transaction
+    that inserts a video. Unfollow takes the same row ``FOR UPDATE``, so an
+    insert either holds the share lock and commits before the unfollow, or
+    waits for it and then reads ``active = false``. False also for an unknown
+    channel. The lock lasts until the surrounding transaction ends.
+    """
+    row = conn.execute(
+        "SELECT active FROM channels WHERE channel_id = %s FOR SHARE", (channel_id,)
+    ).fetchone()
+    return row is not None and bool(row[0])
+
+
+def deactivate_channel(conn: psycopg.Connection[Any], channel_id: str) -> bool | None:
+    """Unfollow ``channel_id`` (#235); ``None`` if it has no row, else whether it changed.
+
+    Locks the row ``FOR UPDATE`` first (the channel row precedes any job or
+    video row), then, only if it was active, sets ``active = false`` and
+    clears the poll-health and feed-gap columns so an unmonitored channel never
+    shows as needing attention. ``monitor_from``, ``title``, ``added_at`` and
+    ``last_polled`` are kept. The caller owns the transaction.
+    """
+    row = conn.execute(
+        "SELECT active FROM channels WHERE channel_id = %s FOR UPDATE", (channel_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    if not row[0]:
+        return False
+    conn.execute(
+        """
+        UPDATE channels
+        SET active = false, poll_failing_since = NULL, poll_failures = 0,
+            last_poll_err = NULL, feed_gap_detected_at = NULL, feed_gap_reason = NULL
+        WHERE channel_id = %s
+        """,
+        (channel_id,),
+    )
+    return True
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelDetail:
+    channel_id: str
+    title: str | None
+    active: bool
+    monitor_from: datetime
+    added_at: datetime
+    video_count: int
+
+
+def get_channel(conn: psycopg.Connection[Any], channel_id: str) -> ChannelDetail | None:
+    """One channel with its ``videos`` row count, or ``None`` (#235). Read-only."""
+    row = conn.execute(
+        """
+        SELECT c.channel_id, c.title, c.active, c.monitor_from, c.added_at,
+               (SELECT count(*) FROM videos v WHERE v.channel_id = c.channel_id)
+        FROM channels c WHERE c.channel_id = %s
+        """,
+        (channel_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return ChannelDetail(row[0], row[1], row[2], row[3], row[4], int(row[5]))
+
+
 def list_active_channels(conn: psycopg.Connection[Any]) -> list[Channel]:
     """Every channel with ``active = true``."""
     rows = conn.execute(

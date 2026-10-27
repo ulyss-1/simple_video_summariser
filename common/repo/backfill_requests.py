@@ -227,6 +227,15 @@ def record_failure(
     return None if row is None else str(row[0])
 
 
+def lock_active_backfill_id(conn: psycopg.Connection[Any], channel_id: str) -> str | None:
+    """The ``backfill_id`` of the channel's pending or running request, locked (#235)."""
+    row = conn.execute(
+        f"SELECT id FROM backfill_requests WHERE channel_id = %s AND {_ACTIVE} FOR UPDATE",
+        (channel_id,),
+    ).fetchone()
+    return None if row is None else request_backfill_id(int(row[0]))
+
+
 def cancel_active(conn: psycopg.Connection[Any], channel_id: str, backfill_id: str) -> int | None:
     """End the channel's active request if ``backfill_id`` is its id (#116).
 

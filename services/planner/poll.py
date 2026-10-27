@@ -31,7 +31,9 @@ from common.errors import MAX_ERROR_BYTES, UnavailableReason
 from common.models import Channel, FeedSource
 from common.queue import PRIORITY_NORMAL, JobQueue
 from common.repo.channels import (
+    PollHealth,
     list_active_channels,
+    lock_active_channel,
     mark_feed_gap_suspected,
     record_poll,
 )
@@ -87,12 +89,16 @@ def poll_channels(
     for channel in channels:
         try:
             entries = feed.fetch(channel.channel_id)
-            _process_entries(conn, queue, channel, entries, counts, skip_shorts)
+            still_followed = _process_entries(conn, queue, channel, entries, counts, skip_shorts)
         except psycopg.OperationalError:
             raise
         except Exception as exc:
             conn.rollback()
-            health = record_poll(conn, channel.channel_id, error=_error_text(exc))
+            recorded = _record_if_followed(conn, channel, _error_text(exc))
+            if recorded is None:
+                conn.commit()
+                continue
+            health = recorded[0]
             since = health.poll_failing_since if health is not None else None
             _logger.warning(
                 "planner.poll.channel_failed",
@@ -107,8 +113,8 @@ def poll_channels(
             )
             failed += 1
         else:
-            record_poll(conn, channel.channel_id)
-            polled += 1
+            if still_followed and _record_if_followed(conn, channel, None) is not None:
+                polled += 1
         conn.commit()
     result = PollResult(polled, failed, counts.discovered, counts.enqueued, counts.shorts_skipped)
     _logger.info(
@@ -131,7 +137,13 @@ def _process_entries(
     entries: list[Any],
     counts: _Counts,
     skip_shorts: bool,
-) -> None:
+) -> bool:
+    """Record the channel's new entries; False when it was unfollowed meanwhile (#235).
+
+    The channel list was read before the fetch, so an unfollow can land in
+    between. Every write block first reads the channel row ``FOR SHARE`` and
+    stops the channel's pass if it is no longer active.
+    """
     seen: set[str] = set()
     all_new = True
     considered = 0
@@ -164,6 +176,9 @@ def _process_entries(
         skip = should_skip_short(is_short=entry.is_short, origin=_ORIGIN, skip_shorts=skip_shorts)
         job_id = None
         with conn.transaction():
+            if not lock_active_channel(conn, channel.channel_id):
+                _log_unfollowed(channel)
+                return False
             if skip:
                 inserted = insert_discovered_video(
                     conn, entry, _ORIGIN, unavailable=UnavailableReason.SHORT.value
@@ -192,11 +207,35 @@ def _process_entries(
             floor = channel.last_polled
         if oldest > floor:
             with conn.transaction():
+                if not lock_active_channel(conn, channel.channel_id):
+                    _log_unfollowed(channel)
+                    return False
                 mark_feed_gap_suspected(conn, channel.channel_id, source="poll")
             _logger.warning(
                 "possible feed gap",
                 extra={"channel_id": channel.channel_id, "oldest_published_at": oldest},
             )
+    return True
+
+
+def _record_if_followed(
+    conn: psycopg.Connection[Any], channel: Channel, error: str | None
+) -> tuple[PollHealth | None] | None:
+    """Record the poll outcome only while the channel is active (#235).
+
+    The channel row is read ``FOR SHARE`` in the same transaction as the write,
+    so an unfollow cannot slip between them. ``None`` means unfollowed: nothing
+    was written. Otherwise a one-tuple holding ``record_poll``'s result.
+    """
+    with conn.transaction():
+        if not lock_active_channel(conn, channel.channel_id):
+            _log_unfollowed(channel)
+            return None
+        return (record_poll(conn, channel.channel_id, error=error),)
+
+
+def _log_unfollowed(channel: Channel) -> None:
+    _logger.info("planner.poll.channel_unfollowed", extra={"channel_id": channel.channel_id})
 
 
 def _error_text(exc: Exception) -> str:
