@@ -6,8 +6,9 @@ handler needs to decide what to do next.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final, Literal
 
 import psycopg
@@ -409,3 +410,43 @@ def log_cancelled_entries(video_id: str, entries: list[VideoCancelEntry]) -> Non
     for entry in entries:
         if entry.outcome == "cancelled":
             log_job_cancelled(job_id=entry.job_id, video_id=video_id, kind=entry.kind)
+
+
+_purge_logger = logging.getLogger(__name__)
+
+
+def purge_cancelled_jobs(
+    conn: psycopg.Connection[Any], retention: timedelta, *, now: datetime | None = None
+) -> int:
+    """Delete the ``CANCELLED`` records #303 keeps for deleted videos once they are old (#327).
+
+    Only a ``dead`` / ``CANCELLED`` job whose video has a tombstone and no
+    ``videos`` row, and whose age (``finished_at``, else ``created_at``) is over
+    ``retention``. One statement; a row another transaction holds is skipped
+    (``SKIP LOCKED``) and goes on a later pass. ``llm_batches`` rows of a purged
+    job keep their batch with ``job_id`` NULL (``ON DELETE SET NULL``, #251),
+    for the analyzer's orphan pass. Returns the number of rows deleted; one INFO
+    line when it is not zero.
+    """
+    cutoff = (now or datetime.now(UTC)) - retention
+    cur = conn.execute(
+        """
+        DELETE FROM jobs WHERE id IN (
+            SELECT j.id FROM jobs j
+            WHERE j.state = 'dead' AND j.error_class = 'CANCELLED'
+              AND COALESCE(j.finished_at, j.created_at) < %s
+              AND EXISTS (SELECT 1 FROM deleted_videos d WHERE d.video_id = j.video_id)
+              AND NOT EXISTS (SELECT 1 FROM videos v WHERE v.video_id = j.video_id)
+            ORDER BY j.id
+            FOR UPDATE OF j SKIP LOCKED
+        )
+        """,
+        (cutoff,),
+    )
+    purged = cur.rowcount
+    if purged:
+        _purge_logger.info(
+            "planner.cancelled_jobs_purged",
+            extra={"purged": purged, "retention_days": retention.days},
+        )
+    return purged

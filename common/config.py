@@ -137,6 +137,9 @@ class Settings(BaseSettings):
     # How long ingest keeps rescheduling a premiere or live stream that never
     # becomes available, counted from discovery (#65); then it dead-letters.
     UPCOMING_MAX_WAIT_DAYS: PositiveInt = 14
+    # The planner's reaper task deletes the CANCELLED job rows #303 keeps for a
+    # deleted video once they are this many days old (#327).
+    CANCELLED_JOB_RETENTION_DAYS: PositiveInt = 7
     HEARTBEAT_SEC: PositiveInt = 60
     REAP_AFTER_SEC: PositiveInt = 300
     # How often the planner looks for stale jobs (#38); much shorter than

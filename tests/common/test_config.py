@@ -163,7 +163,7 @@ def test_every_architecture_variable_is_a_field_except_transcriber_cpus() -> Non
         "WORKER_SHUTDOWN_GRACE_SEC", "REAP_INTERVAL_SEC",
         "INGEST_MAX_RUNTIME_SEC", "ANALYZE_MAX_RUNTIME_SEC", "TRANSCRIBE_MAX_RTF",
         "ALERT_WEBHOOK_URL", "ALERT_WEBHOOK_FORMAT", "ALERT_MIN_INTERVAL_SEC",
-        "UPCOMING_MAX_WAIT_DAYS", "RECONCILE_INTERVAL_SEC", "AUDIO_MIN_FREE_GB", "AUDIO_MIN_FREE_PCT",
+        "UPCOMING_MAX_WAIT_DAYS", "CANCELLED_JOB_RETENTION_DAYS", "RECONCILE_INTERVAL_SEC", "AUDIO_MIN_FREE_GB", "AUDIO_MIN_FREE_PCT",
         "SWEEP_MAX_JOBS_ANTHROPIC", "BACKFILL_INTERVAL_SEC",
         "CATALOG_ENRICH_INTERVAL_SEC", "CATALOG_ENRICH_BATCH_SIZE",
         "DB_POOL_MIN_SIZE", "DB_POOL_MAX_SIZE", "DB_POOL_TIMEOUT_SEC", "SKIP_SHORTS",
@@ -1217,3 +1217,9 @@ def test_audio_min_free_pct_rejects_non_finite_negative_and_out_of_range(
     with pytest.raises(ValidationError) as excinfo:
         get_settings()
     assert _errors_for(excinfo.value, "AUDIO_MIN_FREE_PCT")
+
+
+def test_cancelled_job_retention_defaults_to_seven_days_and_must_be_positive() -> None:
+    assert build_settings(DATABASE_URL=DB_URL).CANCELLED_JOB_RETENTION_DAYS == 7
+    with pytest.raises(ValidationError):
+        build_settings(DATABASE_URL=DB_URL, CANCELLED_JOB_RETENTION_DAYS=0)
