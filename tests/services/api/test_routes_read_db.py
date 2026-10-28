@@ -91,6 +91,7 @@ def test_a_library_item_has_exactly_the_documented_fields(
                              "finished_at": "2026-01-01T00:02:00Z"},
             "latest_analysis_at": "2026-01-01T00:07:00Z",
             "has_transcript": True,
+            "last_cancelled": None,
         }
     ]
     assert "SECRET" not in response.text

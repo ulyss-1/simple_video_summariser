@@ -443,9 +443,9 @@ function VideoPage({ videoId }: { videoId: string }) {
         </div>
       )}
       {video.status === 'idle' && video.active_job === null && video.last_cancelled != null && (
-        <p>
+        <div>
           <RestartProcessing name={heading ?? videoId} kind={video.last_cancelled.kind} restart={restart} />
-        </p>
+        </div>
       )}
       {restart.notice !== null && (
         <p className="alert alert--danger" role="alert">

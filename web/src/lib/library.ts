@@ -43,7 +43,7 @@ function capitalise(s: string): string {
 }
 
 /** The label for a row. Consumes the server's `status`; never re-derives it. */
-export function statusLabel(v: Pick<VideoItem, 'status' | 'active_job' | 'last_failure'>): StatusLabel {
+export function statusLabel(v: Pick<VideoItem, 'status' | 'active_job' | 'last_failure' | 'last_cancelled'>): StatusLabel {
   const job = v.active_job
   switch (v.status) {
     case 'done':
@@ -65,6 +65,8 @@ export function statusLabel(v: Pick<VideoItem, 'status' | 'active_job' | 'last_f
     case 'unavailable':
       return { label: 'Unavailable on YouTube', detail: null }
     case 'idle':
+      // #325: a cancel is not a failure; the kind says what was stopped.
+      if (v.last_cancelled != null) return { label: 'Cancelled', detail: v.last_cancelled.kind }
       return { label: 'Not processed', detail: null }
     default:
       return { label: 'Unknown status', detail: null }

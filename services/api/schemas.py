@@ -135,6 +135,8 @@ class VideoItem(VideoFields):
     last_failure: LastFailureOut | None
     latest_analysis_at: UtcDatetime | None
     has_transcript: bool
+    #: Non-null exactly when the newest job ended CANCELLED (#300, #325).
+    last_cancelled: LastCancelledOut | None
 
 
 class VideoList(BaseModel):
@@ -290,8 +292,6 @@ class VideoDetail(VideoItem):
     analysis: AnalysisOut | None
     #: The active transcribe job's figures, else ``None`` (#245).
     progress: ProgressOut | None
-    #: Non-null exactly when the newest job ended CANCELLED (#300).
-    last_cancelled: LastCancelledOut | None
 
 
 class AnalysisList(BaseModel):
@@ -386,16 +386,9 @@ def video_detail(
     run: AnalysisRun | None,
     progress: ProgressOut | None = None,
 ) -> VideoDetail:
-    cancelled = video.last_cancelled
     return VideoDetail(
         **_video_fields(video),
         progress=progress,
-        last_cancelled=(
-            None if cancelled is None
-            else LastCancelledOut(
-                job_id=cancelled.job_id, kind=cancelled.kind, finished_at=cancelled.finished_at
-            )
-        ),
         transcript=None if transcript is None else transcript_summary(transcript),
         analysis=None if run is None else analysis_out(run),
     )
@@ -404,6 +397,7 @@ def video_detail(
 def _video_fields(video: VideoSummary) -> dict[str, Any]:
     active = video.active_job
     failure = video.last_failure
+    cancelled = video.last_cancelled
     return {
         "video_id": video.video_id,
         "title": video.title,
@@ -434,6 +428,12 @@ def _video_fields(video: VideoSummary) -> dict[str, Any]:
         ),
         "latest_analysis_at": video.latest_analysis_at,
         "has_transcript": video.has_transcript,
+        "last_cancelled": (
+            None if cancelled is None
+            else LastCancelledOut(
+                job_id=cancelled.job_id, kind=cancelled.kind, finished_at=cancelled.finished_at
+            )
+        ),
     }
 
 
