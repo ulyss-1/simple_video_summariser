@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 import psycopg
@@ -15,16 +16,28 @@ from common.repo.jobs import (
 
 __all__ = [
     "BulkDeleted",
+    "DeletedTombstone",
     "DeletedVideo",
     "VideoNotFound",
     "delete_video",
     "delete_videos",
+    "list_deleted_videos",
 ]
 
 
 @dataclass(frozen=True, slots=True)
 class DeletedVideo:
     media_paths: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class DeletedTombstone:
+    video_id: str
+    title: str | None
+    channel_id: str | None
+    channel_title: str | None
+    deleted_at: datetime
+    restorable: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +91,10 @@ def delete_videos(
                 ).fetchall()
             )
             conn.execute(
-                "INSERT INTO deleted_videos (video_id) VALUES (%s) ON CONFLICT DO NOTHING",
+                "INSERT INTO deleted_videos (video_id, title, channel_id)"
+                " SELECT video_id, title, channel_id FROM videos WHERE video_id = %s"
+                " ON CONFLICT (video_id) DO UPDATE SET"
+                " title = EXCLUDED.title, channel_id = EXCLUDED.channel_id, deleted_at = now()",
                 (video_id,),
             )
             conn.execute(
@@ -111,3 +127,33 @@ def delete_video(
     if not result.deleted:
         raise VideoNotFound(video_id)
     return DeletedVideo(tuple(path for _, path in result.media))
+
+
+def list_deleted_videos(
+    conn: psycopg.Connection[Any], *, offset: int, limit: int
+) -> tuple[list[DeletedTombstone], int]:
+    """Tombstones, newest first, and their total (#239).
+
+    ``restorable`` is false exactly while a ``running`` job of the video has a cancel
+    request (``POST /videos`` answers ``409`` then, #303).
+    """
+    total_row = conn.execute("SELECT count(*) FROM deleted_videos").fetchone()
+    rows = conn.execute(
+        """
+        SELECT d.video_id, d.title, d.channel_id, c.title, d.deleted_at,
+               NOT EXISTS (
+                   SELECT 1 FROM jobs j
+                   WHERE j.video_id = d.video_id AND j.state = 'running'
+                     AND j.cancel_requested_at IS NOT NULL
+               )
+        FROM deleted_videos d
+        LEFT JOIN channels c ON c.channel_id = d.channel_id
+        ORDER BY d.deleted_at DESC, d.video_id COLLATE "C" ASC
+        LIMIT %s OFFSET %s
+        """,
+        (limit, offset),
+    ).fetchall()
+    items = [
+        DeletedTombstone(str(r[0]), r[1], r[2], r[3], r[4], bool(r[5])) for r in rows
+    ]
+    return items, int(total_row[0]) if total_row else 0

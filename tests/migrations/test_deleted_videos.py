@@ -69,3 +69,30 @@ def test_upgrade_creates_tombstones_and_downgrade_removes_only_them(
 
     command.upgrade(config, "head")
     assert _table_exists(postgres_dsn)
+
+
+def test_0024_adds_and_drops_only_title_and_channel_id(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config_for(postgres_dsn, monkeypatch)
+    command.upgrade(config, "0023")
+    with psycopg.connect(postgres_dsn) as conn:
+        conn.execute("INSERT INTO deleted_videos (video_id) VALUES ('dQw4w9WgXcQ')")
+        conn.commit()
+
+    command.upgrade(config, "head")
+    with psycopg.connect(postgres_dsn) as conn:
+        row = conn.execute("SELECT title, channel_id FROM deleted_videos").fetchone()
+    assert row == (None, None)
+
+    command.downgrade(config, "0023")
+    with psycopg.connect(postgres_dsn) as conn:
+        cols = [
+            r[0]
+            for r in conn.execute(
+                "SELECT column_name FROM information_schema.columns"
+                " WHERE table_name = 'deleted_videos' ORDER BY ordinal_position"
+            ).fetchall()
+        ]
+    assert cols == ["video_id", "deleted_at"]
+    command.upgrade(config, "head")
