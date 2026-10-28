@@ -1,5 +1,30 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/ai_docs_status.py\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+"PreToolUse": [
+  {
+    "matcher": "Bash",
+    "hooks": [
+      {
+        "type": "command",
+        "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/trim_test_output.py\"",
+        "timeout": 10
+      }
+    ]
+  }
+],
     "PostToolUse": [
       {
         "matcher": "Write|Edit",
@@ -7,9 +32,17 @@
           {
             "type": "command",
             "command": "jq -r '.tool_input.file_path' | xargs npx prettier --write 2>/dev/null; exit 0"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/ai_docs_nudge.py\"",
+            "timeout": 15
           }
         ]
       }
     ]
+  },
+  "permissions": {
+    "allow": ["Bash(npm test *)"]
   }
 }
