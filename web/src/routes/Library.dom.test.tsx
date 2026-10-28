@@ -29,6 +29,7 @@ function vid(n: number, over: Partial<VideoItem> = {}): VideoItem {
     status: 'done',
     active_job: null,
     last_failure: null,
+    last_cancelled: null,
     ...over,
   }
 }
@@ -490,6 +491,34 @@ describe('rows', () => {
     expect(within(row).getByRole('button', { name: UC })).toBeTruthy()
     expect(within(row).getByText('Date unknown')).toBeTruthy()
     expect(within(row).getByText('Not processed')).toBeTruthy()
+  })
+
+  it('shows Cancelled (kind) on an idle cancelled row only (#325)', async () => {
+    const cancelled = { job_id: 9, kind: 'transcribe', finished_at: '2026-09-02T00:00:00Z' }
+    stubFetch(() =>
+      list(4, [
+        vid(1, { status: 'idle', last_cancelled: cancelled }),
+        vid(2, { status: 'idle' }),
+        vid(3, { status: 'done', last_cancelled: cancelled }),
+        vid(4, {
+          status: 'failed',
+          last_failure: { job_id: 5, kind: 'ingest', error_class: 'BUG', finished_at: null },
+          last_cancelled: cancelled,
+        }),
+      ]),
+    )
+    await mount()
+    const rows = screen.getAllByRole('row')
+    const idleCancelled = rows[1] as HTMLElement
+    expect(within(idleCancelled).getByText('Cancelled')).toBeTruthy()
+    expect(idleCancelled.textContent).toContain('Cancelled (transcribe)')
+    expect(within(idleCancelled).queryByText('Not processed')).toBeNull()
+    expect(idleCancelled.querySelector('.badge--neutral')).not.toBeNull()
+    expect(within(rows[2] as HTMLElement).getByText('Not processed')).toBeTruthy()
+    expect(within(rows[3] as HTMLElement).getByText('Analysed')).toBeTruthy()
+    expect(within(rows[3] as HTMLElement).queryByText('Cancelled')).toBeNull()
+    expect(within(rows[4] as HTMLElement).getByText('Failed at download')).toBeTruthy()
+    expect(within(rows[4] as HTMLElement).queryByText('Cancelled')).toBeNull()
   })
 
   it('says "Unknown channel" without a control when both channel fields are null', async () => {

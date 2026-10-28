@@ -457,4 +457,89 @@ def test_detail_exposes_last_cancelled_only_for_a_cancelled_newest_job(
     assert detail["last_cancelled"]["kind"] == "ingest"
     assert detail["last_cancelled"]["finished_at"] is not None
     assert set(detail["last_cancelled"]) == {"job_id", "kind", "finished_at"}
-    assert "last_cancelled" not in api.get("/videos").json()["items"][0]
+    assert api.get("/videos").json()["items"][0]["last_cancelled"] == detail["last_cancelled"]
+
+
+def _list_item(api: TestClient, video_id: str) -> dict[str, Any]:
+    items = api.get("/videos", params={"limit": 50}).json()["items"]
+    return next(i for i in items if i["video_id"] == video_id)
+
+
+def test_list_carries_last_cancelled_for_a_cancelled_newest_job_with_status_idle(
+    api: TestClient, db: psycopg.Connection[Any]
+) -> None:
+    seed_video(db)
+    job_id = add_job(db, "dead", kind="transcribe", error_class="CANCELLED")
+
+    item = _list_item(api, VID)
+
+    assert item["status"] == "idle"
+    assert item["last_cancelled"]["job_id"] == job_id
+    assert item["last_cancelled"]["kind"] == "transcribe"
+    assert api.get("/videos", params={"status": "idle"}).json()["total"] == 1
+
+
+def test_list_last_cancelled_is_null_when_a_newer_pending_job_exists(
+    api: TestClient, db: psycopg.Connection[Any]
+) -> None:
+    seed_video(db)
+    add_job(db, "dead", error_class="CANCELLED", key="a")
+    add_job(db, "pending", kind="transcribe", key="b")
+
+    item = _list_item(api, VID)
+
+    assert item["last_cancelled"] is None
+    assert item["status"] == "processing"
+
+
+def test_list_last_cancelled_is_null_when_a_newer_job_is_done(
+    api: TestClient, db: psycopg.Connection[Any]
+) -> None:
+    seed_video(db)
+    add_job(db, "dead", error_class="CANCELLED", key="a")
+    add_job(db, "done", kind="transcribe", key="b")
+
+    assert _list_item(api, VID)["last_cancelled"] is None
+
+
+def test_list_last_cancelled_is_null_for_a_failed_dead_newest_job(
+    api: TestClient, db: psycopg.Connection[Any]
+) -> None:
+    seed_video(db)
+    add_job(db, "dead", error_class="BUG")
+
+    item = _list_item(api, VID)
+
+    assert item["last_cancelled"] is None
+    assert item["status"] == "failed"
+
+
+def test_list_last_cancelled_is_null_without_jobs(
+    api: TestClient, db: psycopg.Connection[Any]
+) -> None:
+    seed_video(db)
+
+    assert _list_item(api, VID)["last_cancelled"] is None
+
+
+def test_list_keeps_done_status_for_an_analysed_video_with_a_cancelled_reanalysis(
+    api: TestClient, db: psycopg.Connection[Any]
+) -> None:
+    seed_video(db)
+    transcript = db.execute(
+        "INSERT INTO transcripts (video_id, source, segments, full_text) VALUES (%s, 'whisper', '[]', 'x')"
+        " RETURNING id",
+        (VID,),
+    ).fetchone()
+    assert transcript is not None
+    db.execute(
+        "INSERT INTO analyses (video_id, transcript_id, chunk_strategy, model, prompt_version, tldr)"
+        " VALUES (%s, %s, 'time:1:0', 'm', 'v1', 'x')",
+        (VID, transcript[0]),
+    )
+    job_id = add_job(db, "dead", kind="analyze", error_class="CANCELLED")
+
+    item = _list_item(api, VID)
+
+    assert item["status"] == "done"
+    assert item["last_cancelled"]["job_id"] == job_id

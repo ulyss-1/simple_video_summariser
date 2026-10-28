@@ -25,6 +25,7 @@ function vid(n: number, over: Partial<VideoItem> = {}): VideoItem {
     status: 'done',
     active_job: null,
     last_failure: null,
+    last_cancelled: null,
     ...over,
   }
 }

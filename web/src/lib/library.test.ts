@@ -29,6 +29,7 @@ function item(over: Partial<VideoItem>): VideoItem {
     status: 'idle',
     active_job: null,
     last_failure: null,
+    last_cancelled: null,
     ...over,
   }
 }
@@ -55,6 +56,9 @@ describe('statusLabel', () => {
     ['failed analyze', { status: 'failed', last_failure: failure('analyze', 'Y') }, 'Failed at analysis', 'Y'],
     ['unavailable', { status: 'unavailable' }, 'Unavailable on YouTube', null],
     ['idle', { status: 'idle' }, 'Not processed', null],
+    ['idle + cancelled', { status: 'idle', last_cancelled: { job_id: 1, kind: 'transcribe', finished_at: null } }, 'Cancelled', 'transcribe'],
+    ['done + cancelled', { status: 'done', last_cancelled: { job_id: 1, kind: 'analyze', finished_at: null } }, 'Analysed', null],
+    ['failed + cancelled', { status: 'failed', last_failure: failure('ingest', 'X'), last_cancelled: { job_id: 1, kind: 'analyze', finished_at: null } }, 'Failed at download', 'X'],
   ])('%s', (_n, over, label, detail) => {
     expect(statusLabel(item(over))).toEqual({ label, detail })
   })

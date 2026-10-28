@@ -3283,10 +3283,10 @@
           "last_failure",
           "latest_analysis_at",
           "has_transcript",
+          "last_cancelled",
           "transcript",
           "analysis",
-          "progress",
-          "last_cancelled"
+          "progress"
         ],
         "title": "VideoDetail",
         "type": "object"
@@ -3339,6 +3339,16 @@
           "has_transcript": {
             "title": "Has Transcript",
             "type": "boolean"
+          },
+          "last_cancelled": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LastCancelledOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "last_failure": {
             "anyOf": [
@@ -3429,7 +3439,8 @@
           "active_job",
           "last_failure",
           "latest_analysis_at",
-          "has_transcript"
+          "has_transcript",
+          "last_cancelled"
         ],
         "title": "VideoItem",
         "type": "object"
