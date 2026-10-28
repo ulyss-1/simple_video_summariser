@@ -1,0 +1,41 @@
+# Free-tier LLM providers for SUMMARIZER=free (#364), tried in this order.
+# Replace the whole list with FREE_LLM_PROVIDERS_FILE.
+#
+# Every provider speaks the OpenAI chat-completions protocol.
+#   name            label used in logs
+#   base_url        https URL; "/chat/completions" is appended
+#   model           the provider's model id (free tiers rename these: verify it)
+#   context_tokens  context window to plan for; the smallest of the list sizes
+#                   the chunks
+#   key_setting     which Settings field holds the API key (GROQ_API_KEY,
+#                   GEMINI_API_KEY, OPENROUTER_API_KEY or CEREBRAS_API_KEY);
+#                   a provider whose key is unset is skipped
+# Free tiers are rate-limited and the transcript text goes to the provider.
+
+[[provider]]
+name = "groq"
+base_url = "https://api.groq.com/openai/v1"
+model = "llama-3.3-70b-versatile"
+context_tokens = 32768
+key_setting = "GROQ_API_KEY"
+
+[[provider]]
+name = "gemini"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+model = "gemini-2.5-flash"
+context_tokens = 32768
+key_setting = "GEMINI_API_KEY"
+
+[[provider]]
+name = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+model = "meta-llama/llama-3.3-70b-instruct:free"
+context_tokens = 32768
+key_setting = "OPENROUTER_API_KEY"
+
+[[provider]]
+name = "cerebras"
+base_url = "https://api.cerebras.ai/v1"
+model = "gpt-oss-120b"
+context_tokens = 32768
+key_setting = "CEREBRAS_API_KEY"

@@ -5,7 +5,7 @@ port implementation. It lives in ``adapters/`` so the analyzer service and the
 CLI (#31) can share it without either importing the other.
 
 Building makes no network call: the Ollama adapter only records its URL and
-the Anthropic adapter only records its key, so an unreachable host or a wrong
+the Anthropic adapter only records its key, and the free-tier adapter only reads its provider list, so an unreachable host or a wrong
 key shows up when a job runs, not at startup. What *is* checked at build time
 is configuration that can never work, so the process fails once, at startup,
 with a message naming the variable.
@@ -14,6 +14,7 @@ with a message naming the variable.
 from __future__ import annotations
 
 from adapters.summarize.anthropic import AnthropicSummarizer
+from adapters.summarize.free_tier import FreeTierConfigError, FreeTierSummarizer
 from adapters.summarize.ollama import OllamaSummarizer
 from common.config import Settings
 from common.models import Summarizer
@@ -34,6 +35,11 @@ def build_summarizer(settings: Settings) -> Summarizer:
                 "ANTHROPIC_API_KEY must be set to a non-empty value when SUMMARIZER=anthropic"
             )
         return AnthropicSummarizer(settings)
+    if settings.SUMMARIZER == "free":
+        try:
+            return FreeTierSummarizer.from_settings(settings)
+        except FreeTierConfigError as err:
+            raise SummarizerConfigError(f"SUMMARIZER=free: {err}") from err
     raise SummarizerConfigError(
-        f"SUMMARIZER must be 'ollama' or 'anthropic', got {settings.SUMMARIZER!r}"
+        f"SUMMARIZER must be 'ollama', 'anthropic' or 'free', got {settings.SUMMARIZER!r}"
     )
