@@ -24,8 +24,10 @@ export function useSubmitVideo() {
       if (!isVideoSubmission(result)) throw new Error('Unexpected response shape')
       return result
     },
-    onSuccess: async () => {
+    onSuccess: async (result) => {
       await Promise.all([
+        // A restart (#326) revives a job in place: an open detail page refetches.
+        client.invalidateQueries({ queryKey: ['video', result.video_id] }),
         client.invalidateQueries({ queryKey: ['videos'] }),
         client.invalidateQueries({ queryKey: ['ops'] }),
         client.invalidateQueries({ queryKey: ['deleted-videos'] }),

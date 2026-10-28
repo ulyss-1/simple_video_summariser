@@ -1263,6 +1263,12 @@ web/src/
   page keeps polling; once the job is terminal, `last_cancelled` makes it read
   `Processing cancelled (<kind>)`. `Delete video` is available in every state and
   answers `204` also during processing (#303), so the delete flow has no `409` case.
+  When `status = 'idle'` and `last_cancelled` is set, the page offers
+  `Restart processing` (#326; inline confirmation, one `POST /videos` with the watch
+  URL through `useSubmitVideo`, wrapped by `useRestartProcessing`, which revives the
+  newest cancelled job in place per #304). `useSubmitVideo` also invalidates
+  `['video', id]`. `restarted: false` shows a fixed "Nothing to restart" alert and
+  the refetch decides what is shown.
 
 - **Library bulk delete (#234).** Each Library row has a checkbox; the
   selection is route-local state limited to the rows on screen and is cleared on
