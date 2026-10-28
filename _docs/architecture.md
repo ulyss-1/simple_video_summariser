@@ -515,8 +515,10 @@ transaction, to the jobs it keeps: it locks the video's jobs by id and then the
 row ends `dead` / `CANCELLED`, the worker carries on, and the reaper ends a killed
 worker's row `CANCELLED`. The kept row is a record for a video that no longer
 exists; `retry_dead` and `retry_dead_matching` skip it, and it stays visible in
-`/ops/jobs` until a resubmission clears the tombstone (the follow-up #327 purges
-it after a retention period).
+`/ops/jobs` until a resubmission clears the tombstone (#327: the planner's `reap` task
+deletes it once it is older than `CANCELLED_JOB_RETENTION_DAYS`, only while the
+video has a tombstone and no `videos` row; a locked row is skipped, and its
+`llm_batches` rows keep their batch with `job_id` NULL for the orphan pass).
 
 ### Claim query
 
@@ -1379,6 +1381,7 @@ than reading `os.environ` directly.
 | `BACKFILL_INTERVAL_SEC` | `60` | planner: how often the `channel_backfill` task takes one bounded slice of the oldest pending backfill request (#115) |
 | `CATALOG_ENRICH_INTERVAL_SEC` / `CATALOG_ENRICH_BATCH_SIZE` | `30` / `10` | planner: how often the `catalog_enrichment` task runs and how many channel catalog rows (one yt-dlp call each) it enriches per run (#242) |
 | `UPCOMING_MAX_WAIT_DAYS` | `14` | transcriber: ingest reschedules a premiere or live stream until it is available, and dead-letters it this many days after discovery (#65) |
+| `CANCELLED_JOB_RETENTION_DAYS` | `7` | planner: the `reap` task deletes a `dead` / `CANCELLED` job of a deleted video (tombstone, no `videos` row) this many days after it finished (#327); its returned count includes them |
 | `HEARTBEAT_SEC` / `REAP_AFTER_SEC` | `60` / `300` | workers, planner |
 | `MAX_ATTEMPTS_TRANSCRIBE` | `2` | transcriber |
 | `INGEST_MAX_RUNTIME_SEC` / `ANALYZE_MAX_RUNTIME_SEC` / `TRANSCRIBE_MAX_RTF` | `600` / `3600` / `3.0` | workers (§11.5) |

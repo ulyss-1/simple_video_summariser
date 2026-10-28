@@ -84,7 +84,7 @@ import argparse
 import logging
 import time
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 import psycopg
@@ -101,6 +101,7 @@ from common.db import connect
 from common.logging import configure_logging
 from common.queue import PostgresQueue
 from common.repo import planner_runs
+from common.repo.jobs import purge_cancelled_jobs
 from common.shutdown import SignalLatch
 from services.planner.alerts import send_dead_letter_alerts
 from services.planner.backfill import (
@@ -275,7 +276,14 @@ def build_registry(settings: Settings, connect: Connect) -> list[Task]:
         return lambda: run_on_fresh_connection(connect, work)
 
     def reap(conn: psycopg.Connection[Any]) -> int:
-        return reap_stale_jobs(PostgresQueue(conn, settings=settings), settings)
+        reaped = reap_stale_jobs(PostgresQueue(conn, settings=settings), settings)
+        # The repo function never commits; the planner closes the connection
+        # without committing, so the purge gets its own transaction.
+        with conn.transaction():
+            purged = purge_cancelled_jobs(
+                conn, timedelta(days=settings.CANCELLED_JOB_RETENTION_DAYS)
+            )
+        return reaped + purged
 
     def auto_caption_fallback(conn: psycopg.Connection[Any]) -> int:
         return run_auto_caption_fallback_sweep(
