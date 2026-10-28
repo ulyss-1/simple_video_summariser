@@ -1227,7 +1227,7 @@ the queue) also has a NULL class; an `analyze` job with a malformed
 web/src/
 ├── api/           # generated TS client from OpenAPI (D12) — never hand-written
 ├── hooks/         # TanStack Query hooks, one per resource
-├── routes/        # Library, VideoDetail, Transcript, Search, Compare, Ops, ChannelCatalog, ImportPlaylist
+├── routes/        # Library, VideoDetail, Transcript, Search, Compare, Ops, ChannelCatalog, ImportPlaylist, RecentlyDeleted
 ├── components/
 │   ├── Player.tsx        # youtube-nocookie IFrame; exposes seekTo()  (D12b)
 │   ├── Timestamp.tsx     # single click-to-seek primitive, used everywhere

@@ -208,7 +208,7 @@ any `<img>`, and an app footer.
 
 ### 7.2 Navigation
 
-- Main nav: Library, Search, Ops, then "API health" (a plain `<a>` to
+- Main nav: Library, Search, Add channel, Ops, Recently deleted (#236), then "API health" (a plain `<a>` to
   `/api/healthz`), separated by spaces. Plain `Link`, not `NavLink`, so no
   link is marked as the current page (§9).
 - Video detail links row: "Open on YouTube · Transcript · Compare analyses ·
@@ -453,6 +453,30 @@ playlist is then re-read so submitted rows read `Already known · Queued`. A
 double-submit guard latches after a success and is released by an error or by a
 change of the selection. `web/src/lib/selection.ts` holds the toggle shared with
 the catalog and `lib/batchSubmit.ts` the summary shared with #240.
+
+### 7.14 Recently deleted (#236)
+
+`/deleted` (`RecentlyDeleted`, nav item after Ops) lists the deletion tombstones
+(`GET /deleted-videos`, #239), newest first, under an intro line: `Deleted videos
+are gone for good. Restoring one adds it again and processes it from the start;
+its earlier summaries are not recovered.` The table has `Title` (title, else the
+video ID, plus `Open on YouTube` only for a valid ID), `Channel` (title, else
+ID, else `Unknown channel`), `Deleted` (`YYYY-MM-DD HH:MM UTC` in `<time
+dateTime>`) and `Action`. Loading, empty (`No deleted videos`), error and
+pagination (50 per page, page in the URL) are 7.5 and 7.6; the page size is a
+prop so tests use 2.
+
+`Restore` (`aria-label="Restore {title}"`) follows 7.7: `Restore {title}? It is
+processed again from the start, which can take a while.` with `Confirm restore`
+and `Cancel`; focus goes to `Confirm restore` and returns to `Restore` on Cancel
+or Escape. Confirm sends one `POST /videos` with `{url: <video_id>}` through
+`useSubmitVideo`, which also invalidates `deleted-videos`. On success the row
+reads `Restored: processing again` + `Open video`, and a section-level polite
+line (`Restored {title}: processing again`, `tabIndex={-1}`) takes focus because
+the row leaves on refetch. A row with `restorable: false`, or one whose `POST`
+returned 409 (the list is refetched), shows `Still stopping its processing. Try
+again in a minute.` and no button. 422, 429, 503 and network failures keep the
+confirmation open with a `role="alert"` and fixed text.
 
 ---
 

@@ -23,6 +23,9 @@ export function Shell() {
           <NavLink to="/ops" viewTransition className="shell-nav__link">
             Ops
           </NavLink>
+          <NavLink to="/deleted" viewTransition className="shell-nav__link">
+            Recently deleted
+          </NavLink>
           {/* Plain anchor on purpose: API URLs belong to the server, not the router. */}
           <a href="/api/healthz" className="shell-nav__link shell-nav__link--aside">
             API health

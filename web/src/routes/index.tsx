@@ -7,6 +7,7 @@ import { ImportPlaylist } from './ImportPlaylist'
 import { Library } from './Library'
 import { NotFound } from './NotFound'
 import { Ops } from './Ops'
+import { RecentlyDeleted } from './RecentlyDeleted'
 import { RouteError } from './RouteError'
 import { Search } from './Search'
 import { Shell } from './Shell'
@@ -53,6 +54,7 @@ export const routes: RouteObject[] = [
       { path: 'playlists/import', element: <ImportPlaylist /> },
       { path: 'search', element: <Search /> },
       { path: 'ops', element: <Ops /> },
+      { path: 'deleted', element: <RecentlyDeleted /> },
       { path: '*', element: <NotFound /> },
     ],
   },
