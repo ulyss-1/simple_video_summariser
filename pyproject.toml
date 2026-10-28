@@ -43,7 +43,7 @@ markers = [
 ]
 
 [tool.ruff]
-extend-exclude = ["web", "_docs"]
+extend-exclude = ["web", "_docs", ".claude"]
 
 [tool.ruff.lint]
 extend-select = ["I", "UP", "B", "TID251"]
