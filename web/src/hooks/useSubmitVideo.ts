@@ -28,6 +28,7 @@ export function useSubmitVideo() {
       await Promise.all([
         client.invalidateQueries({ queryKey: ['videos'] }),
         client.invalidateQueries({ queryKey: ['ops'] }),
+        client.invalidateQueries({ queryKey: ['deleted-videos'] }),
       ])
     },
   })

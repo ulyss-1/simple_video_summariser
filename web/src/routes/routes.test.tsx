@@ -29,6 +29,7 @@ describe('route table', () => {
     [`/videos/${ID}/compare`, ID],
     ['/search', 'Search'],
     ['/ops', 'Ops'],
+    ['/deleted', 'Recently deleted'],
     ['/channels/add', 'Add channel'],
     [`/channels/UC${'a'.repeat(22)}/catalog`, 'Channel catalog'],
     ['/channels/not-a-channel/catalog', 'Channel not found'],
