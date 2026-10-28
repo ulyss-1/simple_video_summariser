@@ -309,6 +309,19 @@ heartbeat hint underneath, later "Processing cancelled ({kind})". Deleting a
 video that is processing adds "Processing is stopped and any running work is
 discarded." to the delete confirmation.
 
+#### Restart a cancelled video (#326)
+
+Same pattern, on the video detail page. `Restart processing` is shown exactly when
+`status = 'idle'` and `last_cancelled` is set, next to the "Processing cancelled
+({kind})" note. It opens an inline sentence: "Restart processing of {title}? It is
+queued again at the front of the queue." plus "A transcription starts over." for a
+`transcribe` job, with `Confirm restart` and `Keep cancelled`. Focus moves to
+`Confirm restart` (the Ops retry variant); `Keep cancelled` or `Escape` returns it
+to `Restart processing`. Both buttons are `disabled` while the request runs. On
+success the status line takes focus. When nothing was restarted, the page shows the
+fixed `role="alert"` "Nothing to restart: the video changed. Showing its current
+state."; any error shows a fixed `role="alert"` text and closes the confirmation.
+
 ### 7.8 Disclosure
 
 Ops `last_error`: the first line, cut to 200 characters with `…`, plus a

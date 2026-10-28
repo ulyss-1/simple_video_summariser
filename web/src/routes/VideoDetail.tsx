@@ -9,6 +9,7 @@ import { formatTimestamp, useMomentSeek } from '../components/Timestamp'
 import { useAnalysisTotal } from '../hooks/useAnalyses'
 import { cancelProcessingErrorMessage, useCancelProcessing } from '../hooks/useCancelProcessing'
 import { deleteErrorMessage, useDeleteVideo } from '../hooks/useDeleteVideo'
+import { useRestartProcessing } from '../hooks/useRestartProcessing'
 import { reanalyzeErrorMessage, useReanalyze } from '../hooks/useReanalyze'
 import { useVideo, VideoApiError } from '../hooks/useVideo'
 import { parseStartTime } from '../lib/moment'
@@ -224,6 +225,80 @@ function CancelProcessing({
   )
 }
 
+/**
+ * Inline confirmation for restarting a cancelled video (#326, design-system
+ * §7.7), never a modal. The page owns the alert text, since this control
+ * disappears when the refetch shows the new state.
+ */
+function RestartProcessing({
+  name,
+  kind,
+  restart,
+}: {
+  name: string
+  kind: string
+  restart: ReturnType<typeof useRestartProcessing>
+}) {
+  const [confirming, setConfirming] = useState(false)
+  const openRef = useRef<HTMLButtonElement>(null)
+  const confirmRef = useRef<HTMLButtonElement>(null)
+  const restoreFocus = useRef(false)
+  // Set synchronously on click: isPending only turns true on a later render.
+  const sent = useRef(false)
+
+  useEffect(() => {
+    if (confirming) confirmRef.current?.focus()
+    else if (restoreFocus.current) {
+      restoreFocus.current = false
+      openRef.current?.focus()
+    }
+  }, [confirming])
+
+  const close = () => {
+    restoreFocus.current = true
+    setConfirming(false)
+  }
+
+  const confirm = () => {
+    if (sent.current) return
+    sent.current = true
+    void restart.send(close).finally(() => {
+      sent.current = false
+    })
+  }
+
+  if (!confirming) {
+    return (
+      <button
+        type="button"
+        ref={openRef}
+        onClick={() => {
+          restart.clearNotice()
+          setConfirming(true)
+        }}
+      >
+        Restart processing
+      </button>
+    )
+  }
+  return (
+    <div
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && !restart.isPending) close()
+      }}
+    >
+      <p>Restart processing of {name}? It is queued again at the front of the queue.</p>
+      {kind === 'transcribe' && <p>A transcription starts over.</p>}
+      <button ref={confirmRef} type="button" disabled={restart.isPending} onClick={confirm}>
+        Confirm restart
+      </button>{' '}
+      <button type="button" disabled={restart.isPending} onClick={close}>
+        Keep cancelled
+      </button>
+    </div>
+  )
+}
+
 export function VideoDetail() {
   const videoId = parseVideoId(useParams().videoId)
   if (videoId === null) return <NotFound />
@@ -241,6 +316,7 @@ function VideoPage({ videoId }: { videoId: string }) {
   // line then takes focus, since the control that had it is gone.
   const [focusStatus, setFocusStatus] = useState(0)
   const cancel = useCancelProcessing(videoId, () => setFocusStatus((n) => n + 1))
+  const restart = useRestartProcessing(videoId, () => setFocusStatus((n) => n + 1))
   const statusRef = useRef<HTMLParagraphElement>(null)
   useEffect(() => {
     if (focusStatus > 0) statusRef.current?.focus()
@@ -365,6 +441,16 @@ function VideoPage({ videoId }: { videoId: string }) {
         <div>
           <JobProgress kind={video.active_job.kind} state={video.active_job.state} progress={video.progress} />
         </div>
+      )}
+      {video.status === 'idle' && video.active_job === null && video.last_cancelled != null && (
+        <p>
+          <RestartProcessing name={heading ?? videoId} kind={video.last_cancelled.kind} restart={restart} />
+        </p>
+      )}
+      {restart.notice !== null && (
+        <p className="alert alert--danger" role="alert">
+          {restart.notice}
+        </p>
       )}
       <div className="row">
         {video.active_job !== null && video.active_job.cancel_requested_at == null && (
