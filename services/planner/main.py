@@ -277,9 +277,12 @@ def build_registry(settings: Settings, connect: Connect) -> list[Task]:
 
     def reap(conn: psycopg.Connection[Any]) -> int:
         reaped = reap_stale_jobs(PostgresQueue(conn, settings=settings), settings)
-        purged = purge_cancelled_jobs(
-            conn, timedelta(days=settings.CANCELLED_JOB_RETENTION_DAYS)
-        )
+        # The repo function never commits; the planner closes the connection
+        # without committing, so the purge gets its own transaction.
+        with conn.transaction():
+            purged = purge_cancelled_jobs(
+                conn, timedelta(days=settings.CANCELLED_JOB_RETENTION_DAYS)
+            )
         return reaped + purged
 
     def auto_caption_fallback(conn: psycopg.Connection[Any]) -> int:
