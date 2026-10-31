@@ -14,6 +14,12 @@
 # check keeps it fresh (architecture.md 16.11).
 yt-dlp==2026.10.21
 
+# yt-dlp's YouTube challenge solver scripts, shipped as a package so nothing is
+# fetched at runtime (#134). Must equal the yt-dlp-ejs==X that the pinned yt-dlp
+# requires in its `default` extra (0.8.0 for yt-dlp 2026.10.21); it moves with
+# yt-dlp and with the Deno pin in ops/Dockerfile.backend.
+yt-dlp-ejs==0.8.0
+
 # Typed, validated settings from environment variables (architecture.md 10,
 # common/config.py). Pydantic itself comes in transitively.
 pydantic-settings==2.16.1

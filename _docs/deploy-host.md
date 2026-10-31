@@ -538,8 +538,10 @@ docker compose logs --tail 200 transcriber analyzer
 | `LLM_UNAVAILABLE` | Ollama binding and model: §8. |
 | `LLM_INVALID_OUTPUT` | The model's reply failed validation. It is retried; report a `dead` analyze job as an issue. |
 
-A log line `No supported JavaScript runtime` is yt-dlp noise until #134 is
-decided; do not chase it.
+A log line `No supported JavaScript runtime` is a real fault since #134: the
+image ships Deno and `yt-dlp-ejs`, so it means the image is not the expected
+one (check `docker compose exec transcriber yt-dlp -v`, which lists
+`JS runtimes: deno-...`) and formats may be silently missing.
 
 ### Cleanup
 
