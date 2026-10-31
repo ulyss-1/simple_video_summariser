@@ -1753,6 +1753,16 @@ side benefit is build-cache correctness: a changed digest changes the
 host is guaranteed to fetch the new base, which a tag-only `FROM` does not
 guarantee without `--pull`.
 
+The same workflow also reports (#265), through its `--end-of-life` options, when
+the `node` (24), `python` (3.14) or `postgres` (18) line is within 180 days of
+its end of life, under `Base image line nears end of life`, or past it, under
+`Base image line is past end of life`. The dates are committed in the
+workflow's run line, make no network call, and come from `nodejs/Release`
+`schedule.json`, PEP 745 and postgresql.org/support/versioning. Moving a line
+means changing the tag, the digest, every copy of them (the bump procedure
+above) and the `--end-of-life` date in one PR; a test fails a PR that moves a
+tag without its date.
+
 **This is where D12's "no Node in production" becomes literal.** Node exists
 only in the `build` stage; the shipped image is nginx plus static files, ~30 MB,
 with zero npm packages present at runtime. A compromised transitive dependency

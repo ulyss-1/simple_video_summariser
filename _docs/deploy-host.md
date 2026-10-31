@@ -369,7 +369,8 @@ proxy (#141) for TLS. Updates are `git pull` of `master`, then
 run means bump the stale base-image digest (nginx, node, python or postgres)
 per architecture.md §11.3; a red "stable line superseded" or "line withdrawn
 upstream" annotation means move the nginx line as described in the same
-paragraph. Then follow the usual update steps. A `postgres`
+paragraph, and a red "line nears end of life" or "line is past end of life"
+annotation means move the node, python or postgres line as described there too. Then follow the usual update steps. A `postgres`
 digest bump recreates `db` on the next `docker compose -f compose.yml up -d
 --build`: a short database restart on the same major version, with the data
 staying in the `pgdata` volume. After an update, re-run §12.
