@@ -9,7 +9,8 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 from types import ModuleType
-from typing import Self
+from typing import Any, Self
+from urllib.parse import unquote
 
 import pytest
 
@@ -1589,3 +1590,463 @@ def test_the_workflow_header_names_this_issue_and_the_run_line_is_unchanged() ->
     header = text.split("name:", 1)[0]
     assert "#278" in header and "hold" in header and "#68" in header
     assert "run: python scripts/lock_requirements.py --report-outdated" in text
+
+
+# ---- --report-vulnerabilities (issue #279) ----
+
+H = " --hash=sha256:" + "a" * 64
+
+
+def _vuln_root(tmp_path: Path, **locks: str) -> Path:
+    """Lock files holding the given `name==version` lines (default: a few packages per lock)."""
+    defaults = {
+        "backend": "foo==1.0\nshared==2.0",
+        "whisper": "shared==2.0\nw==3.0",
+        "dev": "pytest==9.0",
+    }
+    for target, body in {**defaults, **locks}.items():
+        lines = "\n".join(f"{ln}{H}" for ln in body.splitlines())
+        (tmp_path / lock.TARGETS[target][1]).write_text(f"# header\n\n{lines}\n")
+    return tmp_path
+
+
+def _detail(
+    vuln_id: str, *, name: str = "foo", fixed: tuple[str, ...] = ("1.5",), severity: str | None = "high",
+    aliases: tuple[str, ...] = ("CVE-2030-1",), **extra: object,
+) -> dict[str, object]:
+    events: list[dict[str, str]] = [{"introduced": "0"}, *({"fixed": f} for f in fixed)]
+    record: dict[str, object] = {
+        "id": vuln_id, "aliases": list(aliases), "summary": "FREE TEXT", "details": "FREE TEXT",
+        "affected": [{"package": {"name": name, "ecosystem": "PyPI"}, "ranges": [{"events": events}]}],
+        **extra,
+    }
+    if severity is not None:
+        record["database_specific"] = {"severity": severity}
+    return record
+
+
+class FakeOsv:
+    """Stands in for OSV: `vulns` maps (name, version) to pages of ids, `details` an id to an
+    answer (a dict, an int status, bytes or an exception). Records (method, url, decoded body)."""
+
+    def __init__(
+        self,
+        vulns: Mapping[tuple[str, str], list[list[str]]] | None = None,
+        details: Mapping[str, object] | None = None,
+        batch: object = None,
+    ) -> None:
+        self.vulns = dict(vulns or {})
+        self.details = dict(details or {})
+        self.batch = batch  # replaces the answer of every querybatch call
+        self.requests: list[tuple[str, str, dict[str, object] | None]] = []
+
+    @property
+    def batches(self) -> list[dict[str, object]]:
+        return [b for m, _, b in self.requests if m == "POST" and b is not None]
+
+    def __call__(self, method: str, url: str, body: bytes | None, timeout: float) -> tuple[int, bytes]:
+        assert timeout == lock.FETCH_TIMEOUT
+        decoded = json.loads(body) if body is not None else None
+        self.requests.append((method, url, decoded))
+        answer: object
+        if method == "POST":
+            assert url == "https://api.osv.dev/v1/querybatch"
+            answer = self.batch if self.batch is not None else self._results(decoded)
+        else:
+            answer = self.details.get(unquote(url.rsplit("/", 1)[1]), 404)
+        if isinstance(answer, BaseException):
+            raise answer
+        if isinstance(answer, int):
+            return answer, b"BODY SECRET"
+        if isinstance(answer, bytes):
+            return 200, answer
+        return 200, json.dumps(answer).encode()
+
+    def _results(self, body: dict[str, object] | None) -> dict[str, object]:
+        assert body is not None
+        results: list[dict[str, object]] = []
+        for query in body["queries"]:  # type: ignore[attr-defined]
+            assert query["package"]["ecosystem"] == "PyPI"
+            pages = self.vulns.get((query["package"]["name"], query["version"]), [])
+            index = int(query["page_token"][1:]) if "page_token" in query else 0
+            result: dict[str, object] = {}
+            if pages:
+                result["vulns"] = [{"id": i, "modified": "x"} for i in pages[index]]
+                if index + 1 < len(pages):
+                    result["next_page_token"] = f"t{index + 1}"
+            results.append(result)
+        return {"results": results}
+
+
+def test_nothing_vulnerable_is_silent_green_and_asks_for_no_detail(tmp_path: Path) -> None:
+    osv = FakeOsv()
+    assert lock.report_vulnerabilities(root=_vuln_root(tmp_path), osv=osv) == (0, "", "")
+    assert [m for m, _, _ in osv.requests] == ["POST"]
+
+
+def test_one_vulnerable_package_with_a_fix(tmp_path: Path) -> None:
+    osv = FakeOsv({("foo", "1.0"): [["GHSA-1"]]}, {"GHSA-1": _detail("GHSA-1", fixed=("1.5", "1.2"))})
+    code, out, err = lock.report_vulnerabilities(root=_vuln_root(tmp_path), osv=osv)
+    first, *rest = out.splitlines()
+    assert code == 1 and err == ""
+    assert first.startswith(
+        f"::error title={lock.VULN_TITLE}::1 advisories in 1 locked packages: foo==1.0 (GHSA-1)."
+    )
+    assert "--upgrade-package NAME" in first and "pytest -m image" in first and "open a PR" in first
+    assert rest == ["requirements.backend.lock: foo==1.0 GHSA-1 [CVE-2030-1] severity HIGH - fixed in 1.2, 1.5"]
+    assert "FREE TEXT" not in out
+    assert osv.requests[-1][:2] == ("GET", "https://api.osv.dev/v1/vulns/GHSA-1")
+
+
+def test_the_request_body_shape_and_ecosystem(tmp_path: Path) -> None:
+    osv = FakeOsv()
+    lock.report_vulnerabilities(root=_vuln_root(tmp_path), osv=osv)
+    assert osv.batches == [{"queries": [
+        {"package": {"name": n, "ecosystem": "PyPI"}, "version": v}
+        for n, v in [("foo", "1.0"), ("pytest", "9.0"), ("shared", "2.0"), ("w", "3.0")]
+    ]}]
+
+
+def test_two_advisories_on_one_package_are_counted_and_listed(tmp_path: Path) -> None:
+    osv = FakeOsv(
+        {("foo", "1.0"): [["B-2", "A-1"]]},
+        {"A-1": _detail("A-1", aliases=("GHSA-x", "CVE-1")), "B-2": _detail("B-2", severity="LOW", aliases=())},
+    )
+    _, out, _ = lock.report_vulnerabilities(root=_vuln_root(tmp_path), osv=osv)
+    first, *rest = out.splitlines()
+    assert "2 advisories in 1 locked packages: foo==1.0 (A-1, B-2)" in first
+    assert rest == [
+        "requirements.backend.lock: foo==1.0 A-1 [CVE-1] severity HIGH - fixed in 1.5",
+        "requirements.backend.lock: foo==1.0 B-2 severity LOW - fixed in 1.5",
+    ]
+
+
+def test_the_same_pin_in_two_locks_is_queried_once_and_reported_per_lock(tmp_path: Path) -> None:
+    osv = FakeOsv({("shared", "2.0"): [["A-1"]]}, {"A-1": _detail("A-1", name="shared")})
+    code, out, _ = lock.report_vulnerabilities(root=_vuln_root(tmp_path), osv=osv)
+    queries = osv.batches[0]["queries"]
+    assert code == 1 and [q["package"]["name"] for q in queries].count("shared") == 1  # type: ignore[attr-defined]
+    assert [ln.split(":")[0] for ln in out.splitlines()[1:]] == [
+        "requirements.backend.lock", "requirements.whisper.lock",
+    ]
+    assert "1 advisories in 1 locked packages" in out
+    assert [m for m, _, _ in osv.requests].count("GET") == 1
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        [{"introduced": "0"}],
+        [{"introduced": "0"}, {"last_affected": "1.0"}],
+        [{"introduced": "0"}, {"fixed": "1.0"}, {"fixed": "0.5"}],
+    ],
+)
+def test_no_fixed_version_is_still_red_and_never_reads_fixed_in(
+    tmp_path: Path, events: list[dict[str, str]]
+) -> None:
+    detail = _detail("A-1")
+    detail["affected"] = [{"package": {"name": "Foo", "ecosystem": "PyPI"}, "ranges": [{"events": events}]}]
+    code, out, _ = lock.report_vulnerabilities(
+        root=_vuln_root(tmp_path), osv=FakeOsv({("foo", "1.0"): [["A-1"]]}, {"A-1": detail})
+    )
+    assert code == 1 and out.splitlines()[1].endswith("severity HIGH - no fixed version published")
+    assert "fixed in" not in out and "1 advisories in 1 locked packages" in out
+
+
+def test_fixed_versions_of_another_package_or_ecosystem_are_ignored(tmp_path: Path) -> None:
+    detail = _detail("A-1", name="other")
+    detail["affected"].append(  # type: ignore[attr-defined]
+        {"package": {"name": "foo", "ecosystem": "npm"}, "ranges": [{"events": [{"fixed": "9"}]}]}
+    )
+    _, out, _ = lock.report_vulnerabilities(
+        root=_vuln_root(tmp_path), osv=FakeOsv({("foo", "1.0"): [["A-1"]]}, {"A-1": detail})
+    )
+    assert out.splitlines()[1].endswith("no fixed version published")
+
+
+def test_an_unorderable_fixed_value_is_shown_as_is_after_the_orderable_ones(tmp_path: Path) -> None:
+    detail = _detail("A-1", fixed=("1.1rc1", "2.0"))
+    _, out, _ = lock.report_vulnerabilities(
+        root=_vuln_root(tmp_path), osv=FakeOsv({("foo", "1.0"): [["A-1"]]}, {"A-1": detail})
+    )
+    assert out.splitlines()[1].endswith("fixed in 2.0, 1.1rc1")
+
+
+def test_a_missing_severity_reads_unknown_and_is_still_red(tmp_path: Path) -> None:
+    osv = FakeOsv({("foo", "1.0"): [["A-1"]]}, {"A-1": _detail("A-1", severity=None)})
+    code, out, _ = lock.report_vulnerabilities(root=_vuln_root(tmp_path), osv=osv)
+    assert code == 1 and out.splitlines()[1].endswith("severity unknown - fixed in 1.5")
+
+
+@pytest.mark.parametrize("answer", [500, OSError("boom"), b"{not json"])
+def test_a_failed_detail_request_is_reported_without_details_and_is_no_outage(
+    tmp_path: Path, answer: object
+) -> None:
+    osv = FakeOsv({("foo", "1.0"): [["A-1"]]}, {"A-1": answer})
+    code, out, err = lock.report_vulnerabilities(root=_vuln_root(tmp_path), osv=osv)
+    assert code == 1 and err == "" and "::notice" not in out
+    assert out.splitlines()[1] == "requirements.backend.lock: foo==1.0 A-1 details unavailable"
+
+
+def test_the_detail_cap_leaves_the_rest_reported_without_details(tmp_path: Path) -> None:
+    osv = FakeOsv({("foo", "1.0"): [["A-1", "B-2"]]}, {"A-1": _detail("A-1"), "B-2": _detail("B-2")})
+    code, out, _ = lock.report_vulnerabilities(root=_vuln_root(tmp_path), osv=osv, max_details=1)
+    assert code == 1 and [m for m, _, _ in osv.requests].count("GET") == 1
+    assert out.splitlines()[1:] == [
+        "requirements.backend.lock: foo==1.0 A-1 [CVE-2030-1] severity HIGH - fixed in 1.5",
+        "requirements.backend.lock: foo==1.0 B-2 details unavailable",
+    ]
+
+
+def test_a_withdrawn_advisory_is_dropped(tmp_path: Path) -> None:
+    osv = FakeOsv(
+        {("foo", "1.0"): [["A-1", "B-2"]]},
+        {"A-1": _detail("A-1", withdrawn="2030-01-01T00:00:00Z"), "B-2": _detail("B-2")},
+    )
+    _, out, _ = lock.report_vulnerabilities(root=_vuln_root(tmp_path), osv=osv)
+    assert "A-1" not in out and "1 advisories" in out
+    only = FakeOsv({("foo", "1.0"): [["A-1"]]}, {"A-1": _detail("A-1", withdrawn="x")})
+    assert lock.report_vulnerabilities(root=_vuln_root(tmp_path), osv=only) == (0, "", "")
+
+
+def test_pagination_merges_and_deduplicates_pages_and_repeats_the_query(tmp_path: Path) -> None:
+    osv = FakeOsv(
+        {("foo", "1.0"): [["A-1", "B-2"], ["B-2", "C-3"]]},
+        {i: _detail(i) for i in ("A-1", "B-2", "C-3")},
+    )
+    code, out, err = lock.report_vulnerabilities(root=_vuln_root(tmp_path), osv=osv)
+    assert code == 1 and err == "" and "3 advisories in 1 locked packages: foo==1.0 (A-1, B-2, C-3)" in out
+    assert osv.batches[1] == {"queries": [
+        {"package": {"name": "foo", "ecosystem": "PyPI"}, "version": "1.0", "page_token": "t1"}
+    ]}
+    assert all("page_token" not in q for q in osv.batches[0]["queries"])  # type: ignore[attr-defined]
+
+
+def test_the_page_cap_keeps_what_was_gathered_and_says_so_on_stderr(tmp_path: Path) -> None:
+    osv = FakeOsv(
+        {("foo", "1.0"): [["A-1"], ["B-2"], ["C-3"]]}, {i: _detail(i) for i in ("A-1", "B-2", "C-3")}
+    )
+    code, out, err = lock.report_vulnerabilities(root=_vuln_root(tmp_path), osv=osv, max_pages=2)
+    assert code == 1 and "2 advisories in 1 locked packages" in out and "C-3" not in out
+    assert err.count("\n") == 1 and "truncated" in err and "foo==1.0" in err
+    assert len(osv.batches) == 2
+
+
+def test_chunking_matches_results_to_queries_by_position(tmp_path: Path) -> None:
+    osv = FakeOsv(
+        {("w", "3.0"): [["A-1"]], ("foo", "1.0"): [["B-2"]]},
+        {"A-1": _detail("A-1", name="w"), "B-2": _detail("B-2")},
+    )
+    code, out, _ = lock.report_vulnerabilities(root=_vuln_root(tmp_path), osv=osv, batch_size=2)
+    assert [len(b["queries"]) for b in osv.batches] == [2, 2]  # type: ignore[arg-type]
+    assert code == 1 and "2 advisories in 2 locked packages: foo==1.0 (B-2), w==3.0 (A-1)" in out
+
+
+def test_the_summary_is_truncated_like_the_staleness_report(tmp_path: Path) -> None:
+    osv = FakeOsv(
+        {("foo", "1.0"): [["A-1"]], ("pytest", "9.0"): [["B-2"]], ("w", "3.0"): [["C-3"]]},
+        {i: _detail(i) for i in ("A-1", "B-2", "C-3")},
+    )
+    _, out, _ = lock.report_vulnerabilities(root=_vuln_root(tmp_path), osv=osv, inline_limit=1)
+    first = out.splitlines()[0]
+    assert "foo==1.0 (A-1), +2 more." in first and "pytest==9.0" not in first
+    assert len(out.splitlines()) == 4
+
+
+def test_lines_are_ordered_by_lock_then_package_then_id(tmp_path: Path) -> None:
+    osv = FakeOsv(
+        {("pytest", "9.0"): [["A-1"]], ("w", "3.0"): [["A-1"]], ("foo", "1.0"): [["B-2", "A-1"]]},
+        {i: _detail(i) for i in ("A-1", "B-2")},
+    )
+    _, out, _ = lock.report_vulnerabilities(root=_vuln_root(tmp_path), osv=osv)
+    assert [ln.split(" ")[:3] for ln in out.splitlines()[1:]] == [
+        ["requirements.backend.lock:", "foo==1.0", "A-1"],
+        ["requirements.backend.lock:", "foo==1.0", "B-2"],
+        ["requirements.whisper.lock:", "w==3.0", "A-1"],
+        ["requirements.dev.lock:", "pytest==9.0", "A-1"],
+    ]
+
+
+def test_osv_strings_are_escaped_and_cut(tmp_path: Path) -> None:
+    evil = "A%\nB" + "x" * 100
+    _, out, _ = lock.report_vulnerabilities(
+        root=_vuln_root(tmp_path), osv=FakeOsv({("foo", "1.0"): [[evil]]}, {})
+    )
+    assert len(out.splitlines()) == 2
+    assert "A%25%0AB" in out and "x" * 60 in out and "x" * 61 not in out
+    detail = _detail("A-1", severity="HIGH\n::error::x", aliases=("CVE-1\n::error::y",))
+    _, out, _ = lock.report_vulnerabilities(
+        root=_vuln_root(tmp_path), osv=FakeOsv({("foo", "1.0"): [["A-1"]]}, {"A-1": detail})
+    )
+    assert len(out.splitlines()) == 2 and "%0A::ERROR::X" in out and "%0A::error::y" in out
+
+
+def test_a_detail_url_percent_quotes_the_id(tmp_path: Path) -> None:
+    osv = FakeOsv({("foo", "1.0"): [["A/B ?x"]]}, {})
+    lock.report_vulnerabilities(root=_vuln_root(tmp_path), osv=osv)
+    assert osv.requests[-1][1] == "https://api.osv.dev/v1/vulns/A%2FB%20%3Fx"
+
+
+def _assert_skipped(result: tuple[int, str, str], reason: str) -> None:
+    code, out, err = result
+    assert (code, err) == (0, "") and "::error" not in out
+    assert out == (
+        f"::notice title=Vulnerability check skipped::OSV.dev could not be used ({reason}); "
+        "will retry on the next run\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("batch", "reason"),
+    [
+        (OSError("down"), "OSError"),
+        (TimeoutError("slow"), "TimeoutError"),
+        (500, "HTTP 500"),
+        (429, "HTTP 429"),
+        (404, "HTTP 404"),
+        (b"{not json", "invalid JSON (JSONDecodeError)"),
+        ({"results": []}, "results do not match the queries sent"),
+        ({"nope": 1}, "unexpected answer shape"),
+        (b"x" * 100, "answer is larger than 50 bytes"),
+    ],
+)
+def test_every_querybatch_failure_is_a_green_run_with_one_notice(
+    tmp_path: Path, batch: object, reason: str
+) -> None:
+    osv = FakeOsv(batch=batch)
+    result = lock.report_vulnerabilities(root=_vuln_root(tmp_path), osv=osv, max_body=50)
+    _assert_skipped(result, reason)
+    assert "BODY SECRET" not in result[1]
+
+
+def test_an_outage_in_a_later_chunk_discards_earlier_findings(tmp_path: Path) -> None:
+    inner = FakeOsv({("foo", "1.0"): [["A-1"]]}, {"A-1": _detail("A-1")})
+
+    def osv(method: str, url: str, body: bytes | None, timeout: float) -> tuple[int, bytes]:
+        if len(inner.batches) == 1:
+            raise OSError("down")
+        return inner(method, url, body, timeout)
+
+    _assert_skipped(lock.report_vulnerabilities(root=_vuln_root(tmp_path), osv=osv, batch_size=2), "OSError")
+    assert [m for m, _, _ in inner.requests] == ["POST"]
+
+
+def test_a_failing_pagination_request_is_an_outage(tmp_path: Path) -> None:
+    inner = FakeOsv({("foo", "1.0"): [["A-1"], ["B-2"]]}, {})
+
+    def osv(method: str, url: str, body: bytes | None, timeout: float) -> tuple[int, bytes]:
+        if body is not None and b"page_token" in body:
+            return 503, b""
+        return inner(method, url, body, timeout)
+
+    _assert_skipped(lock.report_vulnerabilities(root=_vuln_root(tmp_path), osv=osv), "HTTP 503")
+
+
+@pytest.mark.parametrize("missing", LOCK_FILES)
+def test_a_missing_lock_is_exit_two_and_nothing_is_sent(tmp_path: Path, missing: str) -> None:
+    root = _vuln_root(tmp_path)
+    (root / missing).unlink()
+    osv = FakeOsv()
+    code, out, err = lock.report_vulnerabilities(root=root, osv=osv)
+    assert (code, out) == (2, "") and missing in err and osv.requests == []
+
+
+def test_a_malformed_lock_is_exit_two_naming_the_file_and_nothing_is_sent(tmp_path: Path) -> None:
+    root = _vuln_root(tmp_path)
+    (root / "requirements.whisper.lock").write_text("w==1.0\n")
+    osv = FakeOsv()
+    code, out, err = lock.report_vulnerabilities(root=root, osv=osv)
+    assert (code, out) == (2, "") and "requirements.whisper.lock" in err and osv.requests == []
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [["backend"], ["--upgrade"], ["--upgrade-package", "x"], ["--check-installed", "f"], ["--report-outdated"]],
+)
+def test_report_vulnerabilities_takes_no_other_argument(
+    capsys: pytest.CaptureFixture[str], extra: list[str]
+) -> None:
+    osv = FakeOsv()
+    with pytest.raises(SystemExit) as stop:
+        lock.main(["--report-vulnerabilities", *extra], osv=osv)
+    assert stop.value.code == 2 and osv.requests == []
+    assert "--report" in capsys.readouterr().err
+
+
+def test_main_runs_the_mode_without_pip_or_platform_and_writes_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _vuln_root(tmp_path)
+    osv = FakeOsv({("foo", "1.0"): [["A-1"]]}, {"A-1": _detail("A-1")})
+    before = {f: (root / f).read_bytes() for f in LOCK_FILES}
+    code = lock.main(["--report-vulnerabilities"], root=root, osv=osv, platform=("win32", "", "", (3, 9)))
+    assert code == 1 and capsys.readouterr().out.startswith("::error title=Locked Python")
+    assert before == {f: (root / f).read_bytes() for f in LOCK_FILES}
+    assert sorted(p.name for p in root.iterdir()) == sorted(LOCK_FILES)
+
+
+def test_the_real_locks_parse_and_one_query_is_sent_per_distinct_pin() -> None:
+    osv = FakeOsv()
+    assert lock.main(["--report-vulnerabilities"], root=REPO_ROOT, osv=osv) == 0
+    pins = {
+        (n, v)
+        for _, name in lock.TARGETS.values()
+        for n, (v, _h) in lock.parse_lock((REPO_ROOT / name).read_text()).items()
+    }
+    assert len(pins) > 30
+    assert sum(len(b["queries"]) for b in osv.batches) == len(pins)  # type: ignore[misc,arg-type]
+
+
+def test_the_whole_mode_runs_through_the_fake_when_urlopen_is_forbidden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(*a: object, **k: object) -> None:
+        raise AssertionError("network used")
+
+    monkeypatch.setattr(lock.urllib.request, "urlopen", refuse)
+    assert lock.main(["--report-vulnerabilities"], root=_vuln_root(tmp_path), osv=FakeOsv()) == 0
+
+
+def test_the_default_osv_seam_posts_json_caps_the_body_and_maps_http_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    class Answer:
+        status = 200
+
+        def __init__(self, data: bytes = b"ok") -> None:
+            self.data = data
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *a: object) -> None:
+            return None
+
+        def read(self, n: int) -> bytes:
+            seen["read"] = n
+            return self.data[:n]
+
+    def fake_urlopen(request: Any, timeout: float) -> Answer:
+        seen.update(
+            method=request.get_method(), url=request.full_url, data=request.data,
+            ctype=request.get_header("Content-type"), timeout=timeout,
+        )
+        return Answer()
+
+    monkeypatch.setattr(lock.urllib.request, "urlopen", fake_urlopen)
+    assert lock.make_osv(4)("POST", "https://x/y", b"{}", 7.0) == (200, b"ok")
+    assert seen == {
+        "method": "POST", "url": "https://x/y", "data": b"{}", "ctype": "application/json",
+        "timeout": 7.0, "read": 5,
+    }
+    monkeypatch.setattr(lock.urllib.request, "urlopen", lambda r, timeout: Answer(b"123456"))
+    with pytest.raises(OSError, match="larger"):
+        lock.make_osv(4)("GET", "https://x/y", None, 7.0)
+
+    def http_error(request: object, timeout: float) -> Answer:
+        raise lock.urllib.error.HTTPError("https://x/y", 429, "slow", None, None)
+
+    monkeypatch.setattr(lock.urllib.request, "urlopen", http_error)
+    assert lock.make_osv()("GET", "https://x/y", None, 7.0) == (429, b"")

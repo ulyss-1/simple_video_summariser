@@ -5,7 +5,7 @@ set -u
 : "${MIN_MEM_GB:=12}"
 : "${MIN_DOCKER_VERSION:=25.0}"
 : "${MIN_COMPOSE_VERSION:=2.24.0}"
-# Literal copy of the runtime-stage FROM in ops/Dockerfile.backend; a plain
+# Literal copy of the last digest-pinned FROM (the `deps` stage) in ops/Dockerfile.backend; a plain
 # assignment so no ambient variable replaces it. tests/test_base_image_copies.py
 # fails until the two agree.
 probe_image="python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8"

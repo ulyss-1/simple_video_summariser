@@ -61,15 +61,47 @@ def _copy_sources(args: str) -> list[str]:
     return parts[:-1]
 
 
-def test_both_stages_are_python_3_14_slim() -> None:
+def _stage(name: str) -> list[tuple[str, str]]:
+    """The instructions of one build stage, its FROM first."""
+    steps = _instructions()
+    start = next(
+        i for i, (n, a) in enumerate(steps) if n == "FROM" and a.endswith(f" AS {name}")
+    )
+    end = next((i for i in range(start + 1, len(steps)) if steps[i][0] == "FROM"), len(steps))
+    return steps[start:end]
+
+
+def test_stages_are_builder_deps_and_runtime_with_runtime_last() -> None:
     froms = [args for name, args in _instructions() if name == "FROM"]
-    assert len(froms) == 2
-    # Digest-pinned (#249); the builder's venv runs in the runtime stage, so
-    # both stages must be the same interpreter build.
-    pins = [re.fullmatch(r"python:3\.14-slim@(sha256:[0-9a-f]{64})(?: AS builder)?", f) for f in froms]
-    assert all(pins), froms
-    assert pins[0] is not None and pins[1] is not None
+    assert len(froms) == 3
+    # Digest-pinned (#249); the builder's venv runs in the deps stage, so both
+    # pinned stages must be the same interpreter build.
+    pins = [
+        re.fullmatch(rf"python:3\.14-slim@(sha256:[0-9a-f]{{64}}) AS {name}", f)
+        for f, name in zip(froms[:2], ("builder", "deps"), strict=True)
+    ]
+    assert pins[0] is not None and pins[1] is not None, froms
     assert pins[0].group(1) == pins[1].group(1)
+    # The last stage is the default target of `docker build` (#135).
+    assert froms[2] == "deps AS runtime"
+
+
+def test_deps_stage_has_no_application_code() -> None:
+    deps = _stage("deps")
+    assert any(n == "WORKDIR" and a == "/app" for n, a in deps)
+    for name, args in deps:
+        if name in {"COPY", "ADD"}:
+            for source in _copy_sources(args):
+                assert not source.startswith(_APP_DIRS), source
+                assert source not in {"alembic.ini", ".", "./"}
+
+
+def test_runtime_stage_is_the_application_code_and_the_non_root_user() -> None:
+    runtime = _stage("runtime")
+    copies = [a for n, a in runtime if n == "COPY"]
+    assert len(copies) == 5
+    assert all(a.startswith("--chown=app:app ") for a in copies)
+    assert runtime[-1] == ("USER", "app")
 
 
 def test_requirements_are_copied_before_any_application_code() -> None:
@@ -126,10 +158,8 @@ def test_the_builder_never_copies_the_unlocked_requirements() -> None:
 
 
 def test_runtime_apt_packages_are_only_ffmpeg_and_curl() -> None:
-    steps = _instructions()
-    last_from = max(i for i, (n, _) in enumerate(steps) if n == "FROM")
     runtime_apt = [
-        a for n, a in steps[last_from:] if n == "RUN" and "apt-get install" in a
+        a for n, a in _stage("deps") if n == "RUN" and "apt-get install" in a
     ]
     assert len(runtime_apt) == 1
     assert "build-essential" not in runtime_apt[0]

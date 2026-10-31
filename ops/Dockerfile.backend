@@ -2,6 +2,11 @@
 # analyzer and (later) api; the services differ only by their command.
 # Build from the repo root:
 #   docker build -f ops/Dockerfile.backend -t ytdigest-backend:latest .
+# The `deps` stage holds everything except application code (#135).
+# ops/Dockerfile.whisper builds on it, so a code change never invalidates the
+# whisper install. Build it alone, as compose's build-only `deps` service does:
+#   docker build -f ops/Dockerfile.backend --target deps --provenance=false -t ytdigest-deps:latest .
+# The last stage stays the default target.
 
 # ---- builder ----
 FROM python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8 AS builder
@@ -20,8 +25,8 @@ RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip install --require-hashes --no-deps -r requirements.backend.lock && \
     /opt/venv/bin/pip check
 
-# ---- runtime ----
-FROM python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8
+# ---- deps: runtime base, no application code ----
+FROM python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8 AS deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg curl && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /opt/venv /opt/venv
@@ -31,6 +36,9 @@ ENV PATH=/opt/venv/bin:$PATH PYTHONUNBUFFERED=1 PYTHONPATH=/app
 RUN useradd -r -u 10001 -m app && \
     mkdir -p /data/audio && chown -R app:app /data
 WORKDIR /app
+
+# ---- runtime: deps plus application code (the default, last target) ----
+FROM deps AS runtime
 COPY --chown=app:app common/ ./common/
 COPY --chown=app:app adapters/ ./adapters/
 COPY --chown=app:app services/ ./services/

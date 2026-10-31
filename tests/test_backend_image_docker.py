@@ -22,7 +22,8 @@ from tests.docker_steps import Step, run_steps
 pytestmark = [pytest.mark.integration, pytest.mark.image]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-IMAGE = "ytdigest-backend:latest"
+# Throwaway tag (#135): a stack running on the same host owns ytdigest-backend:latest.
+IMAGE = f"ytdigest-t135-backend-{uuid.uuid4().hex[:8]}:latest"
 PASSWORD = "image-test-password"
 
 
@@ -58,12 +59,15 @@ def _steps(*commands: str) -> list[Step]:
 
 
 @pytest.fixture(scope="module", autouse=True)
-def image() -> str:
+def image() -> Iterator[str]:
     result = _docker(
         "build", "-f", "ops/Dockerfile.backend", "-t", IMAGE, ".", timeout=1800
     )
     assert result.returncode == 0, result.stderr[-4000:]
-    return IMAGE
+    try:
+        yield IMAGE
+    finally:
+        _docker("image", "rm", "-f", IMAGE)
 
 
 def test_runs_as_app_uid_10001() -> None:
@@ -194,14 +198,22 @@ Compose = Callable[..., subprocess.CompletedProcess[str]]
 
 
 @pytest.fixture
-def compose(monkeypatch: pytest.MonkeyPatch) -> Iterator[Compose]:
+def compose(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Compose]:
     """`docker compose` bound to a throwaway project; torn down with its volumes."""
     project = f"ytdigest-imgtest-{uuid.uuid4().hex[:8]}"
     monkeypatch.setenv("POSTGRES_PASSWORD", PASSWORD)
 
+    # compose.yml with the backend tag swapped for this module's throwaway one,
+    # so `migrate` runs the image built above and never a running stack's.
+    rewritten = tmp_path / "compose.yml"
+    rewritten.write_text(
+        (REPO_ROOT / "compose.yml").read_text().replace("ytdigest-backend:latest", IMAGE)
+    )
+
     def run(*args: str, timeout: int = 180) -> subprocess.CompletedProcess[str]:
         return _docker(
-            "compose", "-p", project, "-f", "compose.yml", *args, timeout=timeout
+            "compose", "-p", project, "--project-directory", str(REPO_ROOT),
+            "-f", str(rewritten), *args, timeout=timeout,
         )
 
     try:

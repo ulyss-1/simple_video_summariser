@@ -80,7 +80,8 @@ def test_compose_yml_defines_exactly_the_seven_stack_services() -> None:
         and not line.startswith("    ")
         and not line.lstrip().startswith("#")
     ]
-    assert sorted(service_headers) == sorted(f"{name}:" for name in SERVICES)
+    # Plus `deps`: build-only, behind a profile, never a container (#135).
+    assert sorted(service_headers) == sorted(f"{name}:" for name in (*SERVICES, "deps"))
     assert "metabase" not in COMPOSE_YML.read_text().lower()
 
 
@@ -100,9 +101,11 @@ def test_backend_services_share_the_backend_image_and_only_migrate_builds_it() -
         assert "build" not in _block(name)
         # A local-only tag: Compose must never try to pull it from a registry.
         assert "pull_policy: never" in _block(name)
-    assert "ops/Dockerfile.backend" not in COMPOSE_YML.read_text().replace(
-        "dockerfile: ops/Dockerfile.backend", "", 1
-    )
+    code = [
+        ln for ln in COMPOSE_YML.read_text().splitlines() if not ln.lstrip().startswith("#")
+    ]
+    # Only `migrate` and the build-only `deps` stage name the Dockerfile.
+    assert sum("ops/Dockerfile.backend" in ln for ln in code) == 2
 
 
 def test_transcriber_and_web_build_their_own_images() -> None:
@@ -114,21 +117,37 @@ def test_transcriber_and_web_build_their_own_images() -> None:
     assert "image: ytdigest-web:latest" in web
 
 
-def test_whisper_build_takes_the_backend_image_from_the_migrate_build() -> None:
-    # ops/Dockerfile.whisper is `FROM ytdigest-backend:latest`; naming that
-    # image as an additional context from `migrate` makes Compose build
-    # migrate first, so the base is never stale or missing.
+def test_whisper_build_takes_the_deps_image_from_the_build_only_deps_service() -> None:
+    # ops/Dockerfile.whisper is `FROM ytdigest-deps`; naming that image as an
+    # additional context from `deps` makes Compose build it first (#135).
     block = _block("transcriber")
     assert "additional_contexts:" in block
-    # The key is the image name without its tag: the tagged key is ignored
-    # by Compose 2.40 / BuildKit 0.26 (found on the first real build, #58).
-    assert 'ytdigest-backend: "service:migrate"' in block
+    # The key is the image name without its tag: a tagged key is ignored by
+    # Compose 2.40 / BuildKit 0.26 (found on the first real build, #58).
+    assert 'ytdigest-deps: "service:deps"' in block
     code = [ln for ln in block.splitlines() if not ln.lstrip().startswith("#")]
-    assert not any("ytdigest-backend:latest" in ln for ln in code)
-    assert (
-        "FROM ytdigest-backend:latest"
-        in (REPO_ROOT / "ops" / "Dockerfile.whisper").read_text()
-    )
+    assert not any("ytdigest-backend" in ln for ln in code)
+    froms = [
+        ln for ln in (REPO_ROOT / "ops" / "Dockerfile.whisper").read_text().splitlines()
+        if ln.startswith("FROM ")
+    ]
+    assert froms == ["FROM ytdigest-deps"]
+
+
+def test_deps_service_is_build_only() -> None:
+    block = _block("deps")
+    assert "dockerfile: ops/Dockerfile.backend" in block
+    assert "target: deps" in block
+    # Without it every rebuild changes the image digest and the whisper
+    # install is never CACHED (#135).
+    assert "provenance: false" in block
+    assert "image: ytdigest-deps:latest" in block
+    # scale 0 keeps it out of `up`: no container for it ever exists. A profile
+    # would make Compose reject the transcriber's `service:deps` context
+    # whenever the profile is not enabled (CI, `run --rm migrate`).
+    assert "scale: 0" in block
+    assert "profiles" not in block
+    assert "command" not in block and "depends_on" not in block
 
 
 @pytest.mark.parametrize(
