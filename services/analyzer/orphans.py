@@ -9,6 +9,11 @@ pass at startup and then one every ``interval_sec``.
 A pass lists up to ``limit`` rows of ``dead`` / ``done`` jobs and rows whose
 job was deleted (``job_id`` NULL: ``DELETE /videos/{id}``, #251) and, for each:
 
+Usage rule (#252): deleting the row of a ``dead`` job writes the usage stored on it
+to ``analyze_failed_usage`` first, in the same statement; a ``done`` job's usage is
+already on its ``analyses`` row and a row with ``job_id`` NULL has no video to
+attribute it to, so those two just go.
+
 * older than ``expired_after``: delete the row, no API call (Anthropic has
   expired the batch by then);
 * otherwise ``cancel_orphan_batch``: ``cancelled`` and ``not_cancellable``
@@ -52,14 +57,19 @@ class OrphanStore(Protocol):
 
 
 class PostgresOrphanStore:
-    def __init__(self, conn: psycopg.Connection[Any]) -> None:
+    """``model`` labels the failed-attempt record written for a ``dead`` job's row (#252)."""
+
+    def __init__(self, conn: psycopg.Connection[Any], model: str = "") -> None:
         self._conn = conn
+        self._model = model
 
     def list(self, limit: int, expired_after: timedelta) -> Sequence[OrphanBatch]:
         return llm_batches.list_orphans(self._conn, limit=limit, expired_after=expired_after)
 
     def delete(self, row: OrphanBatch) -> bool:
-        return llm_batches.delete_orphan(self._conn, row.job_id, row.step_key, row.batch_id)
+        return llm_batches.delete_orphan(
+            self._conn, row.job_id, row.step_key, row.batch_id, model=self._model
+        )
 
 
 @dataclass(slots=True)

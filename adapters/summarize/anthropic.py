@@ -508,7 +508,8 @@ class AnthropicSummarizer:
             if self._batch
             else self._sync(params)
         )
-        self._account(doc)
+        if not self._counted_per_batch():
+            self._account(doc)
         stop_reason = _stop_reason(doc)
         text = _reply_text(doc)
         usage = doc["usage"]
@@ -556,7 +557,35 @@ class AnthropicSummarizer:
             raise outcome
         return outcome
 
+    def _counted_per_batch(self) -> bool:
+        """Whether ``_run_batch`` already counted this call's usage (inside a job scope, #252)."""
+        return self._batch and self._scope is not None
+
     def _run_batch(
+        self,
+        method: str,
+        requests: Sequence[tuple[str, dict[str, Any]]],
+        step_key: str,
+    ) -> tuple[str, dict[str, dict[str, Any]]]:
+        """``_run_checkpointed``, plus the batch's usage counted once (#252).
+
+        Inside a job scope the usage of the batch's results is stored on its
+        checkpoint row the first time they are fetched. What the row holds,
+        which on a resume is what an earlier attempt stored, is what is counted
+        here; the results are not counted a second time by the callers.
+        """
+        batch_id, entries = self._run_checkpointed(method, requests, step_key)
+        scope = self._scope
+        if scope is not None:
+            fetched = Usage(calls=0)
+            for custom_id, _ in requests:
+                outcome = self._outcome(batch_id, entries.get(custom_id))
+                if isinstance(outcome, dict):
+                    fetched = self._sum_usage(fetched, self._doc_usage(outcome))
+            self._add_usage(scope.record_usage(step_key, fetched))
+        return batch_id, entries
+
+    def _run_checkpointed(
         self,
         method: str,
         requests: Sequence[tuple[str, dict[str, Any]]],
@@ -695,7 +724,8 @@ class AnthropicSummarizer:
         for job, (custom_id, _) in zip(jobs, requests, strict=True):
             outcome = self._outcome(batch_id, entries.get(custom_id))
             if isinstance(outcome, dict):
-                self._account(outcome)
+                if not self._counted_per_batch():
+                    self._account(outcome)
                 _logger.info(
                     "anthropic_call",
                     extra={
@@ -1056,17 +1086,10 @@ class AnthropicSummarizer:
         self._calls = 0
         self._cost = Fraction(0)
 
-    def _account(self, doc: dict[str, Any]) -> None:
-        usage = doc["usage"]
-        input_tokens = usage["input_tokens"]
-        output_tokens = usage["output_tokens"]
-        cache_write = _count(usage, "cache_creation_input_tokens") or 0
-        cache_read = _count(usage, "cache_read_input_tokens") or 0
-        self._input_tokens += input_tokens
-        self._output_tokens += output_tokens
-        self._cache_write_tokens += cache_write
-        self._cache_read_tokens += cache_read
-        self._calls += 1
+    def _cost_of(
+        self, input_tokens: int, output_tokens: int, cache_write: int, cache_read: int
+    ) -> Fraction | None:
+        """Exact cost of one response, or ``None`` when the model has no known price."""
         if self._price is None:
             if not self._warned_price:
                 self._warned_price = True
@@ -1074,7 +1097,7 @@ class AnthropicSummarizer:
                     "anthropic_price_unknown",
                     extra={"model": self.model, "detail": "cost_usd is None for this model"},
                 )
-            return
+            return None
         price_in, price_out = self._price
         cost = (
             input_tokens * price_in
@@ -1082,4 +1105,60 @@ class AnthropicSummarizer:
             + cache_write * price_in * _CACHE_WRITE_FACTOR
             + cache_read * price_in * _CACHE_READ_FACTOR
         ) / _MILLION
-        self._cost += cost * _BATCH_FACTOR if self._batch else cost
+        return cost * _BATCH_FACTOR if self._batch else cost
+
+    def _account(self, doc: dict[str, Any]) -> None:
+        usage, cost = self._doc_parts(doc)
+        self._add_usage(usage, exact_cost=cost)
+
+    def _doc_usage(self, doc: dict[str, Any]) -> Usage:
+        """The usage of one response as a one-call ``Usage``."""
+        return self._doc_parts(doc)[0]
+
+    def _doc_parts(self, doc: dict[str, Any]) -> tuple[Usage, Fraction | None]:
+        usage = doc["usage"]
+        input_tokens = usage["input_tokens"]
+        output_tokens = usage["output_tokens"]
+        cache_write = _count(usage, "cache_creation_input_tokens") or 0
+        cache_read = _count(usage, "cache_read_input_tokens") or 0
+        cost = self._cost_of(input_tokens, output_tokens, cache_write, cache_read)
+        return (
+            Usage(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cache_read_tokens=cache_read,
+                cache_write_tokens=cache_write,
+                calls=1,
+                cost_usd=None if cost is None else float(cost),
+            ),
+            cost,
+        )
+
+    @staticmethod
+    def _sum_usage(a: Usage, b: Usage) -> Usage:
+        cost = (
+            b.cost_usd
+            if a.calls == 0
+            else None
+            if a.cost_usd is None or b.cost_usd is None
+            else a.cost_usd + b.cost_usd
+        )
+        return Usage(
+            input_tokens=a.input_tokens + b.input_tokens,
+            output_tokens=a.output_tokens + b.output_tokens,
+            cache_read_tokens=a.cache_read_tokens + b.cache_read_tokens,
+            cache_write_tokens=a.cache_write_tokens + b.cache_write_tokens,
+            calls=a.calls + b.calls,
+            cost_usd=cost,
+        )
+
+    def _add_usage(self, usage: Usage, *, exact_cost: Fraction | None = None) -> None:
+        self._input_tokens += usage.input_tokens
+        self._output_tokens += usage.output_tokens
+        self._cache_write_tokens += usage.cache_write_tokens
+        self._cache_read_tokens += usage.cache_read_tokens
+        self._calls += usage.calls
+        if exact_cost is not None:
+            self._cost += exact_cost
+        elif usage.cost_usd is not None and self._price is not None:
+            self._cost += Fraction(usage.cost_usd)

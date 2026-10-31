@@ -480,7 +480,19 @@ class JobScope(Protocol):
         """Store a batch for ``step_key``; the stored row wins if there already is one."""
         ...
 
-    def forget(self, step_key: str) -> None: ...
+    def forget(self, step_key: str) -> None:
+        """Delete the step's row. Usage stored on it that no attempt counted goes to a failed-attempt record (#252)."""
+        ...
+
+    def record_usage(self, step_key: str, usage: Usage) -> Usage:
+        """Store the usage of the step's batch when its results are first fetched (#252).
+
+        The first stored value wins: if the row already holds usage (an earlier
+        attempt fetched the results), that stored value is returned and ``usage``
+        is dropped. The adapter counts the returned value, never the results a
+        second time. Without a row, returns ``usage``.
+        """
+        ...
 
 
 @runtime_checkable

@@ -15,7 +15,7 @@ import pytest
 
 from adapters.summarize.anthropic import AnthropicSummarizer
 from common.errors import Cancelled, LLMUnavailableError
-from common.models import BatchCheckpoint
+from common.models import BatchCheckpoint, Usage
 from tests.adapters.summarize.test_anthropic import (
     API,
     BATCH_ID,
@@ -45,6 +45,7 @@ class FakeScope:
         self.job_id = 1
         self.time = time
         self.rows: dict[str, BatchCheckpoint] = {}
+        self.usage: dict[str, Usage] = {}
         self.cancel = False
 
     def cancelled(self) -> bool:
@@ -63,6 +64,10 @@ class FakeScope:
 
     def forget(self, step_key: str) -> None:
         self.rows.pop(step_key, None)
+        self.usage.pop(step_key, None)
+
+    def record_usage(self, step_key: str, usage: Usage) -> Usage:
+        return self.usage.setdefault(step_key, usage)
 
 
 class RacingScope(FakeScope):
