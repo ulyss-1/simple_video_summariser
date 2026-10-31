@@ -221,7 +221,7 @@ containers need:
 | Destination | For |
 |---|---|
 | `www.youtube.com`, `*.googlevideo.com` | video metadata and audio (yt-dlp) |
-| `huggingface.co` + its CDN | Whisper models |
+| `huggingface.co`, `cas-bridge.xethub.hf.co`, `us.aws.cdn.hf.co` | Whisper models (the Xet CDN; the old `cdn-lfs.huggingface.co` is gone) |
 | `pypi.org`, `files.pythonhosted.org` | image builds |
 | `deb.debian.org` | image builds (Debian base) |
 | `registry.npmjs.org` | web image build |
