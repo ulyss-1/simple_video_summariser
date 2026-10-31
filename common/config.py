@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     # Summarizer. The API key is optional here: api and planner share
     # SUMMARIZER but never receive the key (11.4); the Anthropic adapter
     # checks for it.
-    SUMMARIZER: Literal["ollama", "anthropic"] = "ollama"
+    SUMMARIZER: Literal["ollama", "anthropic", "free"] = "ollama"
     OLLAMA_MODEL: str = "qwen3.5:4b"
     OLLAMA_HOST: str = "http://host.docker.internal:11434"
     OLLAMA_NUM_CTX: PositiveInt = 8192
@@ -87,6 +87,17 @@ class Settings(BaseSettings):
     OLLAMA_OUTPUT_RESERVE_TOKENS: PositiveInt = 2048
     # CPU inference on a 4B model is slow (architecture.md 16.7).
     OLLAMA_TIMEOUT_SEC: PositiveInt = 900
+    # SUMMARIZER=free (#364): an ordered list of free-tier providers, read from
+    # this TOML file (default: the one shipped in adapters/summarize/). Each
+    # provider names one of the key settings below; the analyzer alone gets them.
+    FREE_LLM_PROVIDERS_FILE: Path | None = None
+    FREE_LLM_TIMEOUT_SEC: PositiveInt = 120
+    # How long a provider that rate-limited or failed is skipped.
+    FREE_LLM_COOLDOWN_SEC: PositiveInt = 120
+    GROQ_API_KEY: SecretStr | None = None
+    GEMINI_API_KEY: SecretStr | None = None
+    OPENROUTER_API_KEY: SecretStr | None = None
+    CEREBRAS_API_KEY: SecretStr | None = None
     ANTHROPIC_API_KEY: SecretStr | None = None
     ANTHROPIC_API_KEY_FILE: Path | None = None
     ANTHROPIC_MODEL: str = "claude-haiku-4-5"
@@ -334,13 +345,20 @@ def _sanitised(exc: ValidationError) -> ValidationError:
     return ValidationError.from_exception_data(exc.title, line_errors, hide_input=True)
 
 
+#: ``analyses.model`` of SUMMARIZER=free: the serving provider changes call to call,
+#: so the recorded model is this fixed label and the provider is logged (#364).
+FREE_TIER_MODEL = "free-tier"
+
+
 def summarizer_model(settings: Settings) -> str:
-    """The model the configured summarizer uses: ``OLLAMA_MODEL`` or ``ANTHROPIC_MODEL``.
+    """The model the configured summarizer uses: ``OLLAMA_MODEL``, ``ANTHROPIC_MODEL`` or ``FREE_TIER_MODEL``.
 
     The display layer prefers the analysis made with this model and
     ``PROMPT_VERSION`` (#146), so eval or re-analysis runs with another model do
     not replace the production one.
     """
+    if settings.SUMMARIZER == "free":
+        return FREE_TIER_MODEL
     return settings.OLLAMA_MODEL if settings.SUMMARIZER == "ollama" else settings.ANTHROPIC_MODEL
 
 

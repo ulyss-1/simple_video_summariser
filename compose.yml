@@ -132,6 +132,11 @@ services:
       # The only service that gets the key. From .env or the deploy shell's
       # environment; a Docker secret file is #136.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # SUMMARIZER=free (#364): the free-tier keys, also analyzer only.
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-}
     depends_on:
       migrate: {condition: service_completed_successfully}
     extra_hosts: ["host.docker.internal:host-gateway"]   # host Ollama (11.5)

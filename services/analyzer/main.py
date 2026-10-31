@@ -75,7 +75,7 @@ from pydantic import ValidationError
 
 from adapters.summarize.factory import build_summarizer
 from adapters.summarize.ollama import GetTransport, probe_ollama, urllib_get_transport
-from common.config import Settings, get_settings
+from common.config import Settings, get_settings, summarizer_model
 from common.db import connect as default_connect
 from common.errors import BugError, Defer
 from common.logging import configure_logging
@@ -215,7 +215,7 @@ class _LazyQueue:
 
 
 def _model_name(settings: Settings) -> str:
-    return settings.OLLAMA_MODEL if settings.SUMMARIZER == "ollama" else settings.ANTHROPIC_MODEL
+    return summarizer_model(settings)
 
 
 def _report_ollama(settings: Settings, transport: GetTransport) -> None:
