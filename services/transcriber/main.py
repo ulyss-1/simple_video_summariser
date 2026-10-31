@@ -152,10 +152,13 @@ class LazyTranscriber:
         *,
         language: str | None = None,
         on_progress: Callable[[float], None] | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> TranscriptResult:
         if self._transcriber is None:
             self._transcriber = self._factory()
-        return self._transcriber.transcribe(audio, language=language, on_progress=on_progress)
+        return self._transcriber.transcribe(
+            audio, language=language, on_progress=on_progress, cancelled=cancelled
+        )
 
 
 # -- queues and their connections ---------------------------------------------

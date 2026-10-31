@@ -11,20 +11,58 @@ calls on the same instance reuse it.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+import json
+import os
+import queue
+import select
+import signal
+import subprocess
+import sys
+import threading
+import time
+from collections.abc import Callable, Iterator, Sequence
 from importlib import metadata
 from time import perf_counter
 from typing import Any
 
+import structlog
+
 from common.config import get_settings
-from common.errors import ToolFailureError, TransientNetworkError
+from common.errors import (
+    BugError,
+    Cancelled,
+    ResourceError,
+    ToolFailureError,
+    TransientNetworkError,
+)
 from common.models import AudioRef, Segment, TranscriptResult
+from common.safe_url import redact
+
+_log = structlog.get_logger(__name__)
 
 #: Decoding options fixed by D3 - not configurable per the issue's AC.
 _BEAM_SIZE = 5
 _VAD_FILTER = True
 
 _REQUIREMENTS_FILE = "requirements.whisper.txt"
+
+#: The module the parent runs as the child (issue #324).
+CHILD_MODULE = "adapters.transcription.faster_whisper_child"
+DEFAULT_POLL_INTERVAL_SEC = 0.5
+DEFAULT_REAP_TIMEOUT_SEC = 5.0
+DEFAULT_PARENT_WATCH_SEC = 2.0
+#: How much of the child's stderr is kept for error messages.
+STDERR_TAIL_BYTES = 2048
+
+#: Child -> parent message types (JSON lines on the reply pipe).
+MSG_PROGRESS = "progress"
+MSG_DONE = "done"
+MSG_ERROR = "error"
+#: ``error`` kinds, each mapped to the class the in-process path raises.
+KIND_TOOL = "tool"
+KIND_NETWORK = "network"
+KIND_MEMORY = "memory"
+KIND_UNEXPECTED = "unexpected"
 
 #: The codes Whisper accepts (faster-whisper rejects anything else, including
 #: region-tagged ones like ``en-US``).
@@ -158,7 +196,14 @@ class FasterWhisperTranscriber:
         model: str | None = None,
         compute_type: str | None = None,
         threads: int | None = None,
+        *,
+        child_command: Sequence[str] | None = None,
+        poll_interval: float = DEFAULT_POLL_INTERVAL_SEC,
+        reap_timeout: float = DEFAULT_REAP_TIMEOUT_SEC,
+        parent_watch_sec: float = DEFAULT_PARENT_WATCH_SEC,
     ) -> None:
+        if poll_interval <= 0:
+            raise ValueError(f"poll_interval must be > 0, got {poll_interval}")
         # Any explicit arg is used as-is; only a missing one reads settings,
         # so importing/constructing this class never forces get_settings()
         # to validate the environment (common/config.py's own contract).
@@ -175,6 +220,15 @@ class FasterWhisperTranscriber:
         self._threads = threads
         self._loaded_model: Any = None
         self._engine_version: str = "unknown"
+        self._child_command = (
+            list(child_command)
+            if child_command is not None
+            else [sys.executable, "-m", CHILD_MODULE]
+        )
+        self._poll_interval = poll_interval
+        self._reap_timeout = reap_timeout
+        self._parent_watch_sec = parent_watch_sec
+        self._child_slot = threading.Lock()  # at most one child at a time
 
     def transcribe(
         self,
@@ -182,6 +236,58 @@ class FasterWhisperTranscriber:
         *,
         language: str | None = None,
         on_progress: Callable[[float], None] | None = None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> TranscriptResult:
+        """Speech-to-text for ``audio``.
+
+        Without ``cancelled`` the work runs in this process and the model is
+        cached on the instance (the CLI path). With it the work runs in a child
+        process that is killed when ``cancelled()`` turns true (``Cancelled``
+        is raised, issue #324); the model then lives only in the child.
+        ``on_progress`` is called on the calling thread in both modes.
+        """
+        if cancelled is None:
+            return self._transcribe_in_process(audio, language, on_progress)
+        return self._transcribe_in_child(audio, language, on_progress, cancelled)
+
+    def _transcribe_in_child(
+        self,
+        audio: AudioRef,
+        language: str | None,
+        on_progress: Callable[[float], None] | None,
+        cancelled: Callable[[], bool],
+    ) -> TranscriptResult:
+        if not self._child_slot.acquire(blocking=False):
+            raise BugError("a faster-whisper child is already running in this process")
+        try:
+            request = {
+                "model": self._model_name,
+                "compute_type": self._compute_type,
+                "threads": self._threads,
+                "audio": {
+                    "rel_path": audio.rel_path,
+                    "bytes": audio.bytes,
+                    "duration_sec": audio.duration_sec,
+                },
+                "language": language,
+                "parent_watch_sec": self._parent_watch_sec,
+            }
+            return _ChildRun(
+                self._child_command,
+                request,
+                on_progress=on_progress,
+                cancelled=cancelled,
+                poll_interval=self._poll_interval,
+                reap_timeout=self._reap_timeout,
+            ).run()
+        finally:
+            self._child_slot.release()
+
+    def _transcribe_in_process(
+        self,
+        audio: AudioRef,
+        language: str | None,
+        on_progress: Callable[[float], None] | None,
     ) -> TranscriptResult:
         model, engine_version, load_sec = self._ensure_model()
         language = whisper_language(language)
@@ -319,3 +425,280 @@ def _engine_version(module: Any) -> str:
         return metadata.version("faster-whisper")
     except metadata.PackageNotFoundError:
         return "unknown"
+
+
+# -- the child process (issue #324) -------------------------------------------
+
+
+def _result_from_done(message: dict[str, Any]) -> TranscriptResult:
+    try:
+        segments = tuple(
+            Segment(start=float(s["start"]), end=float(s["end"]), text=str(s["text"]))
+            for s in message["segments"]
+        )
+        language = message["language"]
+        engine_meta = message["engine_meta"]
+        if not isinstance(language, str) or not isinstance(engine_meta, dict):
+            raise TypeError("language or engine_meta has the wrong type")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ToolFailureError(f"faster-whisper child sent a bad 'done' message: {exc!r}") from exc
+    return TranscriptResult(segments=segments, language=language, engine_meta=engine_meta)
+
+
+class _ChildRun:
+    """One child process: spawn, relay its messages, and never leave it running.
+
+    Everything the child sends comes through a dedicated pipe (``reply_fd`` in
+    the request), so library output on its stdout/stderr cannot corrupt the
+    protocol. Two daemon threads only move bytes (the reply pipe into a queue,
+    stderr into a bounded tail); every decision, ``on_progress`` and
+    ``cancelled`` included, runs on the calling thread.
+    """
+
+    def __init__(
+        self,
+        command: Sequence[str],
+        request: dict[str, Any],
+        *,
+        on_progress: Callable[[float], None] | None,
+        cancelled: Callable[[], bool],
+        poll_interval: float,
+        reap_timeout: float,
+    ) -> None:
+        self._command = list(command)
+        self._request = request
+        self._on_progress = on_progress
+        self._cancelled = cancelled
+        self._poll_interval = poll_interval
+        self._reap_timeout = reap_timeout
+        self._messages: queue.Queue[bytes | None] = queue.Queue()
+        self._stop_reader = threading.Event()
+        self._stderr_tail = bytearray()
+        self._tail_lock = threading.Lock()
+        self._threads: list[threading.Thread] = []
+
+    def run(self) -> TranscriptResult:
+        read_fd, write_fd = os.pipe()
+        try:
+            proc = subprocess.Popen(
+                self._command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                pass_fds=(write_fd,),
+                start_new_session=True,  # never fork: the parent has threads and DB connections
+            )
+        except OSError as exc:
+            os.close(read_fd)
+            raise ToolFailureError(f"could not start the faster-whisper child: {exc}") from exc
+        finally:
+            os.close(write_fd)  # pass_fds keeps the same number in the child
+        try:
+            self._start_threads(proc, read_fd)
+            self._send_request(proc, write_fd)
+            return self._relay(proc)
+        finally:
+            self._finish(proc, read_fd)
+
+    # -- plumbing ------------------------------------------------------------
+
+    def _send_request(self, proc: subprocess.Popen[bytes], reply_fd: int) -> None:
+        assert proc.stdin is not None
+        line = json.dumps({**self._request, "reply_fd": reply_fd}) + "\n"
+        try:
+            proc.stdin.write(line.encode())
+            proc.stdin.flush()
+        except OSError:
+            pass  # the child is already gone; the relay reports how it ended
+
+    def _start_threads(self, proc: subprocess.Popen[bytes], read_fd: int) -> None:
+        for target, args in ((self._read_replies, (read_fd,)), (self._drain_stderr, (proc,))):
+            thread = threading.Thread(target=target, args=args, daemon=True)
+            thread.start()
+            self._threads.append(thread)
+
+    def _read_replies(self, read_fd: int) -> None:
+        buffer = b""
+        try:
+            while True:
+                ready, _, _ = select.select([read_fd], [], [], 0.05)
+                if not ready:
+                    if self._stop_reader.is_set():
+                        break
+                    continue
+                data = os.read(read_fd, 65536)
+                if not data:
+                    break
+                buffer += data
+                *lines, buffer = buffer.split(b"\n")
+                for line in lines:
+                    self._messages.put(line)
+        except (OSError, ValueError):
+            pass
+        if buffer:
+            self._messages.put(buffer)  # an unterminated last line is malformed
+        self._messages.put(None)
+
+    def _drain_stderr(self, proc: subprocess.Popen[bytes]) -> None:
+        stream = proc.stderr
+        assert stream is not None
+        try:
+            while chunk := os.read(stream.fileno(), 4096):
+                with self._tail_lock:
+                    self._stderr_tail += chunk
+                    del self._stderr_tail[:-STDERR_TAIL_BYTES]
+        except (OSError, ValueError):
+            pass
+
+    def _tail(self) -> str:
+        with self._tail_lock:
+            text = bytes(self._stderr_tail).decode("utf-8", "replace").strip()
+        return redact(text)
+
+    # -- the protocol --------------------------------------------------------
+
+    def _relay(self, proc: subprocess.Popen[bytes]) -> TranscriptResult:
+        result: TranscriptResult | None = None
+        exit_deadline: float | None = None
+        while True:
+            try:
+                raw = self._messages.get(timeout=self._poll_interval)
+            except queue.Empty:
+                if result is None and self._cancelled():
+                    late = self._take_done()
+                    if late is not None:
+                        return late  # finished in the same slice as the cancel
+                    raise Cancelled() from None
+                if proc.poll() is not None:
+                    self._stop_reader.set()  # collect what is left, then see EOF
+                elif result is not None:
+                    exit_deadline = exit_deadline or time.monotonic() + self._reap_timeout
+                    if time.monotonic() >= exit_deadline:
+                        _log.warning("faster-whisper child sent 'done' but did not exit")
+                        return result
+                continue
+            if raw is None:
+                break
+            message = self._parse(raw)
+            if result is not None:
+                raise ToolFailureError("faster-whisper child sent a message after 'done'")
+            kind = message.get("type")
+            if kind == MSG_PROGRESS:
+                self._progress(message)
+            elif kind == MSG_DONE:
+                result = _result_from_done(message)
+            elif kind == MSG_ERROR:
+                raise self._error_from(message)
+            else:
+                raise ToolFailureError(f"faster-whisper child sent an unknown message: {kind!r}")
+        if result is not None:
+            return result
+        raise self._death(proc)
+
+    def _take_done(self) -> TranscriptResult | None:
+        """A complete ``done`` the child sent before now, if any.
+
+        The reader is told to stop and joined first: it exits only once the pipe
+        is empty, so whatever the child had written is in the queue by then.
+        """
+        self._stop_reader.set()
+        self._threads[0].join(timeout=1.0)
+        while True:
+            try:
+                raw = self._messages.get_nowait()
+            except queue.Empty:
+                return None
+            if raw is None:
+                return None
+            message = self._parse(raw)
+            if message.get("type") == MSG_DONE:
+                return _result_from_done(message)
+
+    @staticmethod
+    def _parse(raw: bytes) -> dict[str, Any]:
+        try:
+            message = json.loads(raw)
+        except ValueError as exc:
+            raise ToolFailureError(
+                f"faster-whisper child sent a malformed line: {raw[:80]!r}"
+            ) from exc
+        if not isinstance(message, dict):
+            raise ToolFailureError(f"faster-whisper child sent a non-object line: {raw[:80]!r}")
+        return message
+
+    def _progress(self, message: dict[str, Any]) -> None:
+        done_sec = message.get("done_sec")
+        if isinstance(done_sec, bool) or not isinstance(done_sec, (int, float)):
+            raise ToolFailureError("faster-whisper child sent a 'progress' without done_sec")
+        if self._on_progress is not None:
+            self._on_progress(float(done_sec))
+        if self._cancelled():
+            raise Cancelled()
+
+    @staticmethod
+    def _error_from(message: dict[str, Any]) -> Exception:
+        kind = message.get("kind")
+        text = message.get("message")
+        if not isinstance(text, str):
+            return ToolFailureError("faster-whisper child sent an 'error' without a message")
+        text = redact(text)
+        if kind == KIND_NETWORK:
+            return TransientNetworkError(text)
+        if kind == KIND_MEMORY:
+            return ResourceError(text)
+        if kind == KIND_TOOL:
+            return ToolFailureError(text)
+        if kind == KIND_UNEXPECTED:
+            return BugError(text)
+        return ToolFailureError(f"faster-whisper child sent an unknown error kind {kind!r}: {text}")
+
+    def _death(self, proc: subprocess.Popen[bytes]) -> Exception:
+        """The child ended without a final message, and not by our kill."""
+        try:
+            code = proc.wait(timeout=self._reap_timeout)
+        except subprocess.TimeoutExpired:
+            return ToolFailureError("faster-whisper child closed its channel but did not exit")
+        tail = self._tail()
+        detail = f"; stderr: {tail}" if tail else ""
+        if code == -signal.SIGKILL:
+            return ResourceError(
+                "faster-whisper child was killed (SIGKILL), probably out of memory" + detail
+            )
+        if code < 0:
+            name = signal.Signals(-code).name
+            return ToolFailureError(f"faster-whisper child died of {name}{detail}")
+        if code == 0:
+            return ToolFailureError(f"faster-whisper child exited 0 without a result{detail}")
+        return ToolFailureError(f"faster-whisper child exited with status {code}{detail}")
+
+    # -- cleanup -------------------------------------------------------------
+
+    def _finish(self, proc: subprocess.Popen[bytes], read_fd: int) -> None:
+        """Kill the child's whole group, reap it, stop the helper threads."""
+        try:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                proc.wait(timeout=self._reap_timeout)
+            except subprocess.TimeoutExpired:
+                _log.warning("faster-whisper child did not die in time; giving up its pipes")
+                for pipe in (proc.stdin, proc.stderr):
+                    if pipe is not None:
+                        pipe.close()
+                proc.wait()
+        finally:
+            self._stop_reader.set()
+            for thread in self._threads:
+                thread.join(timeout=self._reap_timeout)
+            for pipe in (proc.stdin, proc.stderr):
+                if pipe is not None:
+                    try:
+                        pipe.close()
+                    except OSError:
+                        pass
+            try:
+                os.close(read_fd)
+            except OSError:
+                pass

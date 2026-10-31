@@ -79,6 +79,7 @@ class FakeTranscriber:
         *,
         language: str | None = None,
         on_progress: Callable[[float], None] | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> TranscriptResult:
         self.calls += 1
         if isinstance(self.outcome, BaseException):
