@@ -17,7 +17,7 @@
 FROM denoland/deno:bin-2.9.8@sha256:b507583d3c68ba69f3ed2ce5969ae5b8b70f43421c781279c7aea06435263543 AS deno
 
 # ---- builder ----
-FROM python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8 AS builder
+FROM python:3.14-slim@sha256:cd89c30eda26ee911a4611b18680086e0ea42e6f5f8cbe653d07fa7958c9cec8 AS builder
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential && rm -rf /var/lib/apt/lists/*
@@ -34,7 +34,7 @@ RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip check
 
 # ---- deps: runtime base, no application code ----
-FROM python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8 AS deps
+FROM python:3.14-slim@sha256:cd89c30eda26ee911a4611b18680086e0ea42e6f5f8cbe653d07fa7958c9cec8 AS deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg curl && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /opt/venv /opt/venv
