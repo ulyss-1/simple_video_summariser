@@ -1341,7 +1341,7 @@ web/src/
   transcript, shows an `Estimated analysis cost` section from
   `GET /videos/{id}/analysis-estimate`: one row per model, each `estimated`
   (flagged as an estimate in USD), `unknown` (with a reason sentence) or `free`;
-  the page renders the typed state and computes nothing (design-system 7.15).
+  the page renders the typed state and computes nothing (design-system 7.7).
 - **Types generated from OpenAPI** at build time; a backend contract change
   fails the frontend build rather than surfacing at runtime (D12).
 - **Channel catalog (#242).** `/channels/add` registers a channel

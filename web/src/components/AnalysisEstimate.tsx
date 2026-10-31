@@ -5,11 +5,10 @@ import {
   type ModelEstimateData,
 } from "../hooks/useAnalysisEstimate";
 import { formatCost } from "../lib/compare";
+import { Section } from "./AnalysisView";
 
 /** The id the Re-analyse button points `aria-describedby` at. */
 export const ESTIMATE_BODY_ID = "analysis-estimate-body";
-
-const TITLE_ID = "analysis-estimate-title";
 
 const REASONS: Record<string, string> = {
   no_transcript: "No transcript yet",
@@ -63,8 +62,7 @@ export function AnalysisEstimate({
 }) {
   const data = query.data;
   return (
-    <section aria-labelledby={TITLE_ID}>
-      <h2 id={TITLE_ID}>Estimated analysis cost</h2>
+    <Section title="Estimated analysis cost">
       <div id={ESTIMATE_BODY_ID}>
         {data !== undefined ? (
           <ul>
@@ -91,6 +89,6 @@ export function AnalysisEstimate({
           <p role="status">Loading cost estimate…</p>
         )}
       </div>
-    </section>
+    </Section>
   );
 }

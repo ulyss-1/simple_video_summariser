@@ -52,12 +52,18 @@ def _job(
 
 
 def _analysis(
-    conn: psycopg.Connection[Any], video_id: str, transcript_id: int, cost: str | None
+    conn: psycopg.Connection[Any],
+    video_id: str,
+    transcript_id: int,
+    cost: str | None,
+    *,
+    hour: int = 1,
 ) -> None:
     conn.execute(
         "INSERT INTO analyses (video_id, transcript_id, chunk_strategy, model, prompt_version,"
-        " tldr, cost_usd) VALUES (%s, %s, 's', 'm', %s, 't', %s)",
-        (video_id, transcript_id, VERSION, cost),
+        " tldr, cost_usd, created_at)"
+        " VALUES (%s, %s, 's', 'm', %s, 't', %s, make_timestamptz(2026, 1, 1, %s, 0, 0, 'UTC'))",
+        (video_id, transcript_id, VERSION, cost, hour),
     )
 
 
@@ -92,6 +98,8 @@ def test_committed_spend_is_summed_to_the_cent(conn: psycopg.Connection[Any]) ->
     done_t = _transcript(conn, "done0000001", text="x" * 1000)
     done_job = _job(conn, "done0000001", "done")
     _analysis(conn, "done0000001", done_t, "0.0123")
+    # a later interactive Re-analyse of the same video is not sweep spend
+    _analysis(conn, "done0000001", done_t, "0.6", hour=5)
     # pending job, no analysis yet: its estimate, 10,000 chars = 0.02
     _video(conn, "pend0000001")
     _transcript(conn, "pend0000001", text="y" * 10_000)
@@ -303,3 +311,39 @@ def test_reaching_the_budget_warns_once_and_raising_it_enqueues_the_rest(
     assert run(0.05) == 0  # nothing more fits, the two enqueued jobs are untouched
     assert run(0.07) == 1  # raising the setting enqueues the rest
     assert conn.execute("SELECT count(*) FROM jobs").fetchone() == (3,)
+
+
+def test_with_a_fake_queue_the_warning_has_its_fields_and_enqueue_is_called_for_the_plan(
+    conn: psycopg.Connection[Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    for i in range(3):
+        _cand(conn, f"c000000000{i}", 10_000, i)
+
+    class Recording:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, int]] = []
+
+        def enqueue(self, kind: str, video_id: str, **kwargs: Any) -> int | None:
+            self.calls.append((kind, video_id, kwargs["priority"]))
+            return len(self.calls)
+
+    plan = _plan(conn)
+    queue = Recording()
+    with caplog.at_level(logging.INFO, logger="services.planner.sweep"):
+        enqueued = run_reanalysis_sweep(
+            conn,
+            queue,  # type: ignore[arg-type]
+            prompt_version=VERSION,
+            summarizer_name="anthropic",
+            max_usd_anthropic=0.05,
+            median=MEDIAN,
+        )
+
+    assert enqueued == 2
+    assert queue.calls == [("analyze", v, REANALYSIS_PRIORITY) for v in plan.video_ids]
+    (warning,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert {k: warning.__dict__[k] for k in ("reason", "budget_usd", "unenqueued")} == {
+        "reason": "usd",
+        "budget_usd": 0.05,
+        "unenqueued": 1,
+    }

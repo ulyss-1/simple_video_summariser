@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { components } from "../api";
 import { api, rethrowHttp } from "../api";
 
@@ -80,12 +80,16 @@ async function fetchEstimate(
  * GET /api/videos/{id}/analysis-estimate: the estimated USD cost of analysing the
  * video, per model. Pass the id only after `parseVideoId`; `null` makes no
  * request. Keyed under `['video', id, ...]`, so the invalidation that follows a
- * re-analysis refreshes it with the video. No polling.
+ * re-analysis refreshes it with the video. `latestAnalysisAt` is part of the key:
+ * a finished analysis records a new cost sample, and the video poll (#50) is what
+ * sees it, so the estimate is asked again then. The previous figure stays on
+ * screen meanwhile. No polling of its own.
  */
-export function useAnalysisEstimate(videoId: string | null) {
+export function useAnalysisEstimate(videoId: string | null, latestAnalysisAt: string | null = null) {
   return useQuery({
-    queryKey: ["video", videoId, "analysis-estimate"],
+    queryKey: ["video", videoId, "analysis-estimate", latestAnalysisAt],
     queryFn: ({ signal }) => fetchEstimate(videoId as string, signal),
     enabled: videoId !== null,
+    placeholderData: keepPreviousData,
   });
 }

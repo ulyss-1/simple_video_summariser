@@ -357,4 +357,56 @@ describe("estimated analysis cost (#153)", () => {
     ).toBeNull();
     expect(estimateCalls).toBe(0);
   });
+
+  it("asks again when the video's latest analysis changes (a finished re-analysis, seen by the poll)", async () => {
+    let finished = false;
+    const seenKeys: string[] = [];
+    estimateCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input), "http://localhost");
+        if (url.pathname.endsWith("/analysis-estimate")) {
+          estimateCalls += 1;
+          seenKeys.push(finished ? "after" : "before");
+          return Promise.resolve(
+            json(
+              estimate([
+                estimated({ cost_usd: finished ? 0.03 : 0.0227 }),
+              ]),
+            ),
+          );
+        }
+        if (url.pathname.endsWith("/analyses"))
+          return Promise.resolve(
+            json({ items: [], total: 0, offset: 0, limit: 1 }),
+          );
+        if (init?.method === "POST") {
+          finished = true;
+          return Promise.resolve(json({ job_id: 1 }, 202));
+        }
+        return Promise.resolve(
+          json(
+            video({
+              latest_analysis_at: finished ? "2026-10-02T00:00:00Z" : null,
+            }),
+          ),
+        );
+      }),
+    );
+    await mount();
+    const g = await group();
+    await within(g).findByText(
+      "claude-haiku-4-5: about $0.0227 (estimate, USD)",
+    );
+
+    await user().click(screen.getByRole("button", { name: "Re-analyse" }));
+
+    expect(
+      await within(g).findByText(
+        "claude-haiku-4-5: about $0.0300 (estimate, USD)",
+      ),
+    ).toBeTruthy();
+    expect(seenKeys).toContain("after");
+  });
 });

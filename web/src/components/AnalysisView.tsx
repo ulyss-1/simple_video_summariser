@@ -9,7 +9,8 @@ function utcIso(value: string): string {
   return Number.isNaN(d.getTime()) ? value : d.toISOString()
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+/** `<section aria-labelledby><h2 id>`; also used by `AnalysisEstimate` (one copy of the markup). */
+export function Section({ title, children }: { title: string; children: React.ReactNode }) {
   const id = `section-${title.replace(/\W+/g, '').toLowerCase()}`
   return (
     <section aria-labelledby={id}>

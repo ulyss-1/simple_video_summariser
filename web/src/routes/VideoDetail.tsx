@@ -327,7 +327,10 @@ function VideoPage({ videoId }: { videoId: string }) {
   const analysisTotal = useAnalysisTotal(gone ? null : videoId).data
   const video = query.data
   // The estimate is only asked for once the video is known to have a transcript.
-  const estimate = useAnalysisEstimate(!gone && video?.transcript != null ? videoId : null)
+  const estimate = useAnalysisEstimate(
+    !gone && video?.transcript != null ? videoId : null,
+    video?.latest_analysis_at ?? null,
+  )
   const heading = video ? video.title || videoId : null
   const [params] = useSearchParams()
   // The Player mounts with the loaded video, so the deep-link seek waits for it.

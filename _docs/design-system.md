@@ -156,6 +156,7 @@ In print (`@media print`), links take the text colour and lose their underline.
 | `Player` | `<div class="player"><iframe …></div>`; error states in `player--error` | The only YouTube integration. Only `components/Player.tsx` and `components/player/` may mention `youtube-nocookie.com` or `postMessage` (source scan). iframe `title` is `Video: {title}` or `YouTube video player`. If the embed fails, a seek opens `youtube.com/watch` in a new tab |
 | `PlayerProvider` / `usePlayer()` | context only | One provider per page that has a player. `usePlayer()` returns `null` outside one, and callers fall back instead of throwing |
 | `AnalysisView` | TL;DR, Speakers, Topics, Claims, Quotes sections, then a `<footer>` with model, prompt version and `<time>` | Used by VideoDetail and by Compare's one-run fallback. Empty sections say "No topics extracted." (and similar), they are never omitted, except Speakers, which is omitted when the roster is empty |
+| `AnalysisEstimate` | `<section aria-labelledby>` (the exported `Section`) `Estimated analysis cost` with a `<ul>` of one `<li>` per model | Video page only (#153). Takes the `useAnalysisEstimate` query; renders the API's typed `state` and computes no price. Copy and states in 7.7 "Estimated analysis cost on the video page" |
 | `ClaimItem`, `QuoteItem`, `TopicItem` | one `<li>` each | The one copy of item markup, shared by AnalysisView and Compare table cells. Speaker `unknown` displays as **"Unattributed"** (same word as the server renderer). Quotes use `<q>`; topic titles use `<strong>`; every time goes through `<Timestamp>` |
 
 ### Route-local components (not exported; reuse by moving them, not copying)
@@ -321,6 +322,29 @@ to `Restart processing`. Both buttons are `disabled` while the request runs. On
 success the status line takes focus. When nothing was restarted, the page shows the
 fixed `role="alert"` "Nothing to restart: the video changed. Showing its current
 state."; any error shows a fixed `role="alert"` text and closes the confirmation.
+
+#### Estimated analysis cost on the video page (#153)
+
+In the block with `Re-analyse` (shown when `video.transcript !== null`), the Section
+pattern with the `<h2>` `Estimated analysis cost` (`components/AnalysisEstimate.tsx`
+using the exported `Section` of `AnalysisView.tsx`; data from `useAnalysisEstimate`,
+key `['video', id, 'analysis-estimate', latest_analysis_at]`, so a finished
+re-analysis, which the video poll sees as a new `latest_analysis_at`, asks again). The `Re-analyse` button has
+`aria-describedby` pointing at the section body. One `<li>` per model, in API order,
+and the state comes typed from the API: the page never computes a price.
+
+| `state` | Copy |
+|---|---|
+| `estimated` | `{model}: about $0.0227 (estimate, USD)` (`formatCost`, 4 decimals), and a `<small>` hint `Based on the median of the last {samples} recorded analyses`, plus ` · batch pricing` when `batch` is true |
+| `unknown` | `{model}: no estimate` and one sentence by `reason`: `No transcript yet` (`no_transcript`), `No recorded costs for this model yet` (`no_cost_samples`), `No price known for this model` (`no_price`) |
+| `free` | `{model}: no API cost` |
+
+An estimate is never a bare `$` figure: the words `estimate` and `USD` are on every
+`estimated` row. Loading is `<p role="status">Loading cost estimate…</p>`; an error
+is a `role="alert"` with the fixed text `Could not load the cost estimate` and a
+`Retry` button (none for a 4xx); raw server text is never shown. A failure stays in
+its section: the rest of the page, `Re-analyse` included, keeps working. No icon,
+colour or tooltip carries meaning.
 
 ### 7.8 Disclosure
 
@@ -490,28 +514,6 @@ the row leaves on refetch. A row with `restorable: false`, or one whose `POST`
 returned 409 (the list is refetched), shows `Still stopping its processing. Try
 again in a minute.` and no button. 422, 429, 503 and network failures keep the
 confirmation open with a `role="alert"` and fixed text.
-
-### 7.15 Estimated analysis cost on the video page (#153)
-
-In the block with `Re-analyse` (shown when `video.transcript !== null`), a
-`<section aria-labelledby>` with the `<h2>` `Estimated analysis cost` (the Section
-pattern; `components/AnalysisEstimate.tsx`, data from `useAnalysisEstimate`, key
-`['video', id, 'analysis-estimate']`). The `Re-analyse` button has
-`aria-describedby` pointing at the section body. One `<li>` per model, in API order,
-and the state comes typed from the API: the page never computes a price.
-
-| `state` | Copy |
-|---|---|
-| `estimated` | `{model}: about $0.0227 (estimate, USD)` (`formatCost`, 4 decimals), and a `<small>` hint `Based on the median of the last {samples} recorded analyses`, plus ` · batch pricing` when `batch` is true |
-| `unknown` | `{model}: no estimate` and one sentence by `reason`: `No transcript yet` (`no_transcript`), `No recorded costs for this model yet` (`no_cost_samples`), `No price known for this model` (`no_price`) |
-| `free` | `{model}: no API cost` |
-
-An estimate is never a bare `$` figure: the words `estimate` and `USD` are on every
-`estimated` row. Loading is `<p role="status">Loading cost estimate…</p>`; an error
-is a `role="alert"` with the fixed text `Could not load the cost estimate` and a
-`Retry` button (none for a 4xx); raw server text is never shown. A failure stays in
-its section: the rest of the page, `Re-analyse` included, keeps working. No icon,
-colour or tooltip carries meaning.
 
 ---
 

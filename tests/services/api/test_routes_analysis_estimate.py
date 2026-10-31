@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from common.config import get_settings
 from services.api import deps, routes_read, schemas
@@ -193,3 +194,29 @@ def test_a_malformed_id_is_422_before_the_database(app: FastAPI) -> None:
     app.dependency_overrides[deps.get_conn] = no_db
     with TestClient(app) as client:
         assert client.get("/videos/bad/analysis-estimate").status_code == 422
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"state": "estimated", "cost_usd": None, "reason": None, "samples": 1},
+        {"state": "estimated", "cost_usd": -0.01, "reason": None, "samples": 1},
+        {"state": "estimated", "cost_usd": 0.1, "reason": "no_price", "samples": 1},
+        {"state": "unknown", "cost_usd": 0.1, "reason": "no_price", "samples": 0},
+        {"state": "unknown", "cost_usd": None, "reason": None, "samples": 0},
+        {"state": "free", "cost_usd": 0.0, "reason": None, "samples": 0},
+        {"state": "free", "cost_usd": None, "reason": "no_price", "samples": 0},
+    ],
+    ids=[
+        "estimated-no-number",
+        "estimated-negative",
+        "estimated-with-reason",
+        "unknown-with-number",
+        "unknown-no-reason",
+        "free-with-number",
+        "free-with-reason",
+    ],
+)
+def test_a_combination_that_breaks_the_encoding_is_rejected(entry: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        schemas.ModelEstimate.model_validate({"model": "m", **entry})

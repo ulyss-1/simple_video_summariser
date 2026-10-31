@@ -24,7 +24,9 @@ estimated cumulative spend for this prompt version would exceed
 ``SWEEP_MAX_USD_ANTHROPIC`` (whichever of the two caps binds first; ``cap_reason``
 is ``jobs`` or ``usd``). Spent-or-committed USD is summed over this sweep's jobs
 (``analyze``, this dedupe key, ``REANALYSIS_PRIORITY``): the recorded
-``analyses.cost_usd`` of a finished one, else its estimate, plus the
+``analyses.cost_usd`` of a finished one (the oldest analysis of its video at the
+version, which is the sweep's own because the sweep only picks videos with none;
+a later interactive Re-analyse is not sweep spend), else its estimate, plus the
 ``analyze_failed_usage`` rows (#252) of those jobs; a NULL cost counts as the
 estimate, and a failed row whose ``job_id`` is NULL (its job was deleted) is not
 counted. A candidate is estimated by ``common.cost_estimate.estimate_cost_usd``:
@@ -103,8 +105,9 @@ _ALREADY_ENQUEUED_SQL = """
 
 _SWEEP_JOBS_SQL = """
     SELECT j.video_id, j.state,
-           (SELECT SUM(a.cost_usd)::float8 FROM analyses a
-             WHERE a.video_id = j.video_id AND a.prompt_version = %(prompt_version)s)
+           (SELECT a.cost_usd::float8 FROM analyses a
+             WHERE a.video_id = j.video_id AND a.prompt_version = %(prompt_version)s
+             ORDER BY a.created_at, a.id LIMIT 1)
     FROM jobs j
     WHERE j.kind = 'analyze' AND j.dedupe_key = %(dedupe_key)s AND j.priority = %(priority)s
       AND j.state IN ('pending', 'running', 'done')

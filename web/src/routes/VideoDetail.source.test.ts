@@ -47,7 +47,7 @@ describe('video detail cancel flow source', () => {
     const hook = readFileSync(new URL('../hooks/useAnalysisEstimate.ts', import.meta.url), 'utf8')
     expect(hook).toMatch(/\.get\(\s*["']\/videos\/\{video_id\}\/analysis-estimate["']/)
     expect(hook).not.toMatch(/fetch\(/)
-    expect(hook).toMatch(/queryKey: \[["']video["'], videoId, ["']analysis-estimate["']\]/)
+    expect(hook).toMatch(/queryKey: \[["']video["'], videoId, ["']analysis-estimate["'], latestAnalysisAt\]/)
     const view = readFileSync(new URL('../components/AnalysisEstimate.tsx', import.meta.url), 'utf8')
     expect(view).not.toMatch(/cost_usd\s*[*/+-]|[*/]\s*cost_usd/)
   })
