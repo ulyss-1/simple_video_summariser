@@ -1526,7 +1526,7 @@ clean build 27.5 s / 28.0 s, backend clean build 41.4 s; after a one-line change
 under `common/`, backend rebuild about 1 s, whisper rebuild 27.1 s / 27.0 s. The
 two images repeat the five application `COPY` lines (a static test compares them,
 so `/app` cannot drift). `deps` is built by a build-only compose service
-(profile `build-only`, so it never runs) with `provenance: false`: the default
+(`scale: 0`, so it never runs; a profile would make Compose reject the transcriber's `service:deps` context whenever it is not enabled) with `provenance: false`: the default
 attestation carries timestamps, which would give every rebuild of `deps` a new
 digest and make the whisper layers miss the cache. Changing
 `requirements.backend.lock` does re-run the whisper install, as it must.

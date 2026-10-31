@@ -48,8 +48,8 @@ services:
     restart: unless-stopped
 
   # Build-only (#135): the `deps` stage of ops/Dockerfile.backend, no
-  # application code. The transcriber builds on it. The profile keeps it out of
-  # `up`, so it never runs; Compose still builds it as the transcriber's
+  # application code. The transcriber builds on it. `scale: 0` keeps it out of
+  # `up` (scale 0), so it never runs; Compose still builds it as the transcriber's
   # build context.
   deps:
     # provenance: false is load-bearing. The default provenance attestation
@@ -61,7 +61,7 @@ services:
       target: deps
       provenance: false
     image: ytdigest-deps:latest
-    profiles: [build-only]
+    scale: 0
 
   # One-shot: runs `alembic upgrade head` and exits. Migrations never run on
   # service startup (AGENTS.md -> Rules); the long-running services wait for

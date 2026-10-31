@@ -142,8 +142,11 @@ def test_deps_service_is_build_only() -> None:
     # install is never CACHED (#135).
     assert "provenance: false" in block
     assert "image: ytdigest-deps:latest" in block
-    # A profile keeps it out of `up`: no container for it ever exists.
-    assert "profiles: [build-only]" in block
+    # scale 0 keeps it out of `up`: no container for it ever exists. A profile
+    # would make Compose reject the transcriber's `service:deps` context
+    # whenever the profile is not enabled (CI, `run --rm migrate`).
+    assert "scale: 0" in block
+    assert "profiles" not in block
     assert "command" not in block and "depends_on" not in block
 
 
