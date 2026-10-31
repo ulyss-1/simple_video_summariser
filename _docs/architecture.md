@@ -1464,7 +1464,8 @@ than reading `os.environ` directly.
 | `GROQ_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY` / `CEREBRAS_API_KEY` / `PUTER_AUTH_TOKEN` | — | analyzer only: the free-tier keys a provider names as its `key_setting`; a provider without a key is skipped (#364) |
 | `ANTHROPIC_BATCH` | `1` | use Batch API — 50% cost (16.8) |
 | `PROMPT_VERSION` | `v1` | analyzer, planner |
-| `SWEEP_MAX_JOBS_ANTHROPIC` | `100` | planner: cumulative per-`PROMPT_VERSION` count of re-analysis sweep jobs allowed while `SUMMARIZER=anthropic` (`0` = none); ignored for ollama (#99) |
+| `SWEEP_MAX_JOBS_ANTHROPIC` | `100` | planner: cumulative per-`PROMPT_VERSION` count of re-analysis sweep jobs allowed while `SUMMARIZER=anthropic` (`0` = none); ignored for ollama (#99); the USD budget below is checked alongside it and whichever binds first stops the sweep (#153) |
+| `SWEEP_MAX_USD_ANTHROPIC` | `2.50` | planner: cumulative per-`PROMPT_VERSION` USD budget of re-analysis sweep jobs while `SUMMARIZER=anthropic` (#153); finite and `>= 0`, `0` = none; not read for ollama or free, so dormant under `SUMMARIZER=free` |
 | `CHUNK_SEC` | `900` | transcriber, analyzer |
 | `OVERLAP_SEC` | `60` | transcriber, analyzer |
 | `WHISPER_MODEL` | `large-v3` | transcriber |
@@ -1493,6 +1494,8 @@ than reading `os.environ` directly.
 | `LOG_LEVEL` / `LOG_FORMAT` | `INFO` / `json` | all |
 
 Analysis cost estimate (#153). One pure function, `common/cost_estimate.py::estimate_cost_usd`, serves the `GET /videos/{id}/analysis-estimate` route and (see the sweep budget) the re-analysis sweep: transcript characters x the median recorded `analyses.cost_usd` per character of the model (`median_cost_per_char`, newest 20 analyses, #117). It is not `chars / 4 x price`, which ignores prompts, roster and reduce passes and output and runs about 5x low. The route encodes the result as a closed `state`: `estimated` (`cost_usd` a number, `reason` null), `unknown` (`cost_usd` null, `reason` `no_price` checked first, then `no_transcript`, then `no_cost_samples`) or `free` (`SUMMARIZER=ollama` or `free`: no API cost). It lists the configured model and, under `anthropic`, every other model with a stored analysis of the video (at most 5). The recorded cost already carries the 0.5 Batches factor of the runs that produced it, so the estimate never multiplies by it again; `batch` only reports `ANTHROPIC_BATCH`. After flipping `ANTHROPIC_BATCH` the median follows the new mode only as new analyses replace the newest 20.
+
+Sweep USD budget (#153). With `SUMMARIZER=anthropic` the re-analysis sweep stops at the first candidate whose estimate (the shared estimator above, with that candidate's transcript characters) would take the spent-or-committed USD for the `PROMPT_VERSION` above `SWEEP_MAX_USD_ANTHROPIC`; it never skips to a cheaper candidate, and jobs already enqueued finish. The decision and why: the median recorded cost per character, not `chars / 4 x price`, which is about 5x low in the 20-minute worked example. Committed spend is, over the sweep's `analyze` jobs (its dedupe key, `REANALYSIS_PRIORITY`; `pending`, `running`, `done`), the recorded `analyses.cost_usd` of a finished one or else its estimate, plus the `analyze_failed_usage` cost (#252) of rows whose `job_id` is one of those jobs; a NULL cost counts as the estimate and a failed row with `job_id` NULL is not counted. Cold start: with no cost samples at most `SWEEP_PROBE_JOBS` (5) sweep jobs in total are enqueued for the version, and the estimate is reported as unknown. The batch factor is inside the recorded costs, so after flipping `ANTHROPIC_BATCH` the figures follow the new mode only as new analyses replace the newest 20. The live run logs `planner.reanalysis_sweep.cap_reached` (warning, with `reason` `jobs` or `usd`, `budget_usd`, `committed_usd`) when either cap stops it.
 
 Pool sizing rule: `api replicas x DB_POOL_MAX_SIZE + workers + planner + migrate` must stay below Postgres `max_connections` (default 100). Only the api pools; workers, planner, CLI and migrate open one connection each through `common.db.connect()`.
 
@@ -1909,10 +1912,14 @@ name: ytdigest
 
 # Exactly the keys architecture.md 11.4 lists. Service-specific variables go
 # on the service; `ANTHROPIC_API_KEY` is on `analyzer` only, never here.
+# OLLAMA_MODEL and ANTHROPIC_MODEL are here because the api names the configured
+# model in the analysis estimate and the planner estimates the sweep for it (#153).
 x-backend-env: &backend-env
   DATABASE_URL: postgresql://ytdigest:${POSTGRES_PASSWORD}@db:5432/ytdigest
   SUMMARIZER: ${SUMMARIZER:-ollama}
   ANTHROPIC_BATCH: ${ANTHROPIC_BATCH:-1}
+  OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:4b}
+  ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-4-5}
   PROMPT_VERSION: ${PROMPT_VERSION:-v1}
   CHUNK_SEC: ${CHUNK_SEC:-900}
   OVERLAP_SEC: ${OVERLAP_SEC:-60}
@@ -1994,6 +2001,8 @@ services:
       AUDIO_TTL_DAYS: ${AUDIO_TTL_DAYS:-30}
       AUDIO_MAX_GB: ${AUDIO_MAX_GB:-20}
       AUDIO_KEEP: ${AUDIO_KEEP:-1}
+      SWEEP_MAX_JOBS_ANTHROPIC: ${SWEEP_MAX_JOBS_ANTHROPIC:-100}
+      SWEEP_MAX_USD_ANTHROPIC: ${SWEEP_MAX_USD_ANTHROPIC:-2.50}
     depends_on:
       migrate: {condition: service_completed_successfully}
     volumes: [audio:/data/audio]        # needs it to unlink purged files
@@ -2264,7 +2273,9 @@ docker compose run --rm migrate
 # re-analysis sweep after a prompt change (C4)
 PROMPT_VERSION=v2 docker compose up -d planner analyzer transcriber
 
-# preview that sweep first: prints what it would enqueue and changes nothing (#99)
+# preview that sweep first: prints what it would enqueue and changes nothing (#99);
+# the line also has est_usd_this_run, est_usd_committed, budget_usd,
+# cost_per_char_samples and cap_reason (jobs or usd), `unknown` without an estimate (#153)
 docker compose run --rm planner python -m services.planner.main --sweep-dry-run
 
 # inspect the queue without psql

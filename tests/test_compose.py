@@ -189,6 +189,8 @@ def test_backend_env_anchor_holds_exactly_the_documented_keys() -> None:
         "DATABASE_URL",
         "SUMMARIZER",
         "ANTHROPIC_BATCH",
+        "OLLAMA_MODEL",
+        "ANTHROPIC_MODEL",
         "PROMPT_VERSION",
         "CHUNK_SEC",
         "OVERLAP_SEC",
@@ -215,6 +217,8 @@ def test_migrate_uses_the_anchor_and_workers_merge_it() -> None:
                 "AUDIO_TTL_DAYS": "30",
                 "AUDIO_MAX_GB": "20",
                 "AUDIO_KEEP": "1",
+                "SWEEP_MAX_JOBS_ANTHROPIC": "100",
+                "SWEEP_MAX_USD_ANTHROPIC": "2.50",
             },
         ),
         (

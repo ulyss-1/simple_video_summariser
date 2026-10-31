@@ -24,6 +24,9 @@ OLLAMA_KEY = analyze_dedupe_key(VERSION, "ollama")
 def _sweep(
     conn: psycopg.Connection[Any], *, cap: int, summarizer: str = "anthropic", **kwargs: Any
 ) -> int:
+    # Negligible fake cost per character: these tests are about the job-count cap (#99);
+    # without a figure the cold-start probe (#153) would limit every run to 5.
+    kwargs.setdefault("median", (1e-12, 1))
     return run_reanalysis_sweep(
         conn,
         _queue(conn),
@@ -244,7 +247,12 @@ def test_the_plan_counts_all_candidates_not_just_the_per_run_limit(
     _candidates(conn, 12)
 
     plan = plan_reanalysis_sweep(
-        conn, prompt_version=VERSION, summarizer_name="anthropic", limit=2, max_jobs_anthropic=5
+        conn,
+        prompt_version=VERSION,
+        summarizer_name="anthropic",
+        limit=2,
+        max_jobs_anthropic=5,
+        median=(1e-12, 1),
     )
 
     assert (
@@ -277,7 +285,11 @@ def test_the_dry_run_prediction_equals_what_the_live_run_enqueues(
     before = _count_jobs(conn)
 
     plan = plan_reanalysis_sweep(
-        conn, prompt_version=VERSION, summarizer_name="anthropic", max_jobs_anthropic=cap
+        conn,
+        prompt_version=VERSION,
+        summarizer_name="anthropic",
+        max_jobs_anthropic=cap,
+        median=(1e-12, 1),
     )
     assert _count_jobs(conn) == before  # planning wrote nothing
 
@@ -320,7 +332,9 @@ def test_sweep_dry_run_prints_one_summary_line_logs_it_and_changes_no_row(
     assert out.splitlines() == [
         (
             f"prompt_version={VERSION} summarizer=anthropic candidates=7 already_enqueued=2 "
-            "cap=5 would_enqueue_this_run=3 would_remain_after_cap=4"
+            "cap=5 would_enqueue_this_run=3 would_remain_after_cap=4 "
+            "est_usd_this_run=unknown est_usd_committed=unknown budget_usd=2.5 "
+            "cost_per_char_samples=0 cap_reason=jobs"
         )
     ]
     (event,) = [r for r in caplog.records if r.getMessage() == "planner.reanalysis_sweep.dry_run"]
