@@ -175,9 +175,10 @@ def test_rate_limited_provider_cools_down_then_is_tried_again(prompts: PromptSet
     assert send.order == ["a", "b", "b", "a"]
 
 
-def test_a_rejected_key_disables_the_provider_for_good(prompts: PromptSet) -> None:
+@pytest.mark.parametrize("code", [401, 402, 403])
+def test_a_rejected_key_disables_the_provider_for_good(prompts: PromptSet, code: int) -> None:
     clock = Clock()
-    send = FakeSend(status(401), completion(ROSTER_JSON), completion(ROSTER_JSON))
+    send = FakeSend(status(code), completion(ROSTER_JSON), completion(ROSTER_JSON))
     s = make(prompts, [provider("a"), provider("b")], send, clock)
     roster(s)
     clock.now += 10_000

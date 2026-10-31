@@ -64,7 +64,7 @@ KEY_SETTINGS = ("GROQ_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "CEREBRA
 MIN_CONTEXT_TOKENS = 4096
 _OUTPUT_RESERVE_TOKENS = 2048
 _MAX_REASON_CHARS = 160
-_UNUSABLE_STATUSES = {401, 403}
+_UNUSABLE_STATUSES = {401, 402, 403}  # 402: Gemini prepay credit depleted
 
 
 class FreeTierConfigError(ValueError):
@@ -339,7 +339,7 @@ class FreeTierSummarizer(OllamaSummarizer):
 
         status = response.status
         if status in _UNUSABLE_STATUSES:
-            fail(f"HTTP {status}, key rejected", disable=True)
+            fail(f"HTTP {status}, key rejected or out of credit", disable=True)
             return None
         if not 200 <= status < 300:
             snippet = response.body[:MAX_BODY_IN_MESSAGE_BYTES].decode("utf-8", "replace")

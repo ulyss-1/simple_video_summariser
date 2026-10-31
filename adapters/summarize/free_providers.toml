@@ -22,7 +22,7 @@ key_setting = "GROQ_API_KEY"
 [[provider]]
 name = "gemini"
 base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
-model = "gemini-2.5-flash"
+model = "gemini-3.5-flash-lite"
 context_tokens = 32768
 key_setting = "GEMINI_API_KEY"
 
