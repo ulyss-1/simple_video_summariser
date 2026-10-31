@@ -72,8 +72,10 @@ def _stage(name: str) -> list[tuple[str, str]]:
 
 
 def test_stages_are_builder_deps_and_runtime_with_runtime_last() -> None:
-    froms = [args for name, args in _instructions() if name == "FROM"]
-    assert len(froms) == 3
+    all_froms = [args for name, args in _instructions() if name == "FROM"]
+    assert len(all_froms) == 4
+    assert all_froms[0].endswith(" AS deno")  # #134
+    froms = all_froms[1:]
     # Digest-pinned (#249); the builder's venv runs in the deps stage, so both
     # pinned stages must be the same interpreter build.
     pins = [
@@ -118,6 +120,42 @@ def test_requirements_are_copied_before_any_application_code() -> None:
     ]
     assert app_indexes, "application code is never copied"
     assert req_index < min(app_indexes)
+
+
+def test_deno_is_an_exact_version_pinned_by_digest() -> None:
+    from_deno = next(
+        a for n, a in _instructions() if n == "FROM" and a.endswith(" AS deno")
+    )
+    match = re.fullmatch(
+        r"denoland/deno:bin-(\d+\.\d+\.\d+)@sha256:[0-9a-f]{64} AS deno", from_deno
+    )
+    assert match, from_deno
+    # yt-dlp 2026.10.21 asks for deno>=2.9.8 (#134).
+    assert tuple(map(int, match.group(1).split("."))) >= (2, 9, 8)
+
+
+def test_deno_binary_is_copied_in_the_deps_stage() -> None:
+    # The deps stage holds no application code, so the layer is shared by the
+    # backend and whisper images and survives a code change (#134, #135).
+    copies = [a for n, a in _stage("deps") if n == "COPY" and "--from=deno" in a]
+    assert len(copies) == 1
+    assert copies[0].endswith("/deno /usr/local/bin/deno")
+    assert not [a for n, a in _stage("runtime") if "deno" in a]
+
+
+def test_yt_dlp_ejs_is_pinned_exactly_in_the_backend_requirements_only() -> None:
+    pin = re.compile(r"^yt-dlp-ejs==\d+(\.\d+)+$", re.MULTILINE)
+    assert pin.search((REPO_ROOT / "requirements.backend.txt").read_text())
+    assert "yt-dlp-ejs==" in (REPO_ROOT / "requirements.backend.lock").read_text()
+    for other in ("requirements.whisper.txt", "pyproject.toml"):
+        assert "yt-dlp-ejs" not in (REPO_ROOT / other).read_text()
+
+
+def test_no_code_fetches_solver_components_at_runtime() -> None:
+    for tree in ("adapters", "services"):
+        for path in (REPO_ROOT / tree).rglob("*.py"):
+            assert "remote-components" not in path.read_text(), path
+            assert "--js-runtimes" not in path.read_text(), path
 
 
 def test_pip_install_runs_before_application_code_is_copied() -> None:

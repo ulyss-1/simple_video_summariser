@@ -1484,6 +1484,9 @@ Multi-stage; the builder compiles wheels, the runtime carries none of the build
 toolchain.
 
 ```dockerfile
+# ---- deno ----
+FROM denoland/deno:bin-2.9.8@sha256:b507583d3c68ba69f3ed2ce5969ae5b8b70f43421c781279c7aea06435263543 AS deno
+
 # ---- builder ----
 FROM python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8 AS builder
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
@@ -1500,6 +1503,7 @@ FROM python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08b
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg curl && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /opt/venv /opt/venv
+COPY --from=deno /deno /usr/local/bin/deno
 ENV PATH=/opt/venv/bin:$PATH PYTHONUNBUFFERED=1 PYTHONPATH=/app
 RUN useradd -r -u 10001 -m app && \
     mkdir -p /data/audio && chown -R app:app /data
@@ -1518,6 +1522,35 @@ USER app
 
 `ffmpeg` is in the backend image because `ingest` may normalize audio even on
 the subtitle path; `yt-dlp` is a Python dependency, not a system package.
+
+**JavaScript runtime for yt-dlp (#134).** YouTube's player challenges need a
+JavaScript runtime; without one yt-dlp warns `No supported JavaScript runtime`
+and silently loses formats (the audio path runs with `--no-warnings`). The
+image therefore carries Deno, yt-dlp's default runtime, so `adapters/youtube/`
+passes no `--js-runtimes` flag, and `yt-dlp-ejs`, the solver scripts, as a
+Python dependency pinned in `requirements.backend.txt`; no `--remote-components`
+is used, so nothing is fetched at runtime. Install route: the first of the
+three considered, a build stage `FROM denoland/deno:bin-2.9.8@sha256:...` (the
+official multi-arch image holding only the binary), copied to
+`/usr/local/bin/deno`. It is a `FROM`, so `scripts/base_image_digest_check.py`
+sees it; it is an exact version plus the index digest; and it needs no extra
+build tooling. A checksum-verified release binary needs `unzip` in a builder
+stage for no gain, and the `deno` PyPI wheel would be a third dependency. The
+`COPY --from=deno` sits in the `deps` stage, which holds no application code,
+so the backend and whisper images share the layer and a code change keeps it
+cached. Deno 2.9.8 is what yt-dlp 2026.10.21 asks for (`deno>=2.9.8`) and
+`yt-dlp-ejs` 0.8.0 is what its `default` extra pins; the three move together
+when yt-dlp is bumped (#68, checked by #369). Deno keeps its cache under the
+`app` user's home, so nothing needs to be made world-writable. D12's "no Node
+in production" is untouched: this is Deno, in the backend image, not Node.
+
+Measured with `docker image inspect --format '{{.Size}}'`, "before" built from
+the unchanged `master` Dockerfile under a throwaway tag:
+
+| Image | Before (bytes) | After (bytes) | Difference |
+|---|---|---|---|
+| `ytdigest-backend` | 963,950,672 | 1,103,413,398 | +139,462,726 (about 133 MiB) |
+| `ytdigest-whisper` | 1,564,278,058 | 1,703,740,811 | +139,462,753 (about 133 MiB) |
 
 **Python locks (#145).** The images install from `requirements.backend.lock`
 and `requirements.whisper.lock`, generated from the matching `requirements.*.txt`

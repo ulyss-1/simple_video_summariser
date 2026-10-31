@@ -127,6 +127,17 @@ def test_yt_dlp_is_the_pinned_version() -> None:
     assert _ok("yt-dlp", "--version") == "2026.10.21"
 
 
+def test_deno_and_yt_dlp_ejs_are_pinned_and_seen_by_yt_dlp() -> None:
+    # `yt-dlp -v` with no URL prints its header (stderr) and exits non-zero.
+    version, header, run_as_app = _steps(
+        "deno --version", "yt-dlp -v 2>&1", "id -u && deno eval 'console.log(1+1)'"
+    )
+    assert version.ok().startswith("deno 2.9.8 "), version.describe()
+    assert "JS runtimes: deno-2.9.8" in header.stdout, header.describe()
+    assert "yt_dlp_ejs-0.8.0" in header.stdout, header.describe()
+    assert run_as_app.ok().splitlines() == ["10001", "2"], run_as_app.describe()
+
+
 def test_runtime_stage_has_no_build_toolchain() -> None:
     compilers, dpkg, apt_lists = _steps(
         "command -v gcc cc make || true",

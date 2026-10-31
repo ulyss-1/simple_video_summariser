@@ -163,6 +163,13 @@ def test_volume_directories_are_owned_by_app_and_writable_on_a_fresh_volume(
     assert result.returncode == 0, result.stderr
 
 
+def test_deno_and_yt_dlp_ejs_are_inherited_from_the_backend_image() -> None:
+    version, header = _steps("deno --version", "yt-dlp -v 2>&1")
+    assert version.ok().startswith("deno 2.9.8 "), version.describe()
+    assert "JS runtimes: deno-2.9.8" in header.stdout, header.describe()
+    assert "yt_dlp_ejs-0.8.0" in header.stdout, header.describe()
+
+
 def test_tmp_is_writable_by_app() -> None:
     assert _run("touch", "/tmp/heartbeat").returncode == 0
 

@@ -8,6 +8,14 @@
 #   docker build -f ops/Dockerfile.backend --target deps --provenance=false -t ytdigest-deps:latest .
 # The last stage stays the default target.
 
+# ---- deno ----
+# The JavaScript runtime yt-dlp uses to solve YouTube's player challenges
+# (#134). The official image holds only the binary; written as a FROM, its
+# digest is checked by scripts/base_image_digest_check.py. Moves together with
+# yt-dlp and yt-dlp-ejs (requirements.backend.txt); yt-dlp 2026.10.21 asks for
+# deno>=2.9.8.
+FROM denoland/deno:bin-2.9.8@sha256:b507583d3c68ba69f3ed2ce5969ae5b8b70f43421c781279c7aea06435263543 AS deno
+
 # ---- builder ----
 FROM python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8 AS builder
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
@@ -30,6 +38,10 @@ FROM python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08b
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg curl && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /opt/venv /opt/venv
+# Deno layer: before the application COPYs, so editing a source file keeps it
+# cached. Nothing is fetched at runtime; the solver scripts are yt-dlp-ejs in
+# the venv.
+COPY --from=deno /deno /usr/local/bin/deno
 ENV PATH=/opt/venv/bin:$PATH PYTHONUNBUFFERED=1 PYTHONPATH=/app
 # /data/audio is created here, owned by app: a named volume mounted over it
 # copies this ownership on first use, so the planner can unlink purged files.
