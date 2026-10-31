@@ -290,8 +290,10 @@ key_setting = "GROQ_API_KEY"
 
 def test_default_list_loads_and_takes_keys_from_settings() -> None:
     providers = load_providers(DEFAULT_PROVIDERS_FILE, settings(GROQ_API_KEY=KEY_A))
-    assert [p.name for p in providers] == ["groq", "gemini", "openrouter", "cerebras"]
-    assert [p.api_key for p in providers] == [KEY_A, None, None, None]
+    assert [p.name for p in providers] == ["groq", "gemini", "openrouter", "cerebras", "puter"]
+    assert [p.api_key for p in providers] == [KEY_A, None, None, None, None]
+    assert [p.protocol for p in providers] == ["openai"] * 4 + ["puter"]
+    assert providers[-1].url == "https://api.puter.com/drivers/call"
 
 
 @pytest.mark.parametrize(
@@ -305,9 +307,10 @@ def test_default_list_loads_and_takes_keys_from_settings() -> None:
         (GOOD + GOOD, "duplicate"),
         (GOOD.replace('model = "m"\n', ""), "'model'"),
         ("[[provider", "cannot read"),
+        (GOOD + 'protocol = "soap"\n', "protocol"),
     ],
     ids=["empty", "http", "credentials", "tiny-context", "bad-key-setting", "duplicate",
-         "missing-model", "bad-toml"],
+         "missing-model", "bad-toml", "bad-protocol"],
 )
 def test_bad_provider_files_are_refused(tmp_path: Path, text: str, message: str) -> None:
     with pytest.raises(FreeTierConfigError, match=message):
@@ -368,3 +371,67 @@ def test_bearer_transport_sends_the_key_and_refuses_redirects() -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+# --- the Puter protocol ------------------------------------------------------
+
+
+def puter(key: str | None = "t") -> Provider:
+    return Provider(
+        "puter", "https://puter.example/drivers/call", "gemma", 32768, "PUTER_AUTH_TOKEN", key, "puter"
+    )
+
+
+def puter_reply(content: str, **result: Any) -> HttpResponse:
+    body = {
+        "success": True,
+        "result": {
+            "message": {"role": "assistant", "content": content},
+            "finish_reason": "stop",
+            "usage": {"prompt_tokens": 21, "completion_tokens": 5, "usd_cents": 0},
+            **result,
+        },
+    }
+    return HttpResponse(200, json.dumps(body).encode())
+
+
+def test_puter_request_and_reply_shapes(prompts: PromptSet) -> None:
+    send = FakeSend(puter_reply(ROSTER_JSON))
+    s = make(prompts, [puter()], send)
+    assert roster(s).speakers
+    request = send.calls[0][1]
+    assert request["interface"] == "puter-chat-completion" and request["method"] == "complete"
+    assert request["args"]["model"] == "gemma"
+    assert "response_format" not in request and "response_format" not in request["args"]
+    assert "JSON schema" in request["args"]["messages"][0]["content"]
+    usage = s.take_usage()
+    assert (usage.input_tokens, usage.output_tokens) == (21, 5)
+
+
+def test_gemma_thought_block_is_stripped(prompts: PromptSet) -> None:
+    send = FakeSend(puter_reply("<thought>The user wants JSON.</thought>" + ROSTER_JSON))
+    assert roster(make(prompts, [puter()], send)).speakers
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        HttpResponse(200, json.dumps({"success": False, "error": {"message": "x"}}).encode()),
+        HttpResponse(200, json.dumps({"success": True}).encode()),
+        puter_reply(""),
+    ],
+    ids=["success-false", "no-result", "empty"],
+)
+def test_a_failed_puter_reply_falls_through(prompts: PromptSet, reply: HttpResponse) -> None:
+    send = FakeSend(reply, completion(ROSTER_JSON))
+    s = make(prompts, [puter(), provider("b")], send)
+    roster(s)
+    assert send.order == ["puter", "b"]
+
+
+def test_puter_without_a_subscription_is_disabled_and_the_list_moves_on(prompts: PromptSet) -> None:
+    send = FakeSend(status(402, "subscription_required"), completion(ROSTER_JSON), completion(ROSTER_JSON))
+    s = make(prompts, [puter(), provider("b")], send)
+    roster(s)
+    roster(s)
+    assert send.order == ["puter", "b", "b"]

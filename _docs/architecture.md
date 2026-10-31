@@ -1365,7 +1365,7 @@ than reading `os.environ` directly.
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY_FILE` / `ANTHROPIC_MODEL` | — / — / `claude-haiku-4-5` | analyzer (D6: API key only); the explicit file path is the opt-in Compose-secret source |
 | `FREE_LLM_PROVIDERS_FILE` | — (the shipped `adapters/summarize/free_providers.toml`) | analyzer, `SUMMARIZER=free` (#364): TOML list of OpenAI-compatible providers (`name`, `base_url`, `model`, `context_tokens`, `key_setting`), tried in file order |
 | `FREE_LLM_TIMEOUT_SEC` / `FREE_LLM_COOLDOWN_SEC` | `120` / `120` | analyzer: per-request timeout; how long a provider that rate-limited or failed is skipped (#364) |
-| `GROQ_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY` / `CEREBRAS_API_KEY` | — | analyzer only: the free-tier keys a provider names as its `key_setting`; a provider without a key is skipped (#364) |
+| `GROQ_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY` / `CEREBRAS_API_KEY` / `PUTER_AUTH_TOKEN` | — | analyzer only: the free-tier keys a provider names as its `key_setting`; a provider without a key is skipped (#364) |
 | `ANTHROPIC_BATCH` | `1` | use Batch API — 50% cost (16.8) |
 | `PROMPT_VERSION` | `v1` | analyzer, planner |
 | `SWEEP_MAX_JOBS_ANTHROPIC` | `100` | planner: cumulative per-`PROMPT_VERSION` count of re-analysis sweep jobs allowed while `SUMMARIZER=anthropic` (`0` = none); ignored for ollama (#99) |
@@ -2033,7 +2033,7 @@ the first provider of the list that answers. A provider with no key, a rejected 
 `FREE_LLM_COOLDOWN_SEC`) is passed over; when none answers the job fails as
 `llm_unavailable` and the queue retries it. `analyses.model` is the fixed label
 `free-tier`; the provider and model that served each call are logged
-(`free_tier_call`). The transcript text is sent to those third parties, so the mode
+(`free_tier_call`). A provider with `protocol = "puter"` uses the call route behind Puter's `puter.ai.chat()` (undocumented by Puter, so best effort; Gemma 4 models cost nothing). The transcript text is sent to those third parties, so the mode
 is opt-in, and no cost is recorded.
 
 **Secrets.** `.env` is gitignored; `.env.example` is committed with placeholder

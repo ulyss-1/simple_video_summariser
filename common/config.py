@@ -98,6 +98,7 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: SecretStr | None = None
     OPENROUTER_API_KEY: SecretStr | None = None
     CEREBRAS_API_KEY: SecretStr | None = None
+    PUTER_AUTH_TOKEN: SecretStr | None = None
     ANTHROPIC_API_KEY: SecretStr | None = None
     ANTHROPIC_API_KEY_FILE: Path | None = None
     ANTHROPIC_MODEL: str = "claude-haiku-4-5"
