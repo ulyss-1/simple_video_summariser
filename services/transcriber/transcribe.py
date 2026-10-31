@@ -248,7 +248,10 @@ def make_transcribe_handler(
 
         ticker.begin()
         result = transcriber.transcribe(
-            audio, language=_language(job, ctx), on_progress=on_progress
+            audio,
+            language=_language(job, ctx),
+            on_progress=on_progress,
+            cancelled=lambda: ctx.cancelled,
         )
 
         save_transcript_with_chunks(

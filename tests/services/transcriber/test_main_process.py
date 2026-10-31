@@ -318,6 +318,7 @@ class FakeWhisper:
         *,
         language: str | None = None,
         on_progress: Callable[[float], None] | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> TranscriptResult:
         segments = (Segment(0.0, 1.0, "hello"), Segment(1.0, 2.0, "world"))
         return TranscriptResult(segments=segments, language="en", engine_meta={"engine": "fake"})

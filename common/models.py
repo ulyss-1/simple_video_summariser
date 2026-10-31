@@ -400,6 +400,7 @@ class Transcriber(Protocol):
         *,
         language: str | None = None,
         on_progress: Callable[[float], None] | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> TranscriptResult: ...
 
 

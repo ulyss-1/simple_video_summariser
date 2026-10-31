@@ -244,7 +244,16 @@ class PlaylistSource(Protocol):
     def list_playlist(self, playlist_id: str, *, limit: int) -> PlaylistListing: ...
 
 class Transcriber(Protocol):
-    def transcribe(self, audio: AudioRef) -> TranscriptResult: ...
+    # `cancelled` (#324): None runs in-process (CLI); a callable runs the work in
+    # a child process that is killed when it turns true (11.5)
+    def transcribe(
+        self,
+        audio: AudioRef,
+        *,
+        language: str | None = None,
+        on_progress: Callable[[float], None] | None = None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> TranscriptResult: ...
 
 class Summarizer(Protocol):
     name: str
@@ -506,6 +515,9 @@ cancelled outcome: a raised `Cancelled`, any other exception, `Defer`, the
 watchdog's `fail_job` and the reaper all end `CANCELLED`, never `pending`. A
 handler that returns normally ends `done`, with `cancel_requested_at` still set.
 A cancel is logged once at INFO as `job.cancelled`, not as a dead letter.
+The speech-to-text of a `transcribe` job runs in a child process, and a cancel
+kills it (group `SIGKILL`) within about a second, including before the first
+decoded segment (#324; see 11.5).
 
 `DELETE /videos/{id}` (#303) applies the same cancellation, in its own
 transaction, to the jobs it keeps: it locks the video's jobs by id and then the
@@ -979,7 +991,8 @@ enqueues one `ingest` for a video whose newest `transcribe` job is `dead`.
 ```
 1. acquire audio: yt-dlp bestaudio → ffmpeg → 16 kHz mono opus   (D6b)
 2. register media row with expires_at = now() + AUDIO_TTL_DAYS
-3. faster-whisper (WHISPER_MODEL, int8, beam 5, VAD)
+3. faster-whisper (WHISPER_MODEL, int8, beam 5, VAD)             (#324)
+   └─ in a child process the parent kills on cancel (in-process from the CLI)
    └─ heartbeat every 60 s throughout                            (C2)
 4. persist transcript (source='whisper', engine_meta incl. measured RTF)
 5. chunk (§7.3)
@@ -993,6 +1006,22 @@ A `transcribe` job that ends because its video was deleted (a delete before the
 audio file and the `media` row on its exception path whatever `AUDIO_KEEP` says:
 nobody can ever see that row again, and the API unlinked only the files it knew of
 at delete time. A file the API already removed is not an error.
+
+Called from a worker (a `cancelled` callable is given), the speech-to-text runs in a
+child process, one per job (`python -m adapters.transcription.faster_whisper_child`,
+started with `subprocess`, never `fork`, in its own session); the CLI calls it
+in-process and keeps the model on the instance. The child loads the model, runs the
+same decoding path as the in-process one and answers on a dedicated pipe with a
+`progress` message per segment, then one `done` (segments, language, `engine_meta`)
+or one `error`; the parent never imports `faster_whisper`. The `engine_meta` keys are
+unchanged, but `load_sec` is now a per-job figure, the child's real load time, not 0.0
+after the first job. Measured on 2026-10-31 (an 8-thread Linux host with the live
+stack running beside it, container limited to 3 CPUs, `WHISPER_THREADS=3`, int8, model
+already in the cache): `large-v3` 13.1, 18.5 and 17.1 s on three consecutive loads,
+`tiny` about 0.8 s. That is below 30 s, so a child per job was chosen over a persistent
+child: it costs under about 1.5% of the shortest real job (20 min) and returns the
+model's memory to the container after every job. `rtf` still excludes the load time,
+so `rtf_history` is not skewed.
 
 Recording measured RTF in `engine_meta` turns §11's one-off benchmark into
 continuous data — the D3 revisit trigger ("backlog grows monotonically")
@@ -1564,7 +1593,8 @@ volume so the multi-GB `large-v3` model survives container recreation —
 otherwise every `docker compose up --build` re-downloads it.
 
 `OMP_NUM_THREADS` is set explicitly because ctranslate2 otherwise detects the
-*host's* core count, ignoring the container's CPU limit, and oversubscribes.
+*host's* core count, ignoring the container's CPU limit, and oversubscribes. The
+Whisper child (#324) inherits it unchanged, like `HF_HOME` and `CT2_VERBOSE`.
 
 #### `ops/Dockerfile.frontend`
 
@@ -2036,6 +2066,22 @@ cancelled call adds nothing to the job's recorded usage (the spend of a
 cancelled attempt is #252). A batch-mode job keeps its #89 behaviour: it stops
 waiting and leaves its batch to the orphan pass (#160).
 
+The faster-whisper work of a `transcribe` job (#324) runs in a child process,
+because it is native code on the calling thread and nothing inside the process
+can stop it, which includes the long stretch before the first segment (model
+load, audio decode, the VAD pass, the first 30 s window). The parent polls
+`cancelled()` every 0.5 s while it waits for the child's next message; on a cancel
+it kills the child's whole process group (`SIGKILL`), reaps it and raises
+`Cancelled`, so the CPU is free when the exception is raised and the same worker
+claims its next job with nothing left running. Any other exit from the wait
+(`Cancelled` from `on_progress` for a user or a shutdown cancel,
+`KeyboardInterrupt`, an exception from `on_progress`) kills and reaps the child the
+same way, and a `done` message that arrived in the same slice as the flag is used.
+A child must not outlive its parent: the watchdog's `os._exit(70)` runs no `finally`,
+so the child exits by itself within seconds when its stdin closes (or its parent
+pid changes). The progress callback and the heartbeat stay in the parent, on the
+calling thread.
+
 **Network segmentation.** `internal: true` means the database and `migrate`
 have no route off the compose bridge. The workers also sit on `egress`.
 Only `api` sits on `internal` and `edge`, and only `web` publishes a port — bound to `127.0.0.1`
@@ -2046,7 +2092,13 @@ of the host. The 6 GB memory limit matters because `large-v3` at int8 needs
 roughly 2–3 GB resident, and an unbounded container that OOMs takes the host's
 OOM killer with it. Note `deploy.resources.limits` requires Compose v2 (it is
 honored by `docker compose`, unlike the old v1 behavior where it was
-Swarm-only).
+Swarm-only). The Whisper child (#324) inherits the container's environment
+(`OMP_NUM_THREADS`, `HF_HOME`, `CT2_VERBOSE`) and sits inside the same cgroup
+limits, so both bounds cover it without any code; the parent process never imports
+`faster_whisper` or loads a model, so the 6 GB hold one model, and at most one child
+runs per worker. If the kernel's OOM killer `SIGKILL`s the child, the parent sees
+an exit by signal 9 without a final message and raises `ResourceError` (class
+`RESOURCE`: dead-letter and alert), as it did for `MemoryError` before.
 
 **Ollama runs on the host, not in compose.** It is a shared service with its
 own model cache, not part of this stack's lifecycle. The analyzer reaches it
