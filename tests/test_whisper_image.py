@@ -8,6 +8,7 @@ as text, so they run under `pytest -m "not integration"`.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from tests.test_backend_image import (
     REPO_ROOT,
@@ -17,6 +18,8 @@ from tests.test_backend_image import (
 )
 
 DOCKERFILE = REPO_ROOT / "ops" / "Dockerfile.whisper"
+BACKEND_DOCKERFILE = REPO_ROOT / "ops" / "Dockerfile.backend"
+_APP_SOURCES = ("common/", "adapters/", "services/", "migrations/", "alembic.ini")
 
 
 def _steps() -> list[tuple[str, str]]:
@@ -29,9 +32,37 @@ def _install_run() -> str:
     return installs[0]
 
 
-def test_single_from_is_the_backend_image() -> None:
+def _app_copies(dockerfile: Path) -> list[tuple[str, str]]:
+    """The application COPY lines and the closing `chown /app`, in order."""
+    return [
+        (n, a)
+        for n, a in _instructions(dockerfile)
+        if (n == "COPY" and any(s.startswith(_APP_SOURCES) for s in _copy_sources(a)))
+        or (n == "RUN" and a == "chown app:app /app")
+    ]
+
+
+def test_single_from_is_the_deps_image() -> None:
     froms = [args for name, args in _steps() if name == "FROM"]
-    assert froms == ["ytdigest-backend:latest"]
+    assert froms == ["ytdigest-deps"]
+
+
+def test_application_layers_are_identical_to_the_backend_image() -> None:
+    # /app cannot drift between the two images (#135).
+    whisper = _app_copies(DOCKERFILE)
+    assert len(whisper) == 6
+    assert whisper == _app_copies(BACKEND_DOCKERFILE)
+
+
+def test_application_code_is_copied_after_the_install_and_pip_check() -> None:
+    steps = _steps()
+    install = next(i for i, (n, a) in enumerate(steps) if n == "RUN" and "pip install" in a)
+    check = next(i for i, (n, a) in enumerate(steps) if n == "RUN" and "pip check" in a)
+    models = next(i for i, (n, a) in enumerate(steps) if n == "RUN" and "/models" in a)
+    first_copy = next(i for i, (n, _) in enumerate(steps) if n == "COPY")
+    last_user = max(i for i, (n, _) in enumerate(steps) if n == "USER")
+    first_env = next(i for i, (n, _) in enumerate(steps) if n == "ENV")
+    assert install < check < models < first_copy < last_user < first_env
 
 
 def test_install_uses_binary_only_hashed_wheels_from_the_lock() -> None:
@@ -100,18 +131,14 @@ def test_workdir_is_app_at_the_end() -> None:
     assert not workdirs or workdirs[-1] == "/app"
 
 
-def test_no_application_code_or_backend_inputs_are_copied() -> None:
+def test_no_backend_inputs_are_copied() -> None:
     for name, args in _steps():
         if name in {"COPY", "ADD"}:
             for source in _copy_sources(args):
-                assert not source.startswith(
-                    ("common", "adapters", "services", "migrations")
-                )
                 assert source not in {
                     "requirements.backend.txt",
                     "requirements.backend.lock",
                     "pyproject.toml",
-                    "alembic.ini",
                     ".",
                     "./",
                 }

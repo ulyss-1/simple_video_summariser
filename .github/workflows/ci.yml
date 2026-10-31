@@ -158,8 +158,9 @@ jobs:
         run: |
           pip check
           python scripts/lock_requirements.py --check-installed requirements.backend.lock requirements.dev.lock
-      # Builds ytdigest-backend:latest before the whisper image (which is
-      # FROM that tag), then the frontend image, and runs their runtime checks.
+      # Builds the backend image and its `deps` stage, then the whisper image
+      # (FROM the deps stage, via a named build context) and the frontend
+      # image, and runs their runtime and layer-cache checks (#135).
       # The bake-off image tests run in the `bakeoff` job instead (#316).
       - name: pytest -m "image and not bakeoff"
         run: pytest -m "image and not bakeoff"

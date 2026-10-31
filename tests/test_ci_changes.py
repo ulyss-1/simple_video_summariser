@@ -46,6 +46,9 @@ def jobs(*files: str) -> dict[str, bool]:
             True, False, False, False,
         ),
         # The bake-off set (#316) runs only its own job, never `images`.
+        (("tests/test_whisper_cache_docker.py",), True, False, True, False),
+        (("compose.yml",), True, False, True, False),
+        (("ops/Dockerfile.whisper",), True, False, True, False),
         (("ops/Dockerfile.bakeoff",), True, False, False, True),
         (("ops/Dockerfile.bakeoff.dockerignore",), True, False, False, True),
         (("compose.bakeoff.yml",), True, False, False, True),

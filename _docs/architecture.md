@@ -206,7 +206,7 @@ ytdigest/
 ├── migrations/                # alembic
 ├── ops/
 │   ├── Dockerfile.backend     # api, planner, analyzer, migrate  (§11.3)
-│   ├── Dockerfile.whisper     # transcriber (derives from backend)
+│   ├── Dockerfile.whisper     # transcriber (builds on backend's deps stage)
 │   ├── Dockerfile.frontend    # node build → nginx runtime
 │   └── nginx.conf             # SPA fallback, CSP, /api proxy
 ├── compose.yml
@@ -1413,7 +1413,7 @@ Six runtime containers, four build contexts, three custom images.
 | `api` | `ytdigest-backend` | same image | 1..N | HTTP API |
 | `planner` | `ytdigest-backend` | same image | **exactly 1** | periodic tasks (§1) |
 | `analyzer` | `ytdigest-backend` | same image | 1..N | worker: `analyze` |
-| `transcriber` | `ytdigest-whisper` | `ops/Dockerfile.whisper` | 1..N | worker: `ingest`, `transcribe` |
+| `transcriber` | `ytdigest-whisper` | `ops/Dockerfile.whisper`, on the `deps` stage of `ops/Dockerfile.backend` (#135) | 1..N | worker: `ingest`, `transcribe` |
 | `web` | `ytdigest-web` | `ops/Dockerfile.frontend` | 1 | nginx: static SPA + reverse proxy |
 | `metabase` *(optional)* | upstream | — | 1 | ad-hoc queries, read-only role |
 
@@ -1466,19 +1466,24 @@ RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip install --require-hashes --no-deps -r requirements.backend.lock && \
     /opt/venv/bin/pip check
 
-# ---- runtime ----
-FROM python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8
+# ---- deps: runtime base, no application code ----
+FROM python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8 AS deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg curl && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH PYTHONUNBUFFERED=1 PYTHONPATH=/app
+RUN useradd -r -u 10001 -m app && \
+    mkdir -p /data/audio && chown -R app:app /data
 WORKDIR /app
-COPY common/ ./common/
-COPY adapters/ ./adapters/
-COPY services/ ./services/
-COPY migrations/ ./migrations/
-COPY alembic.ini .
-RUN useradd -r -u 10001 -m app && chown -R app:app /app
+
+# ---- runtime: deps plus application code (the default, last target) ----
+FROM deps AS runtime
+COPY --chown=app:app common/ ./common/
+COPY --chown=app:app adapters/ ./adapters/
+COPY --chown=app:app services/ ./services/
+COPY --chown=app:app migrations/ ./migrations/
+COPY --chown=app:app alembic.ini .
+RUN chown app:app /app
 USER app
 ```
 
@@ -1508,13 +1513,31 @@ regenerate-and-PR flow. On a red run, regenerate with
 
 **Layer ordering matters:** the lock is copied and installed *before*
 application code. Editing a Python file then rebuilds only the final `COPY`
-layer, not the dependency install — the difference between a 5-second and a
-3-minute rebuild during Phase 1–5 iteration.
+layers, not the dependency install.
+
+**The `deps` stage (#135).** Everything except application code (base,
+`ffmpeg`, `curl`, the venv, the `app` user, `/data/audio`, `WORKDIR /app`) is a
+named stage, `deps`; the last stage, `runtime`, is `deps` plus the application
+`COPY` layers and is still the default target. Both `ytdigest-backend` and
+`ytdigest-whisper` are built on `deps`, and the whisper `pip install` runs before
+the application `COPY`, so a code change leaves the whisper install `CACHED`.
+Decision (owner, 2026-10-31): a dependencies-only stage, not a BuildKit pip cache
+mount. A cache mount's `RUN` step still re-executes on every change and never
+shows `CACHED` (it only skips downloads), and it conflicts with the deliberate
+`--no-cache-dir`. Measured before the change (#56, Docker Desktop on WSL): whisper
+clean build 27.5 s / 28.0 s, backend clean build 41.4 s; after a one-line change
+under `common/`, backend rebuild about 1 s, whisper rebuild 27.1 s / 27.0 s. The
+two images repeat the five application `COPY` lines (a static test compares them,
+so `/app` cannot drift). `deps` is built by a build-only compose service
+(`scale: 0`, so it never runs; a profile would make Compose reject the transcriber's `service:deps` context whenever it is not enabled) with `provenance: false`: the default
+attestation carries timestamps, which would give every rebuild of `deps` a new
+digest and make the whisper layers miss the cache. Changing
+`requirements.backend.lock` does re-run the whisper install, as it must.
 
 #### `ops/Dockerfile.whisper`
 
 ```dockerfile
-FROM ytdigest-backend:latest
+FROM ytdigest-deps          # the `deps` stage of ops/Dockerfile.backend (#135)
 USER root
 WORKDIR /tmp
 # --only-binary: ctranslate2 ships no sdist, so a missing wheel must fail
@@ -1528,14 +1551,15 @@ RUN /opt/venv/bin/pip check
 # /models is the whisper-models volume; a fresh volume copies its ownership.
 RUN mkdir -p /models && chown app:app /models
 WORKDIR /app
+# the same five COPY --chown=app:app lines and `chown app:app /app` as the backend
 USER app
 ENV OMP_NUM_THREADS=4 \
     HF_HOME=/models \
     CT2_VERBOSE=0
 ```
 
-Deriving from the backend image rather than rebuilding from `python:3.14-slim`
-means shared layers are stored and pulled once. `HF_HOME` points at a named
+Building on the backend's `deps` stage rather than from `python:3.14-slim`
+means the deps layers are stored and pulled once, shared by both images. `HF_HOME` points at a named
 volume so the multi-GB `large-v3` model survives container recreation —
 otherwise every `docker compose up --build` re-downloads it.
 
@@ -1571,10 +1595,10 @@ starts with `--read-only --tmpfs /tmp`.
 Every upstream base image is pinned by tag **and** digest (#241, #249), the
 multi-platform index digest, so every build uses the same bytes: `nginx`
 (runtime stage above), `node:24-alpine` (build stage and the dev `web` service
-in `compose.override.yml`), `python:3.14-slim` (both `ops/Dockerfile.backend`
-stages and `ops/Dockerfile.bakeoff`) and `postgres:18-alpine` (`db` in
+in `compose.override.yml`), `python:3.14-slim` (the `builder` and `deps`
+stages of `ops/Dockerfile.backend` and `ops/Dockerfile.bakeoff`) and `postgres:18-alpine` (`db` in
 `compose.yml`). Copies of one tag carry one digest. `ops/Dockerfile.whisper`
-inherits the backend pin through `FROM ytdigest-backend:latest`. Upstream
+inherits the backend pin through `FROM ytdigest-deps`. Upstream
 rebuilds a stable tag for security fixes, so a pin goes stale silently unless
 something looks: the daily `base image digest check` workflow
 (`.github/workflows/base-image-digest-check.yml`, running
@@ -1883,12 +1907,12 @@ services:
     build:
       context: .
       dockerfile: ops/Dockerfile.whisper
-      # ops/Dockerfile.whisper is `FROM ytdigest-backend:latest`. Naming that
-      # image as a build context from the `migrate` service makes Compose
-      # build `migrate` first and use the result, so the whisper image is
-      # never built on a stale or missing backend image.
+      # ops/Dockerfile.whisper is `FROM ytdigest-deps`. Naming that image as
+      # a build context from the build-only `deps` service makes Compose
+      # build `deps` first, so the whisper image is never built on a stale
+      # or missing base. The key is the image name WITHOUT the tag.
       additional_contexts:
-        "ytdigest-backend:latest": "service:migrate"
+        ytdigest-deps: "service:deps"
     image: ytdigest-whisper:latest
     command: python -m services.transcriber.main
     environment:
@@ -1949,8 +1973,9 @@ Ollama; `analyzer` gets `extra_hosts` for `host.docker.internal`; `planner`
 gets the heartbeat healthcheck; the workers get `stop_grace_period: 30s`
 (above `WORKER_SHUTDOWN_GRACE_SEC`'s 20 s); the healthcheck escapes `$` as
 `$$` and adds `start_interval`; `WHISPER_THREADS` defaults to `3` to match
-`TRANSCRIBER_CPUS=3.0`; and the whisper build names `ytdigest-backend:latest`
-as an additional context from `migrate`, so it never builds on a stale base.
+`TRANSCRIBER_CPUS=3.0`; and the whisper build names `ytdigest-deps`
+as an additional context from the build-only `deps` service (#135; it was
+`ytdigest-backend` from `migrate` before), so it never builds on a stale base.
 
 ### 11.5 Deployment mechanics worth calling out
 
@@ -2237,7 +2262,7 @@ subtitles-only until Phase 2.
 | O3 | `AUDIO_TTL_DAYS` 30 vs 90 | Disk provisioning | **Resolved 2026-10-13 (owner): `AUDIO_TTL_DAYS=30`.** Disk need = audio hours ingested per day x TTL days x MB per audio hour (16 kHz mono opus, 7.2/D6b), bounded by `AUDIO_MAX_GB` (default 20). With O1 deferring STT, the by-default hours-per-day input is ~0 (audio is fetched only on the Whisper path), so 30 days is amply within `AUDIO_MAX_GB` and the `AUDIO_MAX_GB` cap is the real bound regardless. 30 keeps retained audio (and the re-analysis window) tighter; raise it if `PREFER_WHISPER=1` is turned on and re-analysis of older episodes becomes routine. The MB-per-hour figure is still unmeasured but is moot while the cap, not the TTL, binds |
 | O4 | Local vs cloud summarizer (D5) | Cost model | Phase 5, via Compare view |
 | O5 | Embedding model + dimension (D9c) | v2 schema | Deferred; chunk table already prepared |
-| O7 | `ctranslate2` wheel availability for Python 3.14 | transcriber image build | **Resolved 2026-09-27 (task #4): wheels exist for the whole tree (ctranslate2 4.8.2, av 18.1.0, tokenizers 0.23.2, onnxruntime 1.30.0); `faster-whisper` 1.2.1 installs and transcribes on `python:3.14-slim`.** The transcriber can derive from the 3.14 backend image; the 3.13 split is not needed, which is what #56 implements (`FROM ytdigest-backend:latest`, wheels only). Details in 16.2; also `_docs/progress.md`, "Phase 0 findings" |
+| O7 | `ctranslate2` wheel availability for Python 3.14 | transcriber image build | **Resolved 2026-09-27 (task #4): wheels exist for the whole tree (ctranslate2 4.8.2, av 18.1.0, tokenizers 0.23.2, onnxruntime 1.30.0); `faster-whisper` 1.2.1 installs and transcribes on `python:3.14-slim`.** The transcriber can derive from the 3.14 backend image; the 3.13 split is not needed, which is what #56 implements (built on the backend's `deps` stage, #135; wheels only). Details in 16.2; also `_docs/progress.md`, "Phase 0 findings" |
 | O6 | Whether `speaker_coercions_total` justifies diarization (D4) | v2 scope | Observe during Phase 5 |
 
 ---
@@ -2373,7 +2398,7 @@ Three mitigations, in order of preference:
    (`api`, `planner`, `analyzer`, `migrate`) has no such constraint — pure-Python
    dependencies — and can sit on 3.14 regardless. If `ctranslate2` has no 3.14
    wheel, build `Dockerfile.whisper` `FROM python:3.13-slim` independently
-   rather than deriving from the backend image. The cost is losing shared layers
+   rather than building on the backend's `deps` stage. The cost is losing shared layers
    (§11.3), not a redesign — the services communicate only through Postgres, so
    nothing requires them to share an interpreter version.
 
