@@ -8,7 +8,15 @@
 #   docker build -f ops/Dockerfile.whisper \
 #       --build-context ytdigest-deps=docker-image://ytdigest-deps:latest \
 #       -t ytdigest-whisper:latest .
-FROM ytdigest-deps
+# Two stages (#368): `whisper-deps` holds everything except application code and
+# is what the publish workflow pushes to GHCR; `runtime` adds the code and stays
+# the default, last target. CI may replace `whisper-deps` with a prebuilt one by
+# a named build context (opt-in, inert by default, architecture.md 11.3):
+#   --build-context whisper-deps=docker-image://ghcr.io/...@sha256:...
+# Production never does; it builds both stages from source.
+
+# ---- whisper-deps: the deps stage plus the whisper packages, no application code ----
+FROM ytdigest-deps AS whisper-deps
 USER root
 # The lock is bind-mounted at build time, next to /tmp, so it is never written
 # into a layer. It holds only what
@@ -31,15 +39,6 @@ RUN /opt/venv/bin/pip check
 # app or the first model download fails with a permission error.
 RUN mkdir -p /models && chown app:app /models
 WORKDIR /app
-# The application layers: keep these five COPY lines and the chown identical to
-# ops/Dockerfile.backend (tests/test_whisper_image.py compares them).
-COPY --chown=app:app common/ ./common/
-COPY --chown=app:app adapters/ ./adapters/
-COPY --chown=app:app services/ ./services/
-COPY --chown=app:app migrations/ ./migrations/
-COPY --chown=app:app alembic.ini .
-RUN chown app:app /app
-USER app
 # Thread settings: ctranslate2 sizes its OpenMP pool from the host's cores and
 # ignores the container's CPU limit, so OMP_NUM_THREADS caps it explicitly. It
 # applies when WHISPER_THREADS is 0 (the common/config.py default, "auto"). A
@@ -54,3 +53,15 @@ USER app
 ENV OMP_NUM_THREADS=4 \
     HF_HOME=/models \
     CT2_VERBOSE=0
+
+# ---- runtime: whisper-deps plus application code (the default, last target) ----
+FROM whisper-deps AS runtime
+# The application layers: keep these five COPY lines and the chown identical to
+# ops/Dockerfile.backend (tests/test_whisper_image.py compares them).
+COPY --chown=app:app common/ ./common/
+COPY --chown=app:app adapters/ ./adapters/
+COPY --chown=app:app services/ ./services/
+COPY --chown=app:app migrations/ ./migrations/
+COPY --chown=app:app alembic.ini .
+RUN chown app:app /app
+USER app

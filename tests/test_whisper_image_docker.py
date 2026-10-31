@@ -20,6 +20,12 @@ from pathlib import Path
 import pytest
 
 from tests.docker_steps import Step, run_steps
+from tests.image_build import (
+    backend_build_args,
+    deps_context,
+    prebuilt_deps,
+    whisper_build_args,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.image]
 
@@ -29,7 +35,6 @@ _SUFFIX = uuid.uuid4().hex[:8]
 BACKEND = f"ytdigest-t135-backend-{_SUFFIX}:latest"
 DEPS = f"ytdigest-t135-deps-{_SUFFIX}:latest"
 IMAGE = f"ytdigest-t135-whisper-{_SUFFIX}:latest"
-DEPS_CONTEXT = f"ytdigest-deps=docker-image://{DEPS}"
 
 # Generates a 4 s 16 kHz mono sine with the image's ffmpeg and transcribes it
 # with the real `tiny` model; a sine has no speech, so zero segments is fine.
@@ -85,11 +90,14 @@ def _steps(*commands: str) -> list[Step]:
 
 @pytest.fixture(scope="module", autouse=True)
 def images() -> Iterator[str]:
-    builds = (
-        ("ops/Dockerfile.backend", BACKEND, ()),
-        ("ops/Dockerfile.backend", DEPS, ("--target", "deps")),
-        ("ops/Dockerfile.whisper", IMAGE, ("--build-context", DEPS_CONTEXT)),
-    )
+    # CI may supply prebuilt bases (tests/image_build.py, #368): then the local
+    # deps image is not built and the backend and whisper builds start from them.
+    builds: list[tuple[str, str, tuple[str, ...]]] = [
+        ("ops/Dockerfile.backend", BACKEND, tuple(backend_build_args())),
+    ]
+    if not prebuilt_deps():
+        builds.append(("ops/Dockerfile.backend", DEPS, ("--target", "deps")))
+    builds.append(("ops/Dockerfile.whisper", IMAGE, tuple(whisper_build_args(DEPS))))
     try:
         for dockerfile, tag, extra in builds:
             result = _docker("build", "-f", dockerfile, *extra, "-t", tag, ".", timeout=1800)
@@ -289,8 +297,7 @@ def test_a_bad_pin_fails_the_build_with_pips_error_then_the_architecture_pointer
         result = _docker(
             "build",
             "--progress=plain",
-            "--build-context",
-            DEPS_CONTEXT,
+            *deps_context(DEPS),
             "-f",
             str(context / "ops" / "Dockerfile.whisper"),
             "-t",

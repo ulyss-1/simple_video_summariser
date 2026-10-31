@@ -113,6 +113,12 @@ Activate `.venv` first; all Python commands assume it.
   `--upgrade` re-resolves everything. A failure leaves the lock untouched.
   `python scripts/lock_requirements.py --check-installed requirements.backend.lock requirements.dev.lock`
   fails when an installed package differs from the locks or is in neither.
+- `python scripts/deps_image_tag.py tags` - prints the content-hash tags of the prebuilt
+  CI dependency images on GHCR (#368); `resolve` looks them up the way the CI `images`
+  job does. To build a stage by hand on a prebuilt base, pass it as a named context:
+  `docker build -f ops/Dockerfile.backend --build-context deps=docker-image://ghcr.io/ulyss-1/ytdigest-deps@sha256:<digest> .`
+  (the image tests read `YTDIGEST_DEPS_IMAGE` / `YTDIGEST_WHISPER_DEPS_IMAGE` for it;
+  unset builds from source, as production always does)
 - `python scripts/lock_requirements.py --report-outdated` - report-only: exit 1 with one
   annotation when an `--upgrade` regeneration would change a lock, and one more when a
   direct `==` pin is behind PyPI (#278; yt-dlp is skipped, #68 checks it). What the weekly
