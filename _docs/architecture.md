@@ -206,7 +206,7 @@ ytdigest/
 ├── migrations/                # alembic
 ├── ops/
 │   ├── Dockerfile.backend     # api, planner, analyzer, migrate  (§11.3)
-│   ├── Dockerfile.whisper     # transcriber (derives from backend)
+│   ├── Dockerfile.whisper     # transcriber (builds on backend's deps stage)
 │   ├── Dockerfile.frontend    # node build → nginx runtime
 │   └── nginx.conf             # SPA fallback, CSP, /api proxy
 ├── compose.yml
@@ -244,7 +244,16 @@ class PlaylistSource(Protocol):
     def list_playlist(self, playlist_id: str, *, limit: int) -> PlaylistListing: ...
 
 class Transcriber(Protocol):
-    def transcribe(self, audio: AudioRef) -> TranscriptResult: ...
+    # `cancelled` (#324): None runs in-process (CLI); a callable runs the work in
+    # a child process that is killed when it turns true (11.5)
+    def transcribe(
+        self,
+        audio: AudioRef,
+        *,
+        language: str | None = None,
+        on_progress: Callable[[float], None] | None = None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> TranscriptResult: ...
 
 class Summarizer(Protocol):
     name: str
@@ -528,6 +537,9 @@ cancelled outcome: a raised `Cancelled`, any other exception, `Defer`, the
 watchdog's `fail_job` and the reaper all end `CANCELLED`, never `pending`. A
 handler that returns normally ends `done`, with `cancel_requested_at` still set.
 A cancel is logged once at INFO as `job.cancelled`, not as a dead letter.
+The speech-to-text of a `transcribe` job runs in a child process, and a cancel
+kills it (group `SIGKILL`) within about a second, including before the first
+decoded segment (#324; see 11.5).
 
 `DELETE /videos/{id}` (#303) applies the same cancellation, in its own
 transaction, to the jobs it keeps: it locks the video's jobs by id and then the
@@ -1045,7 +1057,8 @@ enqueues one `ingest` for a video whose newest `transcribe` job is `dead`.
 ```
 1. acquire audio: yt-dlp bestaudio → ffmpeg → 16 kHz mono opus   (D6b)
 2. register media row with expires_at = now() + AUDIO_TTL_DAYS
-3. faster-whisper (WHISPER_MODEL, int8, beam 5, VAD)
+3. faster-whisper (WHISPER_MODEL, int8, beam 5, VAD)             (#324)
+   └─ in a child process the parent kills on cancel (in-process from the CLI)
    └─ heartbeat every 60 s throughout                            (C2)
 4. persist transcript (source='whisper', engine_meta incl. measured RTF)
 5. chunk (§7.3)
@@ -1059,6 +1072,22 @@ A `transcribe` job that ends because its video was deleted (a delete before the
 audio file and the `media` row on its exception path whatever `AUDIO_KEEP` says:
 nobody can ever see that row again, and the API unlinked only the files it knew of
 at delete time. A file the API already removed is not an error.
+
+Called from a worker (a `cancelled` callable is given), the speech-to-text runs in a
+child process, one per job (`python -m adapters.transcription.faster_whisper_child`,
+started with `subprocess`, never `fork`, in its own session); the CLI calls it
+in-process and keeps the model on the instance. The child loads the model, runs the
+same decoding path as the in-process one and answers on a dedicated pipe with a
+`progress` message per segment, then one `done` (segments, language, `engine_meta`)
+or one `error`; the parent never imports `faster_whisper`. The `engine_meta` keys are
+unchanged, but `load_sec` is now a per-job figure, the child's real load time, not 0.0
+after the first job. Measured on 2026-10-31 (an 8-thread Linux host with the live
+stack running beside it, container limited to 3 CPUs, `WHISPER_THREADS=3`, int8, model
+already in the cache): `large-v3` 13.1, 18.5 and 17.1 s on three consecutive loads,
+`tiny` about 0.8 s. That is below 30 s, so a child per job was chosen over a persistent
+child: it costs under about 1.5% of the shortest real job (20 min) and returns the
+model's memory to the container after every job. `rtf` still excludes the load time,
+so `rtf_history` is not skewed.
 
 Recording measured RTF in `engine_meta` turns §11's one-off benchmark into
 continuous data — the D3 revisit trigger ("backlog grows monotonically")
@@ -1479,7 +1508,7 @@ Six runtime containers, four build contexts, three custom images.
 | `api` | `ytdigest-backend` | same image | 1..N | HTTP API |
 | `planner` | `ytdigest-backend` | same image | **exactly 1** | periodic tasks (§1) |
 | `analyzer` | `ytdigest-backend` | same image | 1..N | worker: `analyze` |
-| `transcriber` | `ytdigest-whisper` | `ops/Dockerfile.whisper` | 1..N | worker: `ingest`, `transcribe` |
+| `transcriber` | `ytdigest-whisper` | `ops/Dockerfile.whisper`, on the `deps` stage of `ops/Dockerfile.backend` (#135) | 1..N | worker: `ingest`, `transcribe` |
 | `web` | `ytdigest-web` | `ops/Dockerfile.frontend` | 1 | nginx: static SPA + reverse proxy |
 | `metabase` *(optional)* | upstream | — | 1 | ad-hoc queries, read-only role |
 
@@ -1532,19 +1561,24 @@ RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip install --require-hashes --no-deps -r requirements.backend.lock && \
     /opt/venv/bin/pip check
 
-# ---- runtime ----
-FROM python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8
+# ---- deps: runtime base, no application code ----
+FROM python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8 AS deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg curl && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH PYTHONUNBUFFERED=1 PYTHONPATH=/app
+RUN useradd -r -u 10001 -m app && \
+    mkdir -p /data/audio && chown -R app:app /data
 WORKDIR /app
-COPY common/ ./common/
-COPY adapters/ ./adapters/
-COPY services/ ./services/
-COPY migrations/ ./migrations/
-COPY alembic.ini .
-RUN useradd -r -u 10001 -m app && chown -R app:app /app
+
+# ---- runtime: deps plus application code (the default, last target) ----
+FROM deps AS runtime
+COPY --chown=app:app common/ ./common/
+COPY --chown=app:app adapters/ ./adapters/
+COPY --chown=app:app services/ ./services/
+COPY --chown=app:app migrations/ ./migrations/
+COPY --chown=app:app alembic.ini .
+RUN chown app:app /app
 USER app
 ```
 
@@ -1566,18 +1600,39 @@ release never does. A weekly report-only workflow (`lock-update-check.yml`, #266
 entries, when an `--upgrade` regeneration of the locks would change any of them. The same run reports
 direct `==` pins that are behind PyPI's newest release (#278); a pin held back on purpose carries
 `# hold: <reason>` and shows as a notice instead of turning the run red. yt-dlp stays on #68's daily
-check. On a red run, regenerate with
+check. The same workflow also runs `--report-vulnerabilities` (#279), which asks OSV.dev about the
+locked versions of all three locks and goes red with one annotation naming package, version and
+advisory id; an OSV outage ends green with a notice. It reports only: fixing is the same
+regenerate-and-PR flow. On a red run, regenerate with
 `backend --upgrade`, `whisper --upgrade` and `dev --upgrade`, run `pytest -m image`, and open a PR.
 
 **Layer ordering matters:** the lock is copied and installed *before*
 application code. Editing a Python file then rebuilds only the final `COPY`
-layer, not the dependency install — the difference between a 5-second and a
-3-minute rebuild during Phase 1–5 iteration.
+layers, not the dependency install.
+
+**The `deps` stage (#135).** Everything except application code (base,
+`ffmpeg`, `curl`, the venv, the `app` user, `/data/audio`, `WORKDIR /app`) is a
+named stage, `deps`; the last stage, `runtime`, is `deps` plus the application
+`COPY` layers and is still the default target. Both `ytdigest-backend` and
+`ytdigest-whisper` are built on `deps`, and the whisper `pip install` runs before
+the application `COPY`, so a code change leaves the whisper install `CACHED`.
+Decision (owner, 2026-10-31): a dependencies-only stage, not a BuildKit pip cache
+mount. A cache mount's `RUN` step still re-executes on every change and never
+shows `CACHED` (it only skips downloads), and it conflicts with the deliberate
+`--no-cache-dir`. Measured before the change (#56, Docker Desktop on WSL): whisper
+clean build 27.5 s / 28.0 s, backend clean build 41.4 s; after a one-line change
+under `common/`, backend rebuild about 1 s, whisper rebuild 27.1 s / 27.0 s. The
+two images repeat the five application `COPY` lines (a static test compares them,
+so `/app` cannot drift). `deps` is built by a build-only compose service
+(`scale: 0`, so it never runs; a profile would make Compose reject the transcriber's `service:deps` context whenever it is not enabled) with `provenance: false`: the default
+attestation carries timestamps, which would give every rebuild of `deps` a new
+digest and make the whisper layers miss the cache. Changing
+`requirements.backend.lock` does re-run the whisper install, as it must.
 
 #### `ops/Dockerfile.whisper`
 
 ```dockerfile
-FROM ytdigest-backend:latest
+FROM ytdigest-deps          # the `deps` stage of ops/Dockerfile.backend (#135)
 USER root
 WORKDIR /tmp
 # --only-binary: ctranslate2 ships no sdist, so a missing wheel must fail
@@ -1591,19 +1646,21 @@ RUN /opt/venv/bin/pip check
 # /models is the whisper-models volume; a fresh volume copies its ownership.
 RUN mkdir -p /models && chown app:app /models
 WORKDIR /app
+# the same five COPY --chown=app:app lines and `chown app:app /app` as the backend
 USER app
 ENV OMP_NUM_THREADS=4 \
     HF_HOME=/models \
     CT2_VERBOSE=0
 ```
 
-Deriving from the backend image rather than rebuilding from `python:3.14-slim`
-means shared layers are stored and pulled once. `HF_HOME` points at a named
+Building on the backend's `deps` stage rather than from `python:3.14-slim`
+means the deps layers are stored and pulled once, shared by both images. `HF_HOME` points at a named
 volume so the multi-GB `large-v3` model survives container recreation —
 otherwise every `docker compose up --build` re-downloads it.
 
 `OMP_NUM_THREADS` is set explicitly because ctranslate2 otherwise detects the
-*host's* core count, ignoring the container's CPU limit, and oversubscribes.
+*host's* core count, ignoring the container's CPU limit, and oversubscribes. The
+Whisper child (#324) inherits it unchanged, like `HF_HOME` and `CT2_VERBOSE`.
 
 #### `ops/Dockerfile.frontend`
 
@@ -1634,10 +1691,10 @@ starts with `--read-only --tmpfs /tmp`.
 Every upstream base image is pinned by tag **and** digest (#241, #249), the
 multi-platform index digest, so every build uses the same bytes: `nginx`
 (runtime stage above), `node:24-alpine` (build stage and the dev `web` service
-in `compose.override.yml`), `python:3.14-slim` (both `ops/Dockerfile.backend`
-stages and `ops/Dockerfile.bakeoff`) and `postgres:18-alpine` (`db` in
+in `compose.override.yml`), `python:3.14-slim` (the `builder` and `deps`
+stages of `ops/Dockerfile.backend` and `ops/Dockerfile.bakeoff`) and `postgres:18-alpine` (`db` in
 `compose.yml`). Copies of one tag carry one digest. `ops/Dockerfile.whisper`
-inherits the backend pin through `FROM ytdigest-backend:latest`. Upstream
+inherits the backend pin through `FROM ytdigest-deps`. Upstream
 rebuilds a stable tag for security fixes, so a pin goes stale silently unless
 something looks: the daily `base image digest check` workflow
 (`.github/workflows/base-image-digest-check.yml`, running
@@ -1946,12 +2003,12 @@ services:
     build:
       context: .
       dockerfile: ops/Dockerfile.whisper
-      # ops/Dockerfile.whisper is `FROM ytdigest-backend:latest`. Naming that
-      # image as a build context from the `migrate` service makes Compose
-      # build `migrate` first and use the result, so the whisper image is
-      # never built on a stale or missing backend image.
+      # ops/Dockerfile.whisper is `FROM ytdigest-deps`. Naming that image as
+      # a build context from the build-only `deps` service makes Compose
+      # build `deps` first, so the whisper image is never built on a stale
+      # or missing base. The key is the image name WITHOUT the tag.
       additional_contexts:
-        "ytdigest-backend:latest": "service:migrate"
+        ytdigest-deps: "service:deps"
     image: ytdigest-whisper:latest
     command: python -m services.transcriber.main
     environment:
@@ -2012,8 +2069,9 @@ Ollama; `analyzer` gets `extra_hosts` for `host.docker.internal`; `planner`
 gets the heartbeat healthcheck; the workers get `stop_grace_period: 30s`
 (above `WORKER_SHUTDOWN_GRACE_SEC`'s 20 s); the healthcheck escapes `$` as
 `$$` and adds `start_interval`; `WHISPER_THREADS` defaults to `3` to match
-`TRANSCRIBER_CPUS=3.0`; and the whisper build names `ytdigest-backend:latest`
-as an additional context from `migrate`, so it never builds on a stale base.
+`TRANSCRIBER_CPUS=3.0`; and the whisper build names `ytdigest-deps`
+as an additional context from the build-only `deps` service (#135; it was
+`ytdigest-backend` from `migrate` before), so it never builds on a stale base.
 
 ### 11.5 Deployment mechanics worth calling out
 
@@ -2075,6 +2133,22 @@ the cancelled attempt had already spent is recorded in `analyze_failed_usage`
 with `outcome = 'cancelled'` (#252, 6). A batch-mode job keeps its #89 behaviour: it stops
 waiting and leaves its batch to the orphan pass (#160).
 
+The faster-whisper work of a `transcribe` job (#324) runs in a child process,
+because it is native code on the calling thread and nothing inside the process
+can stop it, which includes the long stretch before the first segment (model
+load, audio decode, the VAD pass, the first 30 s window). The parent polls
+`cancelled()` every 0.5 s while it waits for the child's next message; on a cancel
+it kills the child's whole process group (`SIGKILL`), reaps it and raises
+`Cancelled`, so the CPU is free when the exception is raised and the same worker
+claims its next job with nothing left running. Any other exit from the wait
+(`Cancelled` from `on_progress` for a user or a shutdown cancel,
+`KeyboardInterrupt`, an exception from `on_progress`) kills and reaps the child the
+same way, and a `done` message that arrived in the same slice as the flag is used.
+A child must not outlive its parent: the watchdog's `os._exit(70)` runs no `finally`,
+so the child exits by itself within seconds when its stdin closes (or its parent
+pid changes). The progress callback and the heartbeat stay in the parent, on the
+calling thread.
+
 **Network segmentation.** `internal: true` means the database and `migrate`
 have no route off the compose bridge. The workers also sit on `egress`.
 Only `api` sits on `internal` and `edge`, and only `web` publishes a port — bound to `127.0.0.1`
@@ -2085,7 +2159,13 @@ of the host. The 6 GB memory limit matters because `large-v3` at int8 needs
 roughly 2–3 GB resident, and an unbounded container that OOMs takes the host's
 OOM killer with it. Note `deploy.resources.limits` requires Compose v2 (it is
 honored by `docker compose`, unlike the old v1 behavior where it was
-Swarm-only).
+Swarm-only). The Whisper child (#324) inherits the container's environment
+(`OMP_NUM_THREADS`, `HF_HOME`, `CT2_VERBOSE`) and sits inside the same cgroup
+limits, so both bounds cover it without any code; the parent process never imports
+`faster_whisper` or loads a model, so the 6 GB hold one model, and at most one child
+runs per worker. If the kernel's OOM killer `SIGKILL`s the child, the parent sees
+an exit by signal 9 without a final message and raises `ResourceError` (class
+`RESOURCE`: dead-letter and alert), as it did for `MemoryError` before.
 
 **Ollama runs on the host, not in compose.** It is a shared service with its
 own model cache, not part of this stack's lifecycle. The analyzer reaches it
@@ -2303,7 +2383,7 @@ subtitles-only until Phase 2.
 | O3 | `AUDIO_TTL_DAYS` 30 vs 90 | Disk provisioning | **Resolved 2026-10-13 (owner): `AUDIO_TTL_DAYS=30`.** Disk need = audio hours ingested per day x TTL days x MB per audio hour (16 kHz mono opus, 7.2/D6b), bounded by `AUDIO_MAX_GB` (default 20). With O1 deferring STT, the by-default hours-per-day input is ~0 (audio is fetched only on the Whisper path), so 30 days is amply within `AUDIO_MAX_GB` and the `AUDIO_MAX_GB` cap is the real bound regardless. 30 keeps retained audio (and the re-analysis window) tighter; raise it if `PREFER_WHISPER=1` is turned on and re-analysis of older episodes becomes routine. The MB-per-hour figure is still unmeasured but is moot while the cap, not the TTL, binds |
 | O4 | Local vs cloud summarizer (D5) | Cost model | Phase 5, via Compare view |
 | O5 | Embedding model + dimension (D9c) | v2 schema | Deferred; chunk table already prepared |
-| O7 | `ctranslate2` wheel availability for Python 3.14 | transcriber image build | **Resolved 2026-09-27 (task #4): wheels exist for the whole tree (ctranslate2 4.8.2, av 18.1.0, tokenizers 0.23.2, onnxruntime 1.30.0); `faster-whisper` 1.2.1 installs and transcribes on `python:3.14-slim`.** The transcriber can derive from the 3.14 backend image; the 3.13 split is not needed, which is what #56 implements (`FROM ytdigest-backend:latest`, wheels only). Details in 16.2; also `_docs/progress.md`, "Phase 0 findings" |
+| O7 | `ctranslate2` wheel availability for Python 3.14 | transcriber image build | **Resolved 2026-09-27 (task #4): wheels exist for the whole tree (ctranslate2 4.8.2, av 18.1.0, tokenizers 0.23.2, onnxruntime 1.30.0); `faster-whisper` 1.2.1 installs and transcribes on `python:3.14-slim`.** The transcriber can derive from the 3.14 backend image; the 3.13 split is not needed, which is what #56 implements (built on the backend's `deps` stage, #135; wheels only). Details in 16.2; also `_docs/progress.md`, "Phase 0 findings" |
 | O6 | Whether `speaker_coercions_total` justifies diarization (D4) | v2 scope | Observe during Phase 5 |
 
 ---
@@ -2439,7 +2519,7 @@ Three mitigations, in order of preference:
    (`api`, `planner`, `analyzer`, `migrate`) has no such constraint — pure-Python
    dependencies — and can sit on 3.14 regardless. If `ctranslate2` has no 3.14
    wheel, build `Dockerfile.whisper` `FROM python:3.13-slim` independently
-   rather than deriving from the backend image. The cost is losing shared layers
+   rather than building on the backend's `deps` stage. The cost is losing shared layers
    (§11.3), not a redesign — the services communicate only through Postgres, so
    nothing requires them to share an interpreter version.
 

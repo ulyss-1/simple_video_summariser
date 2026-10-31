@@ -736,6 +736,7 @@ class FakeWhisper:
         *,
         language: str | None = None,
         on_progress: Callable[[float], None] | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> TranscriptResult:
         self.calls += 1
         if self.loads == 0:
@@ -874,6 +875,26 @@ def test_lazy_transcriber_builds_nothing_until_first_use() -> None:
     lazy.transcribe(AUDIO)
     lazy.transcribe(AUDIO)
     assert factory.calls == 1
+
+
+def test_lazy_transcriber_forwards_language_progress_and_cancelled() -> None:
+    received: dict[str, object] = {}
+
+    class Recording:
+        def transcribe(self, audio: AudioRef, **kwargs: Any) -> TranscriptResult:
+            received.update(kwargs)
+            return TranscriptResult(segments=(), language="en", engine_meta={})
+
+    def progress(_: float) -> None: ...
+
+    def cancelled() -> bool:
+        return False
+
+    LazyTranscriber(Recording).transcribe(
+        AUDIO, language="de", on_progress=progress, cancelled=cancelled
+    )
+
+    assert received == {"language": "de", "on_progress": progress, "cancelled": cancelled}
 
 
 def test_default_transcriber_factory_does_not_import_faster_whisper() -> None:

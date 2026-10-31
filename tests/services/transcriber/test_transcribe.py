@@ -110,8 +110,9 @@ class FakeTranscriber:
         *,
         language: str | None = None,
         on_progress: Callable[[float], None] | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> TranscriptResult:
-        self.calls.append({"audio": audio, "language": language})
+        self.calls.append({"audio": audio, "language": language, "cancelled": cancelled})
         if self.on_call is not None:
             self.on_call(audio)
         assert on_progress is not None
@@ -607,6 +608,24 @@ def test_progress_reaches_the_cancellation_check_and_cancelled_writes_nothing(
     assert rig.count("transcripts") == 0
     assert rig.count("transcript_chunks") == 0
     assert rig.count("jobs") == 0
+
+
+def test_the_transcriber_gets_a_cancelled_callable_that_reads_the_jobs_flag(
+    make_rig: Callable[..., Rig],
+) -> None:
+    seen: list[bool] = []
+
+    def probe(_: AudioRef) -> None:
+        cancelled = rig.transcriber.calls[-1]["cancelled"]
+        seen.append(cancelled())
+        rig.ctx._cancel()
+        seen.append(cancelled())
+
+    rig = make_rig(transcriber=FakeTranscriber(on_call=probe))
+
+    rig.run()
+
+    assert seen == [False, True]
 
 
 def test_a_thousand_progress_calls_produce_at_most_eleven_progress_log_lines(

@@ -215,7 +215,7 @@ def test_an_id_that_starts_with_a_dash_runs_after_double_dash(
 class ProgressingTranscriber(FakeTranscriber):
     """Reports the audio position the way the Whisper adapter does."""
 
-    def transcribe(self, audio: Any, *, language: Any = None, on_progress: Any = None) -> Any:
+    def transcribe(self, audio: Any, *, language: Any = None, on_progress: Any = None, cancelled: Any = None) -> Any:
         for done in (10.0, 60.0, 120.0):
             on_progress(done)
         return super().transcribe(audio, language=language, on_progress=on_progress)

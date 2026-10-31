@@ -13,12 +13,15 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
 from adapters.transcription.faster_whisper import FasterWhisperTranscriber
 from common.config import get_settings
+from common.errors import Cancelled
 from common.models import AudioRef
 
 pytestmark = pytest.mark.whisper
@@ -122,4 +125,50 @@ def test_the_tiny_model_transcribes_a_generated_clip(
         joined = " ".join(s.text.lower() for s in result.segments)
         assert "fox" in joined or "dog" in joined
 
+    get_settings.cache_clear()
+
+
+def _clip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AudioRef:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@h/db")
+    monkeypatch.setenv("AUDIO_DIR", str(tmp_path))
+    get_settings.cache_clear()
+    rel_path = "sm/smoke.wav"
+    clip_path = tmp_path / rel_path
+    clip_path.parent.mkdir(parents=True)
+    duration_sec = _generate_clip(clip_path)
+    return AudioRef(rel_path=rel_path, bytes=clip_path.stat().st_size, duration_sec=duration_sec)
+
+
+def test_the_tiny_model_transcribes_in_a_child_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio = _clip(tmp_path, monkeypatch)
+    transcriber = FasterWhisperTranscriber(model="tiny", compute_type="int8", threads=1)
+
+    result = transcriber.transcribe(audio, cancelled=lambda: False)
+
+    assert result.engine_meta["model"] == "tiny"
+    assert result.engine_meta["load_sec"] > 0
+    assert transcriber._loaded_model is None  # the model lived in the child only
+    get_settings.cache_clear()
+
+
+def test_a_cancel_stops_the_real_child_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio = _clip(tmp_path, monkeypatch)
+    transcriber = FasterWhisperTranscriber(
+        model="tiny", compute_type="int8", threads=1, poll_interval=0.05
+    )
+    flag = threading.Event()
+    timer = threading.Timer(0.3, flag.set)  # inside the model load or the first window
+    timer.start()
+    started = time.monotonic()
+    try:
+        with pytest.raises(Cancelled):
+            transcriber.transcribe(audio, cancelled=flag.is_set)
+    finally:
+        timer.cancel()
+
+    assert time.monotonic() - started < 5.0
     get_settings.cache_clear()

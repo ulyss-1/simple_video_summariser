@@ -465,6 +465,8 @@ def test_dev_config_adds_no_secrets_or_new_env_keys(
     dev = _dev(compose_config)
     prod = _services(compose_config(PROD))
     for name, svc in dev.items():
+        if name == "deps":
+            continue  # build-only, scale 0 (#135): no environment at all
         added = set(_env_of(svc)) - set(prod[name].get("environment", {}))  # type: ignore[call-overload]
         assert added <= {"API_PROXY_TARGET"}, name
     assert "ANTHROPIC_API_KEY" not in _env_of(dev["transcriber"])

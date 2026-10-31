@@ -55,7 +55,7 @@ def _expected(copy: Copy) -> str:
         db = [r for r in refs if r.written == "postgres"]
         assert len(db) == 1, f"{copy.source}: want exactly one pinned postgres image, got {len(db)}"
         return str(db[0].pinned())
-    return str(module.pinned_references(text)[-1].pinned())  # the runtime stage is the last FROM
+    return str(module.pinned_references(text)[-1].pinned())  # the last digest-pinned FROM is the `deps` stage; `runtime` is `FROM deps`
 
 
 def check_copy(copy: Copy, text: str) -> str | None:
