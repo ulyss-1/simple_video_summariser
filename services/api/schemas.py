@@ -669,3 +669,24 @@ def catalog_page_out(page: CatalogPage) -> CatalogPageOut:
         total_count=page.total_count,
         items=[catalog_item_out(item) for item in page.items],
     )
+
+
+class ModelEstimate(BaseModel):
+    """One model's estimated analysis cost (#153). ``cost_usd`` is a number only when ``estimated``.
+
+    ``unknown`` carries a ``reason``; ``free`` has neither number nor reason.
+    """
+
+    model: str
+    state: Literal["estimated", "unknown", "free"]
+    cost_usd: float | None
+    reason: Literal["no_transcript", "no_cost_samples", "no_price"] | None
+    samples: int
+
+
+class AnalysisEstimate(BaseModel):
+    video_id: str
+    summarizer: Literal["ollama", "anthropic", "free"]
+    transcript_chars: int | None
+    batch: bool
+    estimates: list[ModelEstimate]

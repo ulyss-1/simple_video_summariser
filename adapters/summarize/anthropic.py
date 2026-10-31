@@ -104,6 +104,13 @@ _PRICES: dict[str, tuple[Fraction, Fraction]] = {
     "claude-haiku-4-5": (Fraction(1), Fraction(5)),
     "claude-haiku-4-5-20251001": (Fraction(1), Fraction(5)),
 }
+
+
+def has_price(model: str) -> bool:
+    """Whether ``_PRICES`` knows ``model``: a recorded ``cost_usd`` needs it (#102, #153)."""
+    return model in _PRICES
+
+
 _CACHE_WRITE_FACTOR = Fraction(5, 4)
 _CACHE_READ_FACTOR = Fraction(1, 10)
 _BATCH_FACTOR = Fraction(1, 2)

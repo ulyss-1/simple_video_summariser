@@ -610,6 +610,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/videos/{video_id}/analysis-estimate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Analysis Estimate
+         * @description Estimated USD cost of the LLM analysis of this video, per model (#153). Reads only.
+         */
+        get: operations["get_analysis_estimate_videos__video_id__analysis_estimate_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/videos/{video_id}/cancel": {
         parameters: {
             query?: never;
@@ -718,6 +738,22 @@ export interface components {
             kind: string;
             /** State */
             state: string;
+        };
+        /** AnalysisEstimate */
+        AnalysisEstimate: {
+            /** Batch */
+            batch: boolean;
+            /** Estimates */
+            estimates: components["schemas"]["ModelEstimate"][];
+            /**
+             * Summarizer
+             * @enum {string}
+             */
+            summarizer: "ollama" | "anthropic" | "free";
+            /** Transcript Chars */
+            transcript_chars: number | null;
+            /** Video Id */
+            video_id: string;
         };
         /** AnalysisList */
         AnalysisList: {
@@ -1425,6 +1461,27 @@ export interface components {
             enrichment_state: "pending";
             /** Video Id */
             video_id: string;
+        };
+        /**
+         * ModelEstimate
+         * @description One model's estimated analysis cost (#153). ``cost_usd`` is a number only when ``estimated``.
+         *
+         *     ``unknown`` carries a ``reason``; ``free`` has neither number nor reason.
+         */
+        ModelEstimate: {
+            /** Cost Usd */
+            cost_usd: number | null;
+            /** Model */
+            model: string;
+            /** Reason */
+            reason: ("no_transcript" | "no_cost_samples" | "no_price") | null;
+            /** Samples */
+            samples: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "estimated" | "unknown" | "free";
         };
         /** OpsChannelListOut */
         OpsChannelListOut: {
@@ -2891,6 +2948,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AnalysisList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_analysis_estimate_videos__video_id__analysis_estimate_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                video_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisEstimate"];
                 };
             };
             /** @description Validation Error */

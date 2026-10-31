@@ -36,6 +36,54 @@
         "title": "ActiveJobOut",
         "type": "object"
       },
+      "AnalysisEstimate": {
+        "properties": {
+          "batch": {
+            "title": "Batch",
+            "type": "boolean"
+          },
+          "estimates": {
+            "items": {
+              "$ref": "#/components/schemas/ModelEstimate"
+            },
+            "title": "Estimates",
+            "type": "array"
+          },
+          "summarizer": {
+            "enum": [
+              "ollama",
+              "anthropic",
+              "free"
+            ],
+            "title": "Summarizer",
+            "type": "string"
+          },
+          "transcript_chars": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transcript Chars"
+          },
+          "video_id": {
+            "title": "Video Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "video_id",
+          "summarizer",
+          "transcript_chars",
+          "batch",
+          "estimates"
+        ],
+        "title": "AnalysisEstimate",
+        "type": "object"
+      },
       "AnalysisList": {
         "properties": {
           "items": {
@@ -2075,6 +2123,64 @@
           "enrichment_state"
         ],
         "title": "MetadataRetryOut",
+        "type": "object"
+      },
+      "ModelEstimate": {
+        "description": "One model's estimated analysis cost (#153). ``cost_usd`` is a number only when ``estimated``.\n\n``unknown`` carries a ``reason``; ``free`` has neither number nor reason.",
+        "properties": {
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "no_transcript",
+                  "no_cost_samples",
+                  "no_price"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "samples": {
+            "title": "Samples",
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "estimated",
+              "unknown",
+              "free"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "state",
+          "cost_usd",
+          "reason",
+          "samples"
+        ],
+        "title": "ModelEstimate",
         "type": "object"
       },
       "OpsChannelListOut": {
@@ -5080,6 +5186,46 @@
           }
         },
         "summary": "Get Video Analyses"
+      }
+    },
+    "/videos/{video_id}/analysis-estimate": {
+      "get": {
+        "description": "Estimated USD cost of the LLM analysis of this video, per model (#153). Reads only.",
+        "operationId": "get_analysis_estimate_videos__video_id__analysis_estimate_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "video_id",
+            "required": true,
+            "schema": {
+              "title": "Video Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisEstimate"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Analysis Estimate"
       }
     },
     "/videos/{video_id}/cancel": {

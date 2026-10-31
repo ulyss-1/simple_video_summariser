@@ -397,3 +397,26 @@ def latest_whisper_rtf(conn: psycopg.Connection[Any]) -> float | None:
         (_MIN_RTF, _MAX_RTF),
     ).fetchone()
     return None if row is None else float(row[0])
+
+
+def analysis_transcript_chars(
+    conn: psycopg.Connection[Any], video_ids: Sequence[str]
+) -> dict[str, int]:
+    """Characters of the transcript the analyzer would pick, per video (#153).
+
+    The lowest ``transcript_rank`` among the video's non-blank transcripts, ties
+    by id (the order ``get_best_transcript`` uses). Videos without one are absent.
+    Reads ``length(full_text)`` only, never the text.
+    """
+    if not video_ids:
+        return {}
+    rows = conn.execute(
+        r"""
+        SELECT DISTINCT ON (video_id) video_id, length(full_text)
+        FROM transcripts
+        WHERE video_id = ANY(%s) AND full_text ~ '\S'
+        ORDER BY video_id, transcript_rank(source), id
+        """,
+        (list(video_ids),),
+    ).fetchall()
+    return {str(row[0]): int(row[1]) for row in rows}
