@@ -64,6 +64,12 @@ def jobs(*files: str) -> dict[str, bool]:
         (("scripts/phase0x/x.py",), True, False, True, False),
         (("pyproject.toml",), True, False, True, False),
         (("scripts/ci_changes.sh",), True, True, True, True),
+        # #368: the publish workflow affects no image build, but a change to the
+        # tag script changes what `images` computes (and it has python tests).
+        ((".github/workflows/publish-deps-images.yml",), True, False, False, False),
+        (("scripts/deps_image_tag.py",), True, False, True, False),
+        (("tests/scripts/test_deps_image_tag.py",), True, False, True, False),  # "image" in the name
+        (("tests/image_build.py",), True, False, True, False),
         ((), True, True, True, True),
     ],
 )

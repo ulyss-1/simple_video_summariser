@@ -42,9 +42,18 @@ def _app_copies(dockerfile: Path) -> list[tuple[str, str]]:
     ]
 
 
-def test_single_from_is_the_deps_image() -> None:
+def test_stages_are_whisper_deps_on_the_deps_image_then_runtime_last() -> None:
+    # `whisper-deps` is what the publish workflow pushes to GHCR (#368); the
+    # default, last target stays `runtime`, as in the backend Dockerfile.
     froms = [args for name, args in _steps() if name == "FROM"]
-    assert froms == ["ytdigest-deps"]
+    assert froms == ["ytdigest-deps AS whisper-deps", "whisper-deps AS runtime"]
+
+
+def test_whisper_deps_stage_has_no_application_code() -> None:
+    stage = _steps()[: next(i for i, (n, a) in enumerate(_steps()) if n == "FROM" and a.endswith("AS runtime"))]
+    for name, args in stage:
+        if name in {"COPY", "ADD"}:
+            assert not any(s.startswith(_APP_SOURCES) for s in _copy_sources(args)), args
 
 
 def test_application_layers_are_identical_to_the_backend_image() -> None:
@@ -62,7 +71,7 @@ def test_application_code_is_copied_after_the_install_and_pip_check() -> None:
     first_copy = next(i for i, (n, _) in enumerate(steps) if n == "COPY")
     last_user = max(i for i, (n, _) in enumerate(steps) if n == "USER")
     first_env = next(i for i, (n, _) in enumerate(steps) if n == "ENV")
-    assert install < check < models < first_copy < last_user < first_env
+    assert install < check < models < first_env < first_copy < last_user
 
 
 def test_install_uses_binary_only_hashed_wheels_from_the_lock() -> None:

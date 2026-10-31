@@ -1519,6 +1519,11 @@ The transcriber is the exception because Whisper's dependency tree (torch,
 ctranslate2, ffmpeg) adds roughly 2 GB that the other three would otherwise
 carry for nothing.
 
+Two more images exist, **outside this inventory**: `ghcr.io/ulyss-1/ytdigest-deps`
+and `ghcr.io/ulyss-1/ytdigest-whisper-deps` (#368, §11.3). They are prebuilt
+dependency bases that only the CI `images` job may use; nothing is deployed
+from them, no container above runs them, and the deploy host never pulls them.
+
 ### 11.2 Revision to earlier draft: the SPA gets its own container
 
 An earlier version of this section had `api` serving the built SPA from
@@ -1662,10 +1667,78 @@ attestation carries timestamps, which would give every rebuild of `deps` a new
 digest and make the whisper layers miss the cache. Changing
 `requirements.backend.lock` does re-run the whisper install, as it must.
 
+**Prebuilt dependency images on GHCR (#368), for CI only.** The `images` job used
+to reinstall ffmpeg, the locked backend packages and the locked whisper packages
+on every run. Two public packages now hold the results, with no application code
+and no secret: `ghcr.io/ulyss-1/ytdigest-deps` (the `deps` stage: the digest-pinned
+`python:3.14-slim`, `ffmpeg curl`, the locked venv, Deno, the `app` user) and
+`ghcr.io/ulyss-1/ytdigest-whisper-deps` (the `whisper-deps` stage of
+`ops/Dockerfile.whisper`: `ytdigest-deps` by digest plus the locked whisper
+packages, `pip check`, `/models`, the whisper `ENV`). `ops/Dockerfile.whisper` is
+therefore two stages, `whisper-deps` and the default last target `runtime`, which
+adds the five application `COPY` lines.
+
+- **Tags.** Each package has an immutable `sha-<first 16 hex of a content hash>`
+  tag, written once and never overwritten, and a floating `latest` that is for
+  humans only: nothing consumes it. The hash (`scripts/deps_image_tag.py`, standard
+  library only, one function for the publisher and for CI) covers the whole text of
+  the `deno`, `builder` and `deps` stages of `ops/Dockerfile.backend` (so the
+  `python:3.14-slim` and Deno digest pins), `requirements.backend.lock`, and a
+  `YYYY-MM` stamp; the whisper hash adds the `whisper-deps` stage,
+  `requirements.whisper.lock` and the deps hash. Stages are hashed whole, so a new
+  instruction cannot escape it; comments, blank lines and line endings do not count,
+  and neither do application code or the `runtime` stages. The stamp exists because
+  the apt packages are not version-pinned: without it an image could carry a stale
+  Debian fix indefinitely.
+- **Publishing.** `.github/workflows/publish-deps-images.yml` runs only from
+  `master` in this repository, with the job's `GITHUB_TOKEN` (`packages: write` on
+  that one job, no other secret, no `pull_request` trigger), on a push that touches a
+  hash input, on the 1st of each month (when the stamp rolls over, which rebuilds
+  the apt layer), and by hand. It builds with the Docker CLI (`docker buildx build
+  --push --provenance=false`, so the digest follows content, not build time),
+  supplies `ytdigest-deps` to the whisper build by the digest it just pushed, labels
+  both images with `org.opencontainers.image.source` and the inputs hash, skips a
+  build whose hash tag already exists, moves `latest`, writes tag, digest and size to
+  the job summary, and then deletes old versions (keeps `latest`, the five newest
+  `sha-` tags and anything younger than 30 days). A refused deletion ends in a
+  warning, not a failed publish. Publishes are serialised.
+- **Consumption.** The `images` job runs `scripts/deps_image_tag.py resolve` with
+  the checked-out script: it computes both tags, asks the registry for each
+  (`docker buildx imagetools inspect`, anonymous), checks the image's source label
+  is this repository, and exports `YTDIGEST_DEPS_IMAGE` and
+  `YTDIGEST_WHISPER_DEPS_IMAGE` as `ghcr.io/...@sha256:<digest>`. The image tests
+  read them in one place (`tests/image_build.py`) and pass them to `docker build` as
+  named build contexts, `--build-context deps=docker-image://...` for the backend
+  Dockerfile and `--build-context whisper-deps=docker-image://...` for the whisper
+  one, which replace those stages without running them. Unset or empty means build
+  from source, which is also all `docker build` and `docker compose` do by default:
+  no `FROM`, compose file or host script mentions `ghcr.io`, and production never
+  pulls these images. The layer-cache tests ignore the variables, since they exist
+  to prove the Dockerfiles' own caching.
+- **Fallback is truthful, never stale.** A missing tag (a PR changed a lock, a hashed
+  stage or a digest pin, or the month rolled before the publish ran), an unreachable
+  registry, a private package (a fork PR), a wrong source label: the variable stays
+  unset and that stage builds from source. CI never falls back to `latest`, to an
+  older tag or to a tag it did not compute, so a PR that changes a dependency is
+  tested against a truthfully built image (#145).
+- **Freshness chain.** `base-image-digest-check.yml` still checks only the upstream
+  pins in the Dockerfiles. When it goes red and a human bumps a pin, the changed
+  `FROM` line changes the hash: the PR's `images` job builds from source, and the
+  master push after the merge publishes the new images. A lock-update PR (the
+  `lock-update-check.yml` flow above) is a source-build PR by the same rule. The
+  monthly publish covers apt drift. By hand: `python scripts/deps_image_tag.py tags`
+  prints the tags; `docker build -f ops/Dockerfile.backend --build-context
+  deps=docker-image://<ref>@sha256:<digest> .` builds against a prebuilt base.
+- **Visibility.** Both packages must be public (repo setting: *Package settings,
+  Change visibility, Public*; GitHub creates a first package as private). A private
+  package only turns the lookup into a failure, so CI builds from source and never
+  fails because of GHCR.
+
 #### `ops/Dockerfile.whisper`
 
 ```dockerfile
-FROM ytdigest-deps          # the `deps` stage of ops/Dockerfile.backend (#135)
+# ---- whisper-deps: everything except application code (#368) ----
+FROM ytdigest-deps AS whisper-deps  # the `deps` stage of ops/Dockerfile.backend (#135)
 USER root
 WORKDIR /tmp
 # --only-binary: ctranslate2 ships no sdist, so a missing wheel must fail
@@ -1679,11 +1752,14 @@ RUN /opt/venv/bin/pip check
 # /models is the whisper-models volume; a fresh volume copies its ownership.
 RUN mkdir -p /models && chown app:app /models
 WORKDIR /app
-# the same five COPY --chown=app:app lines and `chown app:app /app` as the backend
-USER app
 ENV OMP_NUM_THREADS=4 \
     HF_HOME=/models \
     CT2_VERBOSE=0
+
+# ---- runtime: the default, last target ----
+FROM whisper-deps AS runtime
+# the same five COPY --chown=app:app lines and `chown app:app /app` as the backend
+USER app
 ```
 
 Building on the backend's `deps` stage rather than from `python:3.14-slim`

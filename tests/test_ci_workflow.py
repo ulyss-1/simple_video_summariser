@@ -94,6 +94,38 @@ def _setup(job: str) -> str:
 
 def test_bakeoff_setup_steps_are_the_images_setup_steps() -> None:
     images_setup = _setup("images")
-    assert _setup("bakeoff") == images_setup
+    # The prebuilt-image step (#368) is the images job's own; the rest is shared.
+    own = images_setup.index("      # Finds the prebuilt dependency images")
+    assert _setup("bakeoff") == images_setup[:own].rstrip("\n")
     assert "actions/setup-python@" in images_setup and "check-installed" in images_setup
 
+
+
+def test_images_job_resolves_prebuilt_images_before_the_tests_with_the_checked_out_script() -> None:
+    images = _job("images")
+    step = "run: python scripts/deps_image_tag.py resolve | tee -a \"$GITHUB_ENV\""
+    assert step in images
+    # After the locks are installed and the project checked out; before pytest.
+    assert images.index("actions/checkout@") < images.index(step) < images.index("run: pytest")
+    assert "YTDIGEST_DEPS_IMAGE" in images and "YTDIGEST_WHISPER_DEPS_IMAGE" in images
+    assert "#368" in images
+
+
+def test_images_job_stays_read_only_and_adds_no_layer_cache() -> None:
+    text = _text()
+    assert "packages: write" not in text
+    assert "packages:" not in text
+    assert not re.search(r"^\s+permissions:", _job("images"), re.MULTILINE)
+    assert re.search(r"^permissions:\n  contents: read$", text, re.MULTILINE)
+    for forbidden in ("cache-from", "cache-to", "type=gha", "type=registry", "docker login"):
+        assert forbidden not in text
+
+
+def test_no_workflow_names_a_ghcr_image_by_a_literal_tag() -> None:
+    # Consumers use a digest the script resolved for a tag it computed; the
+    # publisher builds its tags from variables. A literal `:latest` or any other
+    # literal tag in a ghcr.io reference would be a floating or hand-picked one.
+    assert "ghcr.io" not in _text(), "the lookup lives in scripts/deps_image_tag.py"
+    for workflow in CI.parent.glob("*.yml"):
+        for ref in re.findall(r"ghcr\.io/[\w./-]+:[\w.-]+", workflow.read_text()):
+            raise AssertionError(f"{workflow.name}: {ref}")

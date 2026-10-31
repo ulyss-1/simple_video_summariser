@@ -24,6 +24,12 @@ UNIT_TESTS='^tests/(?!.*(docker|image|compose_stack|fixtures/smoke))'
 # bake-off test imports must be added here (tests/test_ci_changes.py checks).
 BAKEOFF='^(ops/Dockerfile\.bakeoff(\.dockerignore)?$|compose\.bakeoff\.yml$|scripts/phase0/|tests/test_bakeoff_image(_docker)?\.py$)'
 
+# The publish workflow (#368) runs on master only and builds nothing in CI, so
+# a change to it needs no `images`, `frontend` or `bakeoff` run; `python` still
+# runs, because tests/test_publish_workflow.py reads it. scripts/deps_image_tag.py
+# is deliberately not listed: the `images` job runs it to find its base images.
+PUBLISH='^\.github/workflows/publish-deps-images\.yml$'
+
 any_outside() { # any changed file that matches none of the given patterns
   local pattern
   pattern=$(IFS='|'; echo "$*")
@@ -41,5 +47,5 @@ fi
 
 any_outside "$DOCS" "$WEBSRC" && echo "python=true" || echo "python=false"
 printf '%s\n' "$files" | grep -qE '^web/' && echo "frontend=true" || echo "frontend=false"
-any_outside "$DOCS" "$WEBSRC" "$UNIT_TESTS" "$BAKEOFF" && echo "images=true" || echo "images=false"
+any_outside "$DOCS" "$WEBSRC" "$UNIT_TESTS" "$BAKEOFF" "$PUBLISH" && echo "images=true" || echo "images=false"
 printf '%s\n' "$files" | grep -qP "$BAKEOFF" && echo "bakeoff=true" || echo "bakeoff=false"

@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from tests.docker_steps import Step, run_steps
+from tests.image_build import backend_build_args
 
 pytestmark = [pytest.mark.integration, pytest.mark.image]
 
@@ -61,7 +62,8 @@ def _steps(*commands: str) -> list[Step]:
 @pytest.fixture(scope="module", autouse=True)
 def image() -> Iterator[str]:
     result = _docker(
-        "build", "-f", "ops/Dockerfile.backend", "-t", IMAGE, ".", timeout=1800
+        "build", "-f", "ops/Dockerfile.backend", *backend_build_args(), "-t", IMAGE, ".",
+        timeout=1800,
     )
     assert result.returncode == 0, result.stderr[-4000:]
     try:

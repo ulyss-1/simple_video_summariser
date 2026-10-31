@@ -1,0 +1,156 @@
+# Publishes the two prebuilt dependency images the CI `images` job builds on
+# (#368, architecture.md 11.3): ghcr.io/ulyss-1/ytdigest-deps (the `deps` stage
+# of ops/Dockerfile.backend) and ghcr.io/ulyss-1/ytdigest-whisper-deps (the
+# `whisper-deps` stage of ops/Dockerfile.whisper). Neither holds application
+# code or a secret. Production never reads them: it builds from source.
+#
+# Runs only from master, with the job's GITHUB_TOKEN (no personal token, no
+# other secret), never on a pull request or from a fork. A PR that edits this
+# workflow or scripts/deps_image_tag.py is therefore tested with its own copy
+# but cannot make the publisher do anything: the publisher is master's copy.
+#
+# The tags come from scripts/deps_image_tag.py, the same script CI uses to find
+# the image: sha-<16 hex of the content hash of everything that determines the
+# image, plus the month>. The hash tag is written once and never overwritten;
+# `latest` is for humans only and nothing consumes it. The monthly schedule
+# makes the YYYY-MM stamp roll over on the 1st (02:29 UTC), which rebuilds the
+# unpinned apt packages (ffmpeg, curl) even when no file changed.
+name: Publish dependency images
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "requirements.backend.lock"
+      - "requirements.whisper.lock"
+      - "ops/Dockerfile.backend"
+      - "ops/Dockerfile.whisper"
+      - "scripts/deps_image_tag.py"
+      - ".github/workflows/publish-deps-images.yml"
+  schedule:
+    - cron: "29 2 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One publish at a time, none cancelled: two master pushes must not interleave
+# the move of `latest`.
+concurrency:
+  group: publish-deps-images
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'ulyss-1/simple_video_summariser' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    env:
+      REGISTRY: ghcr.io/ulyss-1
+      SOURCE_URL: https://github.com/ulyss-1/simple_video_summariser
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Compute the tags
+        id: tags
+        run: python scripts/deps_image_tag.py tags | tee -a "$GITHUB_OUTPUT"
+      # The token goes to the registry login only, never to a build step.
+      - name: Log in to ghcr.io
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      # The docker-container driver builds and pushes without loading the image
+      # into the runner's Docker, and supports --metadata-file (the digest).
+      - name: Create the builder
+        run: docker buildx create --name publisher --driver docker-container --use
+      - name: Build and push ytdigest-deps
+        id: deps
+        env:
+          TAG: ${{ steps.tags.outputs.deps_tag }}
+          INPUTS_HASH: ${{ steps.tags.outputs.deps_hash }}
+        run: |
+          set -euo pipefail
+          ref="$REGISTRY/ytdigest-deps"
+          if docker buildx imagetools inspect "$ref:$TAG" > /dev/null 2>&1; then
+            digest=$(docker buildx imagetools inspect "$ref:$TAG" --format '{{.Manifest.Digest}}')
+            skipped=true
+            echo "ytdigest-deps:$TAG exists ($digest): not rebuilding"
+          else
+            # --provenance=false: the attestation carries build timestamps, so
+            # the image digest would depend on build time, not content (#135).
+            docker buildx build --push --provenance=false --sbom=false \
+              --file ops/Dockerfile.backend --target deps \
+              --label "org.opencontainers.image.source=$SOURCE_URL" \
+              --label "io.github.ulyss-1.deps-inputs-hash=$INPUTS_HASH" \
+              --metadata-file meta-deps.json \
+              --tag "$ref:$TAG" .
+            digest=$(jq -r '."containerimage.digest"' meta-deps.json)
+            skipped=false
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "skipped=$skipped" >> "$GITHUB_OUTPUT"
+      # ytdigest-deps is supplied by the digest the previous step resolved,
+      # through the named build context `ytdigest-deps`.
+      - name: Build and push ytdigest-whisper-deps
+        id: whisper
+        env:
+          TAG: ${{ steps.tags.outputs.whisper_tag }}
+          INPUTS_HASH: ${{ steps.tags.outputs.whisper_hash }}
+          DEPS_DIGEST: ${{ steps.deps.outputs.digest }}
+        run: |
+          set -euo pipefail
+          ref="$REGISTRY/ytdigest-whisper-deps"
+          if docker buildx imagetools inspect "$ref:$TAG" > /dev/null 2>&1; then
+            digest=$(docker buildx imagetools inspect "$ref:$TAG" --format '{{.Manifest.Digest}}')
+            skipped=true
+            echo "ytdigest-whisper-deps:$TAG exists ($digest): not rebuilding"
+          else
+            docker buildx build --push --provenance=false --sbom=false \
+              --file ops/Dockerfile.whisper --target whisper-deps \
+              --build-context "ytdigest-deps=docker-image://$REGISTRY/ytdigest-deps@$DEPS_DIGEST" \
+              --label "org.opencontainers.image.source=$SOURCE_URL" \
+              --label "io.github.ulyss-1.deps-inputs-hash=$INPUTS_HASH" \
+              --metadata-file meta-whisper.json \
+              --tag "$ref:$TAG" .
+            digest=$(jq -r '."containerimage.digest"' meta-whisper.json)
+            skipped=false
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "skipped=$skipped" >> "$GITHUB_OUTPUT"
+      # Moves `latest` to the image just built or found, for both packages.
+      - name: Move latest and write the summary
+        env:
+          DEPS_TAG: ${{ steps.tags.outputs.deps_tag }}
+          DEPS_DIGEST: ${{ steps.deps.outputs.digest }}
+          DEPS_SKIPPED: ${{ steps.deps.outputs.skipped }}
+          WHISPER_TAG: ${{ steps.tags.outputs.whisper_tag }}
+          WHISPER_DIGEST: ${{ steps.whisper.outputs.digest }}
+          WHISPER_SKIPPED: ${{ steps.whisper.outputs.skipped }}
+        run: |
+          set -euo pipefail
+          {
+            echo "| Package | Tag | Digest | Size | Build |"
+            echo "| --- | --- | --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          row() { # package tag digest skipped
+            docker buildx imagetools create --tag "$REGISTRY/$1:latest" "$REGISTRY/$1@$3"
+            bytes=$(docker buildx imagetools inspect --raw "$REGISTRY/$1@$3" | jq '[.layers[].size] | add')
+            build=built
+            if [ "$4" = true ]; then build="skipped (tag already existed)"; fi
+            echo "| $1 | $2 | $3 | $((bytes / 1048576)) MiB (compressed) | $build |" >> "$GITHUB_STEP_SUMMARY"
+          }
+          row ytdigest-deps "$DEPS_TAG" "$DEPS_DIGEST" "$DEPS_SKIPPED"
+          row ytdigest-whisper-deps "$WHISPER_TAG" "$WHISPER_DIGEST" "$WHISPER_SKIPPED"
+      # Keeps latest, the five newest sha- tags and anything under 30 days. A
+      # refused token ends in a ::warning, not a failed publish.
+      - name: Delete old versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/deps_image_tag.py prune --package ytdigest-deps
+          python scripts/deps_image_tag.py prune --package ytdigest-whisper-deps

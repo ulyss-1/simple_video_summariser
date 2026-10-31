@@ -131,7 +131,7 @@ def test_whisper_build_takes_the_deps_image_from_the_build_only_deps_service() -
         ln for ln in (REPO_ROOT / "ops" / "Dockerfile.whisper").read_text().splitlines()
         if ln.startswith("FROM ")
     ]
-    assert froms == ["FROM ytdigest-deps"]
+    assert froms == ["FROM ytdigest-deps AS whisper-deps", "FROM whisper-deps AS runtime"]
 
 
 def test_deps_service_is_build_only() -> None:

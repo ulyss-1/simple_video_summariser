@@ -158,6 +158,17 @@ jobs:
         run: |
           pip check
           python scripts/lock_requirements.py --check-installed requirements.backend.lock requirements.dev.lock
+      # Finds the prebuilt dependency images (#368) for the tags this checkout
+      # computes, and exports them as YTDIGEST_DEPS_IMAGE /
+      # YTDIGEST_WHISPER_DEPS_IMAGE (digest references) for the image tests
+      # (tests/image_build.py). A tag that does not exist (a lock, a hashed
+      # Dockerfile stage or a digest pin changed; the month rolled and the
+      # publish has not run), an unreachable registry or a private package
+      # leaves the variable unset, and that stage builds from source. Never
+      # `latest`, never another tag. A public package needs no login, so
+      # `contents: read` is all this job needs.
+      - name: Use the prebuilt dependency images when they exist
+        run: python scripts/deps_image_tag.py resolve | tee -a "$GITHUB_ENV"
       # Builds the backend image and its `deps` stage, then the whisper image
       # (FROM the deps stage, via a named build context) and the frontend
       # image, and runs their runtime and layer-cache checks (#135).
