@@ -1162,3 +1162,10 @@ def test_the_key_never_leaks_when_cancel_fails(caplog: pytest.LogCaptureFixture)
     assert KEY not in caplog.text
     for record in caplog.records:
         assert KEY not in json.dumps(record.__dict__, default=str)
+
+
+def test_has_price_is_true_only_for_priced_models() -> None:
+    from adapters.summarize.anthropic import has_price
+
+    assert has_price("claude-haiku-4-5")
+    assert not has_price("claude-unpriced-9")

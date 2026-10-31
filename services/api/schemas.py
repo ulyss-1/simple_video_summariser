@@ -10,7 +10,14 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, cast
 
-from pydantic import AfterValidator, BaseModel, Field, JsonValue, ValidationError
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    Field,
+    JsonValue,
+    ValidationError,
+    model_validator,
+)
 
 from common.models import (
     Analysis,
@@ -669,3 +676,37 @@ def catalog_page_out(page: CatalogPage) -> CatalogPageOut:
         total_count=page.total_count,
         items=[catalog_item_out(item) for item in page.items],
     )
+
+
+class ModelEstimate(BaseModel):
+    """One model's estimated analysis cost (#153). ``cost_usd`` is a number only when ``estimated``.
+
+    ``unknown`` carries a ``reason``; ``free`` has neither number nor reason.
+    """
+
+    model: str
+    state: Literal["estimated", "unknown", "free"]
+    cost_usd: float | None
+    reason: Literal["no_transcript", "no_cost_samples", "no_price"] | None
+    samples: int
+
+    @model_validator(mode="after")
+    def _typed_encoding(self) -> ModelEstimate:
+        """A number only when ``estimated`` (and >= 0); a reason only when ``unknown``."""
+        if self.state == "estimated":
+            ok = self.cost_usd is not None and self.cost_usd >= 0 and self.reason is None
+        elif self.state == "unknown":
+            ok = self.cost_usd is None and self.reason is not None
+        else:
+            ok = self.cost_usd is None and self.reason is None
+        if not ok:
+            raise ValueError("cost_usd and reason do not match state")
+        return self
+
+
+class AnalysisEstimate(BaseModel):
+    video_id: str
+    summarizer: Literal["ollama", "anthropic", "free"]
+    transcript_chars: int | None
+    batch: bool
+    estimates: list[ModelEstimate]

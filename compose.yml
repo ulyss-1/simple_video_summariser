@@ -10,10 +10,14 @@ name: ytdigest
 
 # Exactly the keys architecture.md 11.4 lists. Service-specific variables go
 # on the service; `ANTHROPIC_API_KEY` is on `analyzer` only, never here.
+# OLLAMA_MODEL and ANTHROPIC_MODEL are here because the api names the configured
+# model in the analysis estimate and the planner estimates the sweep for it (#153).
 x-backend-env: &backend-env
   DATABASE_URL: postgresql://ytdigest:${POSTGRES_PASSWORD}@db:5432/ytdigest
   SUMMARIZER: ${SUMMARIZER:-ollama}
   ANTHROPIC_BATCH: ${ANTHROPIC_BATCH:-1}
+  OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:4b}
+  ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-4-5}
   PROMPT_VERSION: ${PROMPT_VERSION:-v1}
   CHUNK_SEC: ${CHUNK_SEC:-900}
   OVERLAP_SEC: ${OVERLAP_SEC:-60}
@@ -115,6 +119,8 @@ services:
       AUDIO_MAX_GB: ${AUDIO_MAX_GB:-20}
       AUDIO_KEEP: ${AUDIO_KEEP:-1}
       SKIP_SHORTS: ${SKIP_SHORTS:-0}
+      SWEEP_MAX_JOBS_ANTHROPIC: ${SWEEP_MAX_JOBS_ANTHROPIC:-100}
+      SWEEP_MAX_USD_ANTHROPIC: ${SWEEP_MAX_USD_ANTHROPIC:-2.50}
     depends_on:
       migrate: {condition: service_completed_successfully}
     volumes: [audio:/data/audio]        # needs it to unlink purged files

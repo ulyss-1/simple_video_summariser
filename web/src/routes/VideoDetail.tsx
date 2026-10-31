@@ -1,12 +1,14 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import type { components } from '../api'
+import { AnalysisEstimate, ESTIMATE_BODY_ID } from '../components/AnalysisEstimate'
 import { AnalysisView } from '../components/AnalysisView'
 import { JobProgress } from '../components/JobProgress'
 import { Player } from '../components/Player'
 import { buildWatchUrl } from '../components/player/youtubeTransport'
 import { formatTimestamp, useMomentSeek } from '../components/Timestamp'
 import { useAnalysisTotal } from '../hooks/useAnalyses'
+import { useAnalysisEstimate } from '../hooks/useAnalysisEstimate'
 import { cancelProcessingErrorMessage, useCancelProcessing } from '../hooks/useCancelProcessing'
 import { deleteErrorMessage, useDeleteVideo } from '../hooks/useDeleteVideo'
 import { useRestartProcessing } from '../hooks/useRestartProcessing'
@@ -324,6 +326,11 @@ function VideoPage({ videoId }: { videoId: string }) {
   // Only the count is needed for the Compare link; a failure just hides it.
   const analysisTotal = useAnalysisTotal(gone ? null : videoId).data
   const video = query.data
+  // The estimate is only asked for once the video is known to have a transcript.
+  const estimate = useAnalysisEstimate(
+    !gone && video?.transcript != null ? videoId : null,
+    video?.latest_analysis_at ?? null,
+  )
   const heading = video ? video.title || videoId : null
   const [params] = useSearchParams()
   // The Player mounts with the loaded video, so the deep-link seek waits for it.
@@ -404,16 +411,20 @@ function VideoPage({ videoId }: { videoId: string }) {
         )}
       </p>
       {video.transcript !== null && (
-        <p>
-          <button
-            className="btn btn--primary"
-            type="button"
-            disabled={reanalyze.isPending || video.active_job !== null}
-            onClick={() => reanalyze.mutate()}
-          >
-            Re-analyse
-          </button>
-        </p>
+        <>
+          <p>
+            <button
+              className="btn btn--primary"
+              type="button"
+              aria-describedby={ESTIMATE_BODY_ID}
+              disabled={reanalyze.isPending || video.active_job !== null}
+              onClick={() => reanalyze.mutate()}
+            >
+              Re-analyse
+            </button>
+          </p>
+          <AnalysisEstimate query={estimate} />
+        </>
       )}
       {reanalyze.isError && (
         <p className="alert alert--danger" role="alert">

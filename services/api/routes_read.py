@@ -4,6 +4,7 @@
 - ``GET /channels``: every known channel with its video count, paged (#119).
 - ``GET /videos/{video_id}``: one video, its best transcript and latest analysis.
 - ``GET /videos/{video_id}/analyses``: every analysis run, newest first.
+- ``GET /videos/{video_id}/analysis-estimate``: the estimated USD cost of analysing it (#153).
 - ``GET /videos/{video_id}/transcript``: one page of the best transcript's segments.
 - ``GET /videos/{video_id}/render``: the latest analysis as one HTML page (#45).
 - ``GET /search``: full-text search over each video's preferred transcript (#43).
@@ -40,13 +41,16 @@ from pydantic import (
 )
 from starlette.convertors import Convertor, register_url_convertor
 
-from common.config import get_settings, summarizer_model
+from common.config import Settings, get_settings, summarizer_model
+from common.cost_estimate import estimate_cost_usd
 from common.models import VideoSummary
 from common.repo.analyses import (
+    analysis_models,
     get_analysis,
     latest_analysis,
     latest_analysis_run,
     list_analysis_runs,
+    median_cost_per_char,
 )
 from common.repo.backfill_requests import get_request
 from common.repo.channel_catalog import get_catalog_page
@@ -54,7 +58,11 @@ from common.repo.channels import get_channel, get_channel_title, list_channels
 from common.repo.deleted_videos import list_deleted_videos
 from common.repo.jobs import get_job
 from common.repo.search import search_transcripts
-from common.repo.transcripts import best_transcript_info, best_transcript_page
+from common.repo.transcripts import (
+    analysis_transcript_chars,
+    best_transcript_info,
+    best_transcript_page,
+)
 from common.repo.videos import get_video, get_video_meta, list_videos, video_exists
 from common.youtube_refs import is_channel_id, is_video_id
 from services.api import schemas
@@ -524,6 +532,78 @@ def get_video_analyses(
         offset=params.offset,
         limit=params.limit,
     )
+
+
+MAX_ESTIMATE_MODELS = 5
+
+
+def _model_estimate(
+    conn: psycopg.Connection[Any], model: str, chars: int | None
+) -> schemas.ModelEstimate:
+    """One anthropic model's state; the price check comes first, then transcript, then samples."""
+    # Imported here, not at module level, so importing the app loads no adapter module.
+    from adapters.summarize.anthropic import has_price
+
+    # Imported here, not at module level, so importing the app loads no adapter module.
+    
+    if not has_price(model):
+        return schemas.ModelEstimate(
+            model=model, state="unknown", cost_usd=None, reason="no_price", samples=0
+        )
+    if chars is None:
+        return schemas.ModelEstimate(
+            model=model, state="unknown", cost_usd=None, reason="no_transcript", samples=0
+        )
+    per_char, samples = median_cost_per_char(conn, model)
+    cost = estimate_cost_usd(chars, per_char, samples)
+    if cost is None:
+        return schemas.ModelEstimate(
+            model=model, state="unknown", cost_usd=None, reason="no_cost_samples", samples=0
+        )
+    return schemas.ModelEstimate(
+        model=model, state="estimated", cost_usd=cost, reason=None, samples=samples
+    )
+
+
+def build_analysis_estimate(
+    conn: psycopg.Connection[Any], video_id: str, settings: Settings
+) -> schemas.AnalysisEstimate:
+    """Estimates for the configured model and, under anthropic, every model analysed so far.
+
+    The estimate is built from recorded ``cost_usd``, which already carries the
+    batch factor, so ``batch`` is only reported, never applied again.
+    """
+    configured = summarizer_model(settings)
+    if settings.SUMMARIZER != "anthropic":
+        return schemas.AnalysisEstimate(
+            video_id=video_id,
+            summarizer=settings.SUMMARIZER,
+            transcript_chars=None,
+            batch=settings.ANTHROPIC_BATCH,
+            estimates=[
+                schemas.ModelEstimate(
+                    model=configured, state="free", cost_usd=None, reason=None, samples=0
+                )
+            ],
+        )
+    chars = analysis_transcript_chars(conn, [video_id]).get(video_id)
+    others = sorted(m for m in analysis_models(conn, video_id) if m != configured)
+    models = [configured, *others][:MAX_ESTIMATE_MODELS]
+    return schemas.AnalysisEstimate(
+        video_id=video_id,
+        summarizer="anthropic",
+        transcript_chars=chars,
+        batch=settings.ANTHROPIC_BATCH,
+        estimates=[_model_estimate(conn, m, chars) for m in models],
+    )
+
+
+@router.get("/videos/{video_id}/analysis-estimate", response_model=schemas.AnalysisEstimate)
+def get_analysis_estimate(video_id: VideoId, conn: ReadConn) -> schemas.AnalysisEstimate:
+    """Estimated USD cost of the LLM analysis of this video, per model (#153). Reads only."""
+    if not video_exists(conn, video_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, VIDEO_NOT_FOUND)
+    return build_analysis_estimate(conn, video_id, get_settings())
 
 
 @router.get("/videos/{video_id}/transcript", response_model=schemas.TranscriptOut)

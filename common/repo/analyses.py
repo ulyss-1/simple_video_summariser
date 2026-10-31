@@ -554,3 +554,11 @@ def median_cost_per_char(conn: psycopg.Connection[Any], model: str) -> tuple[flo
     if not values:
         return None, 0
     return statistics.median(values), len(values)
+
+
+def analysis_models(conn: psycopg.Connection[Any], video_id: str) -> list[str]:
+    """Distinct models with a stored analysis of ``video_id``, by name (#153)."""
+    rows = conn.execute(
+        "SELECT DISTINCT model FROM analyses WHERE video_id = %s ORDER BY model", (video_id,)
+    ).fetchall()
+    return [str(row[0]) for row in rows]

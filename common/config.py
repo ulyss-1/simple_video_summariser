@@ -113,6 +113,10 @@ class Settings(BaseSettings):
     # Cumulative per-PROMPT_VERSION cap on re-analysis sweep jobs while
     # SUMMARIZER=anthropic (#99); 0 enqueues nothing. Ignored for ollama.
     SWEEP_MAX_JOBS_ANTHROPIC: NonNegativeInt = 100
+    # Cumulative per-PROMPT_VERSION USD budget of the same sweep (#153); whichever
+    # of the two caps binds first stops it. 0 enqueues nothing; ignored unless
+    # SUMMARIZER=anthropic. Finite and non-negative, like AUDIO_MAX_GB (#197).
+    SWEEP_MAX_USD_ANTHROPIC: float = Field(default=2.50, ge=0, allow_inf_nan=False)
 
     CHUNK_SEC: PositiveInt = 900
     OVERLAP_SEC: NonNegativeInt = 60

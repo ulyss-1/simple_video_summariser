@@ -316,6 +316,8 @@ def build_registry(settings: Settings, connect: Connect) -> list[Task]:
             prompt_version=settings.PROMPT_VERSION,
             summarizer_name=settings.SUMMARIZER,
             max_jobs_anthropic=settings.SWEEP_MAX_JOBS_ANTHROPIC,
+            max_usd_anthropic=settings.SWEEP_MAX_USD_ANTHROPIC,
+            model=settings.ANTHROPIC_MODEL,
         )
 
     def poll(conn: psycopg.Connection[Any]) -> int:
@@ -425,8 +427,20 @@ def format_sweep_plan(plan: SweepPlan) -> str:
         f"candidates={plan.candidates} already_enqueued={plan.already_enqueued} "
         f"cap={'none' if plan.cap is None else plan.cap} "
         f"would_enqueue_this_run={plan.would_enqueue_this_run} "
-        f"would_remain_after_cap={plan.would_remain_after_cap}"
+        f"would_remain_after_cap={plan.would_remain_after_cap} "
+        f"est_usd_this_run={_usd(plan, plan.est_usd_this_run)} "
+        f"est_usd_committed={_usd(plan, plan.est_usd_committed)} "
+        f"budget_usd={'none' if plan.budget_usd is None else plan.budget_usd} "
+        f"cost_per_char_samples={'none' if plan.cost_per_char_samples is None else plan.cost_per_char_samples} "
+        f"cap_reason={plan.cap_reason or 'none'}"
     )
+
+
+def _usd(plan: SweepPlan, value: float | None) -> str:
+    """``none`` when the budget does not apply, ``unknown`` without an estimate, else dollars."""
+    if plan.budget_usd is None:
+        return "none"
+    return "unknown" if value is None else f"{value:.4f}"
 
 
 def _sweep_dry_run(settings: Settings) -> int:
@@ -440,6 +454,8 @@ def _sweep_dry_run(settings: Settings) -> int:
                 prompt_version=settings.PROMPT_VERSION,
                 summarizer_name=settings.SUMMARIZER,
                 max_jobs_anthropic=settings.SWEEP_MAX_JOBS_ANTHROPIC,
+                max_usd_anthropic=settings.SWEEP_MAX_USD_ANTHROPIC,
+                model=settings.ANTHROPIC_MODEL,
             )
         finally:
             conn.close()
@@ -457,6 +473,11 @@ def _sweep_dry_run(settings: Settings) -> int:
             "cap": plan.cap,
             "would_enqueue_this_run": plan.would_enqueue_this_run,
             "would_remain_after_cap": plan.would_remain_after_cap,
+            "est_usd_this_run": plan.est_usd_this_run,
+            "est_usd_committed": plan.est_usd_committed,
+            "budget_usd": plan.budget_usd,
+            "cost_per_char_samples": plan.cost_per_char_samples,
+            "cap_reason": plan.cap_reason,
         },
     )
     print(format_sweep_plan(plan))
