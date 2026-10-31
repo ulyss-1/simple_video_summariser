@@ -117,6 +117,10 @@ Activate `.venv` first; all Python commands assume it.
   annotation when an `--upgrade` regeneration would change a lock, and one more when a
   direct `==` pin is behind PyPI (#278; yt-dlp is skipped, #68 checks it). What the weekly
   `lock-update-check.yml` runs; needs network access, never writes a file
+- `python scripts/lock_requirements.py --report-vulnerabilities` - report-only (#279): asks
+  OSV.dev about every pin in the three locks; exit 1 with one annotation when a locked version
+  has a published advisory, exit 0 with a notice when OSV is unreachable. The second step of
+  the weekly `lock-update-check.yml`; needs network access, never writes a file
 - `npm ci && npm run build` - in `web/`, frontend only
 - `npm run lint` - in `web/`; ESLint (react-hooks + React Compiler rules),
   fails on any warning; `bash -lc 'cd web && npm run lint'`

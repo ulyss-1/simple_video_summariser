@@ -1500,7 +1500,10 @@ release never does. A weekly report-only workflow (`lock-update-check.yml`, #266
 entries, when an `--upgrade` regeneration of the locks would change any of them. The same run reports
 direct `==` pins that are behind PyPI's newest release (#278); a pin held back on purpose carries
 `# hold: <reason>` and shows as a notice instead of turning the run red. yt-dlp stays on #68's daily
-check. On a red run, regenerate with
+check. The same workflow also runs `--report-vulnerabilities` (#279), which asks OSV.dev about the
+locked versions of all three locks and goes red with one annotation naming package, version and
+advisory id; an OSV outage ends green with a notice. It reports only: fixing is the same
+regenerate-and-PR flow. On a red run, regenerate with
 `backend --upgrade`, `whisper --upgrade` and `dev --upgrade`, run `pytest -m image`, and open a PR.
 
 **Layer ordering matters:** the lock is copied and installed *before*

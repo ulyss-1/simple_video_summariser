@@ -61,10 +61,15 @@ def test_every_action_is_a_sha_already_used_by_another_workflow() -> None:
     assert uses[1][0].endswith("5fda3b95a4ea91299a34e894583c3862153e4b97")
 
 
-def test_it_resolves_on_python_314_and_runs_exactly_the_report() -> None:
+def test_it_resolves_on_python_314_and_runs_exactly_the_two_reports() -> None:
     text = _text()
     runs = re.findall(r"^\s+run:\s*(.+)$", text, re.MULTILINE)
 
     assert 'python-version: "3.14"' in text
-    assert runs == ["python scripts/lock_requirements.py --report-outdated"]
+    assert runs == [
+        "python scripts/lock_requirements.py --report-outdated",
+        "python scripts/lock_requirements.py --report-vulnerabilities",
+    ]
+    second = text.split("--report-outdated", 1)[1]
+    assert re.search(r"if: \$\{\{ !cancelled\(\) \}\}\s+run: python .*--report-vulnerabilities", second)
     assert "pip install" not in text
