@@ -295,3 +295,49 @@ def test_without_a_job_scope_nothing_is_recorded(caplog: pytest.LogCaptureFixtur
 
     assert scope.rows == {}
     assert creates(transport) == 1
+
+
+# --- usage of a checkpointed batch is stored once and read on resume (#252) --------
+
+
+def test_the_first_fetch_stores_the_batch_usage_and_counts_it_once() -> None:
+    time = FakeTime()
+    scope = FakeScope(time)
+    transport = FakeTransport(*batch_flow(roster_result()))
+    summarizer = run_job(transport, time, scope)
+
+    summarizer.derive_roster(META, "opening")
+
+    taken = summarizer.take_usage()
+    assert scope.usage["roster"] == taken
+    assert taken.calls == 1
+    assert taken.input_tokens > 0
+
+
+def test_a_resumed_batch_counts_the_stored_usage_not_its_results() -> None:
+    time = FakeTime()
+    scope = FakeScope(time)
+    transport = FakeTransport(*batch_flow(roster_result()), ended(), roster_result())
+    first = run_job(transport, time, scope)
+    first.derive_roster(META, "opening")
+    first.take_usage()
+    stored = Usage(input_tokens=4242, output_tokens=17, calls=1, cost_usd=1.5)
+    scope.usage["roster"] = stored  # what an earlier attempt billed and stored
+
+    second = run_job(transport, time, scope)
+    second.derive_roster(META, "opening")
+
+    assert second.take_usage() == stored
+    assert scope.usage["roster"] == stored
+
+
+def test_a_batch_without_a_scope_still_counts_its_results() -> None:
+    time = FakeTime()
+    transport = FakeTransport(*batch_flow(roster_result()))
+    summarizer = AnthropicSummarizer(
+        settings(), batch=True, transport=transport, clock=time.clock, sleep=time.sleep
+    )
+
+    summarizer.derive_roster(META, "opening")
+
+    assert summarizer.take_usage().calls == 1

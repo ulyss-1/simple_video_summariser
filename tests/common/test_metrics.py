@@ -253,6 +253,15 @@ def test_planner_metric_help_text_is_exact() -> None:
     assert "# HELP planner_task_last_success Whether the planner task's most recently completed run succeeded (1) or failed (0)." in out
 
 
+def test_llm_help_texts_say_failed_and_cancelled_attempts_are_included_and_deleting_can_lower_them() -> None:
+    """#252: the three LLM families include failed and cancelled analyze attempts."""
+    out = lines(EMPTY)
+    for name in ("llm_tokens_total", "llm_calls_total", "llm_cost_usd_total"):
+        (help_line,) = [ln for ln in out if ln.startswith(f"# HELP {name} ")]
+        assert "failed and cancelled analyze attempts" in help_line
+        assert "deleting a video can lower it" in help_line
+
+
 # -- number formatting -----------------------------------------------------------------
 
 
