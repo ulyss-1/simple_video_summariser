@@ -63,7 +63,7 @@ class JobCheckpoints:
         )
 
     def record_usage(self, step_key: str, usage: Usage) -> Usage:
-        stored = record_usage(self._conn, self.job_id, step_key, usage)
+        stored = record_usage(self._conn, self.job_id, step_key, usage, model=self._model)
         self.counted.append(stored)
         return stored
 

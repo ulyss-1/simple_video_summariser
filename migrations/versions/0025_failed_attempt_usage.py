@@ -18,7 +18,8 @@ Issue #252. Two changes:
 
 Existing rows are untouched: the new columns are NULL.
 
-* ``upgrade()`` adds the columns and the table.
+* ``upgrade()`` adds the columns, the table and the triggers that move stored batch
+  usage to a failed-attempt record when a job goes ``dead`` or a non-done job is deleted.
 * ``downgrade()`` drops them.
 
 Runs only as the standalone ``migrate`` command.
@@ -46,7 +47,9 @@ def upgrade() -> None:
             ADD COLUMN cache_read_tokens  INTEGER NULL,
             ADD COLUMN cache_write_tokens INTEGER NULL,
             ADD COLUMN calls              INTEGER NULL,
-            ADD COLUMN cost_usd           NUMERIC(14,8) NULL
+            ADD COLUMN cost_usd           NUMERIC(14,8) NULL,
+            ADD COLUMN model              TEXT NULL,
+            ADD COLUMN usage_moved        BOOLEAN NOT NULL DEFAULT false
         """
     )
     op.execute(
@@ -68,9 +71,71 @@ def upgrade() -> None:
         """
     )
     op.execute("CREATE INDEX analyze_failed_usage_video_idx ON analyze_failed_usage (video_id)")
+    # Stored batch usage moves to a failed-attempt record in the transaction that makes
+    # the job dead, or deletes a job that is not done, whichever path does it (queue,
+    # reaper, watchdog, cancel, purge). A video being deleted (cascade) has no row left to
+    # point at, so nothing is written then.
+    op.execute(
+        """
+        CREATE FUNCTION move_batch_usage(p_job_id BIGINT) RETURNS void LANGUAGE plpgsql AS $$
+        BEGIN
+            INSERT INTO analyze_failed_usage
+                (video_id, job_id, model, outcome, input_tokens, output_tokens,
+                 cache_read_tokens, cache_write_tokens, calls, cost_usd)
+            SELECT j.video_id, b.job_id, COALESCE(b.model, ''), 'failed', b.input_tokens,
+                   b.output_tokens, b.cache_read_tokens, b.cache_write_tokens, b.calls, b.cost_usd
+            FROM llm_batches b
+            JOIN jobs j ON j.id = b.job_id
+            WHERE b.job_id = p_job_id AND b.calls IS NOT NULL AND NOT b.usage_moved
+              AND (b.calls > 0 OR b.input_tokens > 0 OR b.output_tokens > 0
+                   OR b.cache_read_tokens > 0 OR b.cache_write_tokens > 0)
+              AND EXISTS (SELECT 1 FROM videos v WHERE v.video_id = j.video_id);
+            UPDATE llm_batches SET usage_moved = true
+            WHERE job_id = p_job_id AND calls IS NOT NULL AND NOT usage_moved;
+        END $$
+        """
+    )
+    op.execute(
+        """
+        CREATE FUNCTION jobs_dead_move_usage() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            PERFORM move_batch_usage(NEW.id);
+            RETURN NEW;
+        END $$
+        """
+    )
+    op.execute(
+        """
+        CREATE TRIGGER jobs_dead_move_usage AFTER UPDATE OF state ON jobs
+        FOR EACH ROW WHEN (NEW.state = 'dead' AND OLD.state IS DISTINCT FROM 'dead')
+        EXECUTE FUNCTION jobs_dead_move_usage()
+        """
+    )
+    op.execute(
+        """
+        CREATE FUNCTION jobs_delete_move_usage() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            IF OLD.state <> 'done' THEN
+                PERFORM move_batch_usage(OLD.id);
+            END IF;
+            RETURN OLD;
+        END $$
+        """
+    )
+    op.execute(
+        """
+        CREATE TRIGGER jobs_delete_move_usage BEFORE DELETE ON jobs
+        FOR EACH ROW EXECUTE FUNCTION jobs_delete_move_usage()
+        """
+    )
 
 
 def downgrade() -> None:
+    op.execute("DROP TRIGGER jobs_delete_move_usage ON jobs")
+    op.execute("DROP TRIGGER jobs_dead_move_usage ON jobs")
+    op.execute("DROP FUNCTION jobs_delete_move_usage()")
+    op.execute("DROP FUNCTION jobs_dead_move_usage()")
+    op.execute("DROP FUNCTION move_batch_usage(BIGINT)")
     op.execute("DROP TABLE analyze_failed_usage")
     op.execute(
         """
@@ -80,6 +145,8 @@ def downgrade() -> None:
             DROP COLUMN cache_read_tokens,
             DROP COLUMN cache_write_tokens,
             DROP COLUMN calls,
-            DROP COLUMN cost_usd
+            DROP COLUMN cost_usd,
+            DROP COLUMN model,
+            DROP COLUMN usage_moved
         """
     )

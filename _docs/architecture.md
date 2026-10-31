@@ -318,8 +318,8 @@ counted once per attempt without being billed twice. `forget(step_key)` deletes
 a row and moves any usage stored on it into a failed-attempt record. The usage of
 a batch is owned by exactly one place at any moment: its `llm_batches` row
 (while the batch is still resumable), then the `analyses` row (job `done`) or an
-`analyze_failed_usage` record (the row was forgotten, or the job went `dead` and
-the orphan pass deleted the row). A failed attempt's record holds only usage that
+`analyze_failed_usage` record (the row was forgotten, or the job went `dead` or was
+deleted and the trigger moved it, see the orphan pass below). A failed attempt's record holds only usage that
 does not belong to a still-resumable row: synchronous and non-batch calls, and
 batch usage of rows already forgotten.
 
@@ -345,15 +345,15 @@ its row, with a cancel request, until its worker ends it `dead` / `CANCELLED`;
 from then on its batches are handled as a `dead` job's. A row whose job was deleted (`DELETE /videos/{id}`,
 #251) keeps `job_id` NULL (`ON DELETE SET NULL`, migration 0019) and `submitted_at`,
 and the pass handles it like a `dead` / `done` row: cancel once, or expire after
-24 h, then delete. Usage rule (#252): when the pass deletes the row of a `dead`
-job, it writes the usage stored on that row to `analyze_failed_usage` in the same
-statement (this is the only place that moves a dead job's batch usage, so a job
-the worker ended without the handler's help, by reaper or watchdog, loses nothing
-that was stored). The row of a `done` job goes without a record, since its usage is
-on the `analyses` row, and so does a row with `job_id` NULL: its job, and usually
-its video, is gone and there is no video to attribute the usage to (the failed
-record cascades with its video anyway, Q3). A row whose results were never
-fetched, or that spent nothing, writes no record. This is why the API, which has no `ANTHROPIC_API_KEY`, never
+24 h, then delete. Usage (#252): the pass handles none. A database trigger moves a row's stored
+usage to `analyze_failed_usage` in the transaction that makes its job `dead` (any path:
+queue, reaper, watchdog, user cancel) or deletes a job that is not `done` (purge,
+`DELETE /videos/{id}`), and flags the row `usage_moved`. So the pass only deletes
+rows whose usage is already accounted for: a `dead` job's was moved, a `done` job's
+is on its `analyses` row. A job delete together with its video writes no record (the
+cascade would remove it). A retried dead job (`retry_dead`) that finds a
+`usage_moved` row does not resume it: `get_checkpoint` deletes it and the step is
+submitted again, so the moved usage is not counted a second time. This is why the API, which has no `ANTHROPIC_API_KEY`, never
 cancels a batch itself. A retried dead job therefore resubmits its steps.
 
 `Summarizer` has three methods rather than one because D4b's roster pass and
@@ -899,13 +899,15 @@ CREATE TABLE llm_batches (
     submitted_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     -- #252 (migration 0025): the usage of the batch, stored when its results are
     -- first fetched; all NULL = results not fetched yet. Counted in the analyses
-    -- row (job done) or moved to analyze_failed_usage (see 3, orphan pass).
+    -- row (job done) or moved to analyze_failed_usage by a trigger when the job goes dead (see 3, orphan pass).
     input_tokens       INTEGER,
     output_tokens      INTEGER,
     cache_read_tokens  INTEGER,
     cache_write_tokens INTEGER,
     calls              INTEGER,
     cost_usd           NUMERIC(14,8),
+    model              TEXT,                    -- set with the usage; labels the failed record
+    usage_moved        BOOLEAN NOT NULL DEFAULT false,  -- already in analyze_failed_usage
     UNIQUE (job_id, step_key)
 );
 

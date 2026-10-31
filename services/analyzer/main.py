@@ -385,10 +385,6 @@ def _run(
         if isinstance(summarizer, OrphanBatchCanceller):
             # Also with ANTHROPIC_BATCH=0: rows from earlier batch-mode runs still need cleaning.
             options = dict(orphan_options or {})
-            options.setdefault(
-                "store_factory",
-                lambda conn: orphans.PostgresOrphanStore(conn, _model_name(settings)),
-            )
             orphan_join_sec = options.pop("join_sec", ORPHAN_JOIN_SEC)
             orphan_connect = options.pop("connect", open_connection)
             orphan_thread = orphans.start_orphan_thread(orphan_connect, summarizer, orphan_stop, **options)

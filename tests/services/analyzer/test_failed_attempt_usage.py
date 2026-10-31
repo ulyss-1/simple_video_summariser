@@ -16,9 +16,16 @@ from typing import Any
 import psycopg
 import pytest
 
-from common.errors import Cancelled, LLMInvalidOutputError, LLMUnavailableError
+from common.errors import (
+    BugError,
+    Cancelled,
+    LLMInvalidOutputError,
+    LLMUnavailableError,
+)
 from common.models import Chunk, ChunkAnalysis, Roster, Usage, VideoMeta
+from common.queue import PostgresQueue
 from common.repo import llm_batches
+from common.repo.analyses import token_usage_by_model
 from services.analyzer import handler as handler_module
 from tests.services.analyzer.fakes import (
     CheckpointingSummarizer,
@@ -41,7 +48,8 @@ FAILED_SQL = (
 
 def _job_row(rig: Rig, state: str = "running") -> int:
     row = rig.conn.execute(
-        "INSERT INTO jobs (kind, video_id, dedupe_key, state) VALUES ('analyze', %s, 'k', %s) RETURNING id",
+        "INSERT INTO jobs (kind, video_id, dedupe_key, state, locked_by)"
+        " VALUES ('analyze', %s, 'k', %s, 'w') RETURNING id",
         (VIDEO, state),
     ).fetchone()
     rig.conn.commit()
@@ -266,6 +274,7 @@ def _recorded(rig: Rig) -> tuple[int, int, int]:
             SELECT input_tokens i, output_tokens o, calls c FROM analyze_failed_usage
             UNION ALL SELECT input_tokens, output_tokens, calls FROM analyses
             UNION ALL SELECT input_tokens, output_tokens, calls FROM llm_batches
+            WHERE NOT usage_moved
         ) t
         """
     ).fetchone()
@@ -274,12 +283,23 @@ def _recorded(rig: Rig) -> tuple[int, int, int]:
     return int(row[0]), int(row[1]), int(row[2])
 
 
+def _kill(rig: Rig, job_id: int) -> None:
+    """The queue's own dead transition: a non-retryable error through ``fail_job``."""
+    job = replace(make_job(VIDEO), id=job_id)
+    PostgresQueue(rig.conn).fail_job(job, "w", BugError("non-retryable"))
+    rig.conn.commit()
+    assert rig.scalar("SELECT state FROM jobs WHERE id = %s", job_id) == "dead"
+
+
+def _metrics_tokens(rig: Rig) -> int:
+    total = sum(v[0] for v in token_usage_by_model(rig.conn).values())
+    rig.conn.rollback()
+    return total
+
+
 def _orphan_pass(rig: Rig) -> None:
-    """What ``run_pass`` does to the rows of a dead job, with the cancel call left out."""
     for orphan in llm_batches.list_orphans(rig.conn, limit=10, expired_after=timedelta(hours=24)):
-        assert llm_batches.delete_orphan(
-            rig.conn, orphan.job_id, orphan.step_key, orphan.batch_id, model=MODEL
-        )
+        assert llm_batches.delete_orphan(rig.conn, orphan.job_id, orphan.step_key, orphan.batch_id)
     rig.conn.commit()
 
 
@@ -336,11 +356,13 @@ def test_every_billed_token_is_recorded_exactly_once_after_every_attempt(
         assert analysis.calls == sum(BILL[s].calls for s in STEPS)
         assert rig.count("llm_batches") == 0
     else:
-        rig.conn.execute("UPDATE jobs SET state = 'dead' WHERE id = %s", (job_id,))
-        rig.conn.commit()
+        _kill(rig, job_id)
+        # at once, with the batch rows still there and no orphan pass: /metrics has it all
+        assert _metrics_tokens(rig) == ledger.input_tokens
+        assert _recorded(rig) == (ledger.input_tokens, ledger.output_tokens, ledger.calls)
         _orphan_pass(rig)
         assert rig.count("llm_batches") == 0
-        assert _recorded(rig) == (ledger.input_tokens, ledger.output_tokens, ledger.calls)
+        assert _metrics_tokens(rig) == ledger.input_tokens
 
 
 def test_scenario_a_the_first_failure_records_nothing_for_the_resumable_batches(
@@ -376,3 +398,47 @@ def test_scenario_d_the_discarded_batch_usage_moves_to_a_failed_record(
 
     # the first roster batch (11 in) was replaced; the new one sits on its row
     assert _failed(rig) == [("failed", MODEL, 11, 1, 1)]
+
+
+def test_deleting_a_dead_job_with_a_surviving_video_keeps_the_batch_usage(
+    rig_factory: Callable[..., Rig],  # noqa: F811
+) -> None:
+    ledger = Ledger()
+    summarizer = BillingSummarizer(ledger, dict.fromkeys(STEPS, "batch"))
+    rig = rig_factory(summarizer)
+    job_id = _job_row(rig)
+    summarizer.fail = ("reduce", "before")
+    with pytest.raises(LLMUnavailableError):
+        _run(rig, job_id)
+    _kill(rig, job_id)
+    rig.conn.execute("UPDATE jobs SET error_class = 'CANCELLED' WHERE id = %s", (job_id,))
+    rig.conn.commit()
+
+    # purge_cancelled_jobs only deletes jobs of deleted videos; any job delete behaves alike
+    rig.conn.execute("DELETE FROM jobs WHERE id = %s", (job_id,))
+    rig.conn.commit()
+    _orphan_pass(rig)
+
+    assert rig.count("jobs") == 0 and rig.count("llm_batches") == 0
+    assert _metrics_tokens(rig) == ledger.input_tokens > 0
+
+
+def test_a_dead_job_retried_by_hand_submits_again_and_does_not_recount_the_moved_usage(
+    rig_factory: Callable[..., Rig],  # noqa: F811
+) -> None:
+    ledger = Ledger()
+    summarizer = BillingSummarizer(ledger, dict.fromkeys(STEPS, "batch"))
+    rig = rig_factory(summarizer)
+    job_id = _job_row(rig)
+    summarizer.fail = ("reduce", "before")
+    with pytest.raises(LLMUnavailableError):
+        _run(rig, job_id)
+    _kill(rig, job_id)
+    rig.conn.execute("UPDATE jobs SET state = 'running' WHERE id = %s", (job_id,))
+    rig.conn.commit()
+    summarizer.fail = None
+
+    _run(rig, job_id)
+
+    # roster and chunks were billed again (their old usage is in the failed record)
+    assert _recorded(rig) == (ledger.input_tokens, ledger.output_tokens, ledger.calls)

@@ -27,7 +27,7 @@ _MOVE_USAGE_SQL = f"""
            g.input_tokens, g.output_tokens, g.cache_read_tokens, g.cache_write_tokens,
            g.calls, g.cost_usd
     FROM gone g
-    WHERE g.calls IS NOT NULL
+    WHERE g.calls IS NOT NULL AND NOT g.usage_moved
       AND (g.calls > 0 OR g.input_tokens > 0 OR g.output_tokens > 0
            OR g.cache_read_tokens > 0 OR g.cache_write_tokens > 0)
 """
@@ -38,10 +38,18 @@ def get_checkpoint(
 ) -> BatchCheckpoint | None:
     with conn.transaction():
         row = conn.execute(
-            f"SELECT {_COLUMNS} FROM llm_batches WHERE job_id = %s AND step_key = %s",
+            f"SELECT {_COLUMNS}, usage_moved FROM llm_batches WHERE job_id = %s AND step_key = %s",
             (job_id, step_key),
         ).fetchone()
-    return _checkpoint(row) if row is not None else None
+        if row is not None and row[4]:
+            # The job went dead and its stored usage is already in a failed-attempt
+            # record (#252); resuming would count it a second time, so the batch is
+            # submitted again instead.
+            conn.execute(
+                "DELETE FROM llm_batches WHERE job_id = %s AND step_key = %s", (job_id, step_key)
+            )
+            return None
+    return _checkpoint(row[:4]) if row is not None else None
 
 
 def insert_checkpoint(
@@ -71,7 +79,7 @@ def insert_checkpoint(
 
 
 def record_usage(
-    conn: psycopg.Connection[Any], job_id: int, step_key: str, usage: Usage
+    conn: psycopg.Connection[Any], job_id: int, step_key: str, usage: Usage, *, model: str = ""
 ) -> Usage:
     """Store ``usage`` on the row if it holds none yet; return what the row holds (#252).
 
@@ -84,7 +92,7 @@ def record_usage(
             f"""
             UPDATE llm_batches
             SET input_tokens = %s, output_tokens = %s, cache_read_tokens = %s,
-                cache_write_tokens = %s, calls = %s, cost_usd = %s
+                cache_write_tokens = %s, calls = %s, cost_usd = %s, model = %s
             WHERE job_id = %s AND step_key = %s AND calls IS NULL
             RETURNING {_USAGE_COLUMNS}
             """,
@@ -95,6 +103,7 @@ def record_usage(
                 usage.cache_write_tokens,
                 usage.calls,
                 usage.cost_usd,
+                model,
                 job_id,
                 step_key,
             ),
@@ -129,7 +138,7 @@ def delete_checkpoint(
             f"""
             WITH gone AS (
                 DELETE FROM llm_batches WHERE job_id = %(job_id)s AND step_key = %(step_key)s
-                RETURNING job_id, {_USAGE_COLUMNS}
+                RETURNING job_id, usage_moved, {_USAGE_COLUMNS}
             )
             {_MOVE_USAGE_SQL}
             """,
@@ -180,12 +189,7 @@ def list_orphans(
 
 
 def delete_orphan(
-    conn: psycopg.Connection[Any],
-    job_id: int | None,
-    step_key: str,
-    batch_id: str,
-    *,
-    model: str = "",
+    conn: psycopg.Connection[Any], job_id: int | None, step_key: str, batch_id: str
 ) -> bool:
     """Delete one orphan row: its job is ``dead`` / ``done``, or its ``job_id`` is NULL.
 
@@ -194,44 +198,29 @@ def delete_orphan(
     was deleted after ``list_orphans`` (its ``job_id`` is now NULL) goes too,
     so the batch is not cancelled a second time. Returns whether a row went.
 
-    Usage rule (#252): the stored usage of a row of a ``dead`` job goes into
-    ``analyze_failed_usage`` in the same statement (nothing else moves it). A
-    ``done`` job's usage is already on its ``analyses`` row, and a row whose
-    job is gone (``job_id`` NULL) has no video to attribute it to; both just go.
+    No usage is handled here (#252): a trigger already moved a row's stored usage
+    to ``analyze_failed_usage`` when its job went ``dead`` or was deleted, and a
+    ``done`` job's usage is on its ``analyses`` row.
     """
     with conn.transaction():
         row = conn.execute(
-            f"""
-            WITH gone AS (
-                DELETE FROM llm_batches b
-                WHERE b.step_key = %(step_key)s AND b.batch_id = %(batch_id)s
-                  AND (
-                    b.job_id IS NULL
-                    OR (
-                      b.job_id = %(job_id)s
-                      AND EXISTS (
-                        SELECT 1 FROM jobs j
-                        WHERE j.id = b.job_id AND j.state IN ('dead', 'done')
-                        FOR SHARE OF j
-                      )
-                    )
+            """
+            DELETE FROM llm_batches b
+            WHERE b.step_key = %s AND b.batch_id = %s
+              AND (
+                b.job_id IS NULL
+                OR (
+                  b.job_id = %s
+                  AND EXISTS (
+                    SELECT 1 FROM jobs j
+                    WHERE j.id = b.job_id AND j.state IN ('dead', 'done')
+                    FOR SHARE OF j
                   )
-                RETURNING b.job_id, {_USAGE_COLUMNS}
-            ),
-            moved AS (
-                INSERT INTO analyze_failed_usage
-                    (video_id, job_id, model, outcome, {_USAGE_COLUMNS})
-                SELECT j.video_id, g.job_id, %(model)s, 'failed',
-                       g.input_tokens, g.output_tokens, g.cache_read_tokens,
-                       g.cache_write_tokens, g.calls, g.cost_usd
-                FROM gone g JOIN jobs j ON j.id = g.job_id
-                WHERE j.state = 'dead' AND g.calls IS NOT NULL
-                  AND (g.calls > 0 OR g.input_tokens > 0 OR g.output_tokens > 0
-                       OR g.cache_read_tokens > 0 OR g.cache_write_tokens > 0)
-            )
-            SELECT 1 FROM gone
+                )
+              )
+            RETURNING 1
             """,
-            {"step_key": step_key, "batch_id": batch_id, "job_id": job_id, "model": model},
+            (step_key, batch_id, job_id),
         ).fetchone()
     return row is not None
 

@@ -13,6 +13,7 @@ from common.repo.failed_usage import insert_failed_usage
 from common.repo.llm_batches import (
     delete_checkpoint,
     delete_orphan,
+    get_checkpoint,
     insert_checkpoint,
     record_usage,
 )
@@ -78,7 +79,7 @@ def test_forgetting_a_row_moves_its_stored_usage_to_a_failed_record(
 ) -> None:
     job, vid = _job(conn, "running")
     insert_checkpoint(conn, job, "roster", "msgbatch_a", "sha")
-    record_usage(conn, job, "roster", B1)
+    record_usage(conn, job, "roster", B1, model="claude")
     insert_checkpoint(conn, job, "chunks", "msgbatch_b", "sha")  # results never fetched
 
     delete_checkpoint(conn, job, "roster", video_id=vid, model="claude")
@@ -88,23 +89,54 @@ def test_forgetting_a_row_moves_its_stored_usage_to_a_failed_record(
     assert conn.execute("SELECT count(*) FROM llm_batches").fetchone() == (0,)
 
 
-def test_orphan_pass_rule_dead_moves_usage_done_and_deleted_job_do_not(
+def test_stored_usage_moves_when_the_job_goes_dead_or_a_not_done_job_is_deleted_and_never_twice(
     conn: psycopg.Connection[Any],
 ) -> None:
-    """Scenario E: only a dead job's stored usage goes to a failed record."""
-    dead, dead_vid = _job(conn, "dead", 1)
+    dead, dead_vid = _job(conn, "running", 1)
     done, _ = _job(conn, "done", 2)
-    gone, _ = _job(conn, "dead", 3)
+    gone, gone_vid = _job(conn, "pending", 3)
     for job in (dead, done, gone):
         insert_checkpoint(conn, job, "roster", f"msgbatch_{job}", "sha")
-        record_usage(conn, job, "roster", B1)
-    conn.execute("DELETE FROM jobs WHERE id = %s", (gone,))  # its row keeps job_id NULL
+        record_usage(conn, job, "roster", B1, model="claude")
 
-    assert delete_orphan(conn, dead, "roster", f"msgbatch_{dead}", model="claude")
-    assert delete_orphan(conn, done, "roster", f"msgbatch_{done}", model="claude")
-    assert delete_orphan(conn, None, "roster", f"msgbatch_{gone}", model="claude")
+    conn.execute("UPDATE jobs SET state = 'dead' WHERE id = %s", (dead,))
+    conn.execute("DELETE FROM jobs WHERE id = %s", (dead,))  # already moved: nothing more
+    conn.execute("DELETE FROM jobs WHERE id = %s", (gone,))  # not done: its usage moves
+    conn.execute("DELETE FROM jobs WHERE id = %s", (done,))  # done: analyses has it
 
-    assert _failed(conn) == [(dead_vid, dead, "claude", "failed", 100, 10, 5, 7, 2, 0.5)]
+    assert sorted(_failed(conn)) == sorted(
+        [
+            (dead_vid, None, "claude", "failed", 100, 10, 5, 7, 2, 0.5),
+            (gone_vid, None, "claude", "failed", 100, 10, 5, 7, 2, 0.5),
+        ]
+    )
+    # the rows, now with job_id NULL, go through the orphan pass without a record
+    for batch in (f"msgbatch_{dead}", f"msgbatch_{done}", f"msgbatch_{gone}"):
+        assert delete_orphan(conn, None, "roster", batch)
+    assert len(_failed(conn)) == 2
+
+
+def test_deleting_a_video_with_a_running_job_that_holds_usage_still_works(
+    conn: psycopg.Connection[Any],
+) -> None:
+    job, vid = _job(conn, "running")
+    insert_checkpoint(conn, job, "roster", "msgbatch_a", "sha")
+    record_usage(conn, job, "roster", B1, model="claude")
+
+    conn.execute("DELETE FROM videos WHERE video_id = %s", (vid,))
+
+    assert _failed(conn) == []
+
+
+def test_a_row_moved_at_dead_is_not_resumed_by_a_retried_job(
+    conn: psycopg.Connection[Any],
+) -> None:
+    job, _ = _job(conn, "running")
+    insert_checkpoint(conn, job, "roster", "msgbatch_a", "sha")
+    record_usage(conn, job, "roster", B1, model="claude")
+    conn.execute("UPDATE jobs SET state = 'dead' WHERE id = %s", (job,))
+
+    assert get_checkpoint(conn, job, "roster") is None
     assert conn.execute("SELECT count(*) FROM llm_batches").fetchone() == (0,)
 
 
@@ -114,7 +146,7 @@ def test_an_orphan_row_whose_results_were_never_fetched_writes_no_record(
     dead, _ = _job(conn, "dead")
     insert_checkpoint(conn, dead, "roster", "msgbatch_a", "sha")
 
-    assert delete_orphan(conn, dead, "roster", "msgbatch_a", model="claude")
+    assert delete_orphan(conn, dead, "roster", "msgbatch_a")
 
     assert _failed(conn) == []
 
