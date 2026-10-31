@@ -1559,7 +1559,7 @@ toolchain.
 FROM denoland/deno:bin-2.9.8@sha256:b507583d3c68ba69f3ed2ce5969ae5b8b70f43421c781279c7aea06435263543 AS deno
 
 # ---- builder ----
-FROM python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8 AS builder
+FROM python:3.14-slim@sha256:cd89c30eda26ee911a4611b18680086e0ea42e6f5f8cbe653d07fa7958c9cec8 AS builder
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential && rm -rf /var/lib/apt/lists/*
@@ -1570,7 +1570,7 @@ RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip check
 
 # ---- deps: runtime base, no application code ----
-FROM python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8 AS deps
+FROM python:3.14-slim@sha256:cd89c30eda26ee911a4611b18680086e0ea42e6f5f8cbe653d07fa7958c9cec8 AS deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg curl && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /opt/venv /opt/venv
@@ -1775,7 +1775,7 @@ Whisper child (#324) inherits it unchanged, like `HF_HOME` and `CT2_VERBOSE`.
 
 ```dockerfile
 # ---- build ----
-FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS build
+FROM node:24-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS build
 WORKDIR /src
 COPY web/package.json web/package-lock.json ./
 RUN npm ci                      # ci, not install — respects the lockfile exactly
@@ -1784,7 +1784,7 @@ ARG VITE_API_BASE=/api
 RUN npm run build               # prebuild runs gen:api first → /src/dist
 
 # ---- runtime ----
-FROM nginx/nginx-unprivileged:1.30-alpine@sha256:517607ae849a46afbd400616a783e4ead0290f52d20ccc0618ccea1a49362474
+FROM nginx/nginx-unprivileged:1.30-alpine@sha256:2daef144b574804198caccc4041819fa1801ecd5df2252a39646bfa2b1ff3bea
 USER root                       # build-time cleanup only; nothing starts as root
 RUN rm -rf /usr/share/nginx/html/*   # the base image's own index.html, 50x.html
 COPY --from=build /src/dist /usr/share/nginx/html
@@ -2007,7 +2007,7 @@ x-logging: &logging
 
 services:
   db:
-    image: postgres:18-alpine@sha256:898c60cb390d1085bc97bdd6a1ae968757421df394b071848b52b1c09c89d6a5   # >=18.6 (architecture.md 16.1)
+    image: postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5   # >=18.6 (architecture.md 16.1)
     environment:
       POSTGRES_USER: ytdigest
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}

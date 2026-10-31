@@ -6,7 +6,7 @@
 # ---- build ----
 # Digest-pinned like the runtime stage (#249); compose.override.yml's `web`
 # runs the same node digest. Bump per architecture.md 11.3.
-FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS build
+FROM node:24-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS build
 WORKDIR /src
 # The manifests come before any source, so editing a file under web/src never
 # invalidates the npm ci layer. `npm ci`, not `npm install`: it fails when
@@ -28,7 +28,7 @@ RUN npm run build
 # every build uses the same bytes. scripts/base_image_digest_check.py, run daily
 # by .github/workflows/base-image-digest-check.yml, goes red when upstream
 # rebuilds the tag; a human bumps it (architecture.md 11.3).
-FROM nginx/nginx-unprivileged:1.30-alpine@sha256:517607ae849a46afbd400616a783e4ead0290f52d20ccc0618ccea1a49362474
+FROM nginx/nginx-unprivileged:1.30-alpine@sha256:2daef144b574804198caccc4041819fa1801ecd5df2252a39646bfa2b1ff3bea
 # Root only for the build-time cleanup below; the container starts as 101.
 USER root
 # The base image ships its own index.html and 50x.html; the served tree must
