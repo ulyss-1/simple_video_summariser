@@ -5,8 +5,8 @@ keeps an in-process registry, which does not fit values that are derived from
 Postgres at scrape time and produced by other processes). The route reads the
 numbers into a ``MetricsSnapshot``; ``render`` turns that into the body.
 
-Counters here are sums over rows in ``analyses``, not monotonic in-process
-counters, so deleting a video (cascade) can lower them. Prometheus treats a
+Counters here are sums over rows in ``analyses`` and ``analyze_failed_usage``
+(failed and cancelled attempts, #252), not monotonic in-process counters, so deleting a video (cascade) can lower them. Prometheus treats a
 decrease as a counter reset; this is accepted (architecture.md 12, issue #60).
 
 Output is deterministic. Families come in a fixed order, samples inside a family
@@ -288,24 +288,27 @@ def render(snapshot: MetricsSnapshot) -> str:
     lines += _family(
         "llm_tokens_total",
         "counter",
-        "Tokens recorded on analyses, by model and direction. Analyses recorded before "
-        "cache tokens were tracked are not included in the cache_read and cache_write "
-        "directions. Sum over stored rows: deleting a video can lower it.",
+        "Tokens recorded on analyses and on failed and cancelled analyze attempts, by "
+        "model and direction. Analyses recorded before cache tokens were tracked are not "
+        "included in the cache_read and cache_write directions. Sum over stored rows: "
+        "deleting a video can lower it.",
         _token_samples(snapshot.token_usage),
     )
     lines += _family(
         "llm_calls_total",
         "counter",
-        "Model requests recorded on analyses, by model, repair attempts included. Analyses "
-        "from before calls were tracked are not included. Sum over stored rows: deleting a "
-        "video can lower it.",
+        "Model requests recorded on analyses and on failed and cancelled analyze attempts, "
+        "by model, repair attempts included. Analyses from before calls were tracked are "
+        "not included. Sum over stored rows: deleting a video can lower it.",
         _call_samples(snapshot.token_usage),
     )
     cost = snapshot.llm_cost_usd
     lines += _family(
         "llm_cost_usd_total",
         "counter",
-        "Cost in USD recorded on analyses. Analyses with an unknown price are not included.",
+        "Cost in USD recorded on analyses and on failed and cancelled analyze attempts. "
+        "Rows with an unknown price are not included. Sum over stored rows: deleting a "
+        "video can lower it.",
         [_sample("llm_cost_usd_total", (), 0 if cost is None else float(cost))],
     )
     lines += _family(

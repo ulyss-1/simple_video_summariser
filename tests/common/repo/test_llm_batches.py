@@ -64,7 +64,7 @@ def test_delete_removes_one_step(conn: psycopg.Connection[Any], job_id: int) -> 
     insert_checkpoint(conn, job_id, "roster", "msgbatch_a", "sha-1")
     insert_checkpoint(conn, job_id, "reduce", "msgbatch_b", "sha-2")
 
-    delete_checkpoint(conn, job_id, "roster")
+    delete_checkpoint(conn, job_id, "roster", video_id="v", model="m")
 
     assert get_checkpoint(conn, job_id, "roster") is None
     assert get_checkpoint(conn, job_id, "reduce") is not None
@@ -92,7 +92,7 @@ def test_deleting_the_job_leaves_its_row_with_a_null_job_that_no_checkpoint_call
     row = conn.execute("SELECT job_id, batch_id FROM llm_batches").fetchone()
     assert row == (None, "msgbatch_a")
     assert get_checkpoint(conn, job_id, "roster") is None
-    delete_checkpoint(conn, job_id, "roster")
+    delete_checkpoint(conn, job_id, "roster", video_id="v", model="m")
     delete_job_checkpoints(conn, job_id)
     assert conn.execute("SELECT count(*) FROM llm_batches").fetchone() == (1,)
 

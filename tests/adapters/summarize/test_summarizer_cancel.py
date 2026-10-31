@@ -22,7 +22,7 @@ from adapters.summarize.anthropic import Response as AnthropicResponse
 from adapters.summarize.ollama import HttpResponse, OllamaSummarizer
 from adapters.summarize.prompt_loader import load_prompt_set
 from common.errors import Cancelled, LLMUnavailableError
-from common.models import BatchCheckpoint, JobScopedSummarizer
+from common.models import BatchCheckpoint, JobScopedSummarizer, Usage
 from tests.adapters.summarize.test_anthropic import META, ROSTER_JSON, ok, settings
 
 DEADLINE_SEC = 5.0
@@ -53,6 +53,9 @@ class Scope:
 
     def forget(self, step_key: str) -> None:
         raise AssertionError("a synchronous call forgets no batch")
+
+    def record_usage(self, step_key: str, usage: Usage) -> Usage:
+        raise AssertionError("a synchronous call stores no batch usage")
 
 
 class Blocking:

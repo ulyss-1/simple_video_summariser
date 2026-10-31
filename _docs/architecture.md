@@ -318,6 +318,20 @@ the Anthropic adapter implements it. Its batches are recorded in `llm_batches`
 before the first poll; a retried job resumes them, and a cancelled job stops
 waiting within a second and leaves its batch running.
 
+`JobScope` also owns the usage of each checkpointed batch (#252):
+`record_usage(step_key, usage)` stores the usage of a batch on its `llm_batches`
+row the first time its results are fetched, and returns what the row holds (the
+first stored value wins, so a second fetch on resume never overwrites it). The
+adapter counts the returned value instead of the results, so a resumed batch is
+counted once per attempt without being billed twice. `forget(step_key)` deletes
+a row and moves any usage stored on it into a failed-attempt record. The usage of
+a batch is owned by exactly one place at any moment: its `llm_batches` row
+(while the batch is still resumable), then the `analyses` row (job `done`) or an
+`analyze_failed_usage` record (the row was forgotten, or the job went `dead` or was
+deleted and the trigger moved it, see the orphan pass below). A failed attempt's record holds only usage that
+does not belong to a still-resumable row: synchronous and non-batch calls, and
+batch usage of rows already forgotten.
+
 `OrphanBatchCanceller` (#160) is a third optional extension, again only on the
 Anthropic adapter: `cancel_orphan_batch(batch_id)` sends one cancel and returns
 `"cancelled"`, `"not_cancellable"` or `"retry_later"` (401, 403, 429, 5xx or a
@@ -340,7 +354,15 @@ its row, with a cancel request, until its worker ends it `dead` / `CANCELLED`;
 from then on its batches are handled as a `dead` job's. A row whose job was deleted (`DELETE /videos/{id}`,
 #251) keeps `job_id` NULL (`ON DELETE SET NULL`, migration 0019) and `submitted_at`,
 and the pass handles it like a `dead` / `done` row: cancel once, or expire after
-24 h, then delete. This is why the API, which has no `ANTHROPIC_API_KEY`, never
+24 h, then delete. Usage (#252): the pass handles none. A database trigger moves a row's stored
+usage to `analyze_failed_usage` in the transaction that makes its job `dead` (any path:
+queue, reaper, watchdog, user cancel) or deletes a job that is not `done` (purge,
+`DELETE /videos/{id}`), and flags the row `usage_moved`. So the pass only deletes
+rows whose usage is already accounted for: a `dead` job's was moved, a `done` job's
+is on its `analyses` row. A job delete together with its video writes no record (the
+cascade would remove it). A retried dead job (`retry_dead`) that finds a
+`usage_moved` row does not resume it: `get_checkpoint` deletes it and the step is
+submitted again, so the moved usage is not counted a second time. This is why the API, which has no `ANTHROPIC_API_KEY`, never
 cancels a batch itself. A retried dead job therefore resubmits its steps.
 
 `Summarizer` has three methods rather than one because D4b's roster pass and
@@ -887,9 +909,53 @@ CREATE TABLE llm_batches (
     batch_id       TEXT NOT NULL,
     request_sha256 TEXT NOT NULL,        -- SHA-256 of the step's requests (custom_id and params)
     submitted_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- #252 (migration 0025): the usage of the batch, stored when its results are
+    -- first fetched; all NULL = results not fetched yet. Counted in the analyses
+    -- row (job done) or moved to analyze_failed_usage by a trigger when the job goes dead (see 3, orphan pass).
+    input_tokens       INTEGER,
+    output_tokens      INTEGER,
+    cache_read_tokens  INTEGER,
+    cache_write_tokens INTEGER,
+    calls              INTEGER,
+    cost_usd           NUMERIC(14,8),
+    model              TEXT,                    -- set with the usage; labels the failed record
+    usage_moved        BOOLEAN NOT NULL DEFAULT false,  -- already in analyze_failed_usage
     UNIQUE (job_id, step_key)
 );
+
+-- Spend of analyze attempts that produced no analysis (#252, migration 0025):
+-- failed and cancelled attempts, discarded batches, and the stored batch usage of
+-- dead jobs. Usage that an analyses row carries is never repeated here. Deleted
+-- with the video (like analyses); deleting the job sets job_id to NULL. One row
+-- per attempt that spent something; an attempt that spent nothing writes none.
+-- Exported on /metrics with analyses (12).
+CREATE TABLE analyze_failed_usage (
+    id                 BIGSERIAL PRIMARY KEY,
+    video_id           TEXT NOT NULL REFERENCES videos (video_id) ON DELETE CASCADE,
+    job_id             BIGINT REFERENCES jobs (id) ON DELETE SET NULL,
+    model              TEXT NOT NULL,
+    outcome            TEXT NOT NULL CHECK (outcome IN ('failed', 'cancelled')),
+    input_tokens       INTEGER NOT NULL DEFAULT 0,
+    output_tokens      INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+    calls              INTEGER NOT NULL DEFAULT 0,
+    cost_usd           NUMERIC(14,8),    -- NULL: unknown price (Ollama, free tier)
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 ```
+
+The analyze handler writes the failed-attempt row (#252) in `except Exception`
+around the whole attempt: it drains the summarizer, subtracts the batch usage
+this attempt counted from `llm_batches` rows (they stay resumable), rolls back the
+job connection's aborted transaction and inserts one row, `outcome = 'cancelled'`
+for `Cancelled` (a user cancel and a shutdown cancel alike) and `'failed'` for
+anything else. If the write fails, a warning is logged and the original
+exception is re-raised, so the job's outcome (`pending` with backoff, or `dead`)
+is unchanged. `analyses` keeps its meaning: the full usage of the analysis,
+resumed batches included. **Accepted limitation:** a process killed without
+Python unwinding (SIGKILL, OOM, the runtime watchdog's exit 70) loses that
+attempt's in-memory usage; usage already stored on `llm_batches` rows survives.
 
 ### v2 tables (declared, not created in v1)
 
@@ -2095,8 +2161,9 @@ and Ollama stops generating, and `Cancelled` is raised. A response that
 arrived in the same slice as the flag is used, not discarded. The adapters
 only raise `Cancelled`; the worker still maps it (a user cancel to `dead` /
 `CANCELLED`, a shutdown cancel to `pending` with the attempt refunded), and a
-cancelled call adds nothing to the job's recorded usage (the spend of a
-cancelled attempt is #252). A batch-mode job keeps its #89 behaviour: it stops
+call cancelled mid-flight returns no usage and adds nothing; the usage
+the cancelled attempt had already spent is recorded in `analyze_failed_usage`
+with `outcome = 'cancelled'` (#252, 6). A batch-mode job keeps its #89 behaviour: it stops
 waiting and leaves its batch to the orphan pass (#160).
 
 The faster-whisper work of a `transcribe` job (#324) runs in a child process,
@@ -2284,7 +2351,9 @@ gauges, no tracing stack.
   `queue_depth{kind,state}`, `job_duration_seconds{kind}`,
   `whisper_rtf`, `llm_tokens_total{model,direction}` (directions `input`,
   `output`, `cache_read`, `cache_write`), `llm_calls_total{model}` (#139),
-  `llm_cost_usd_total`,
+  `llm_cost_usd_total`; the three LLM families sum `analyses` and
+  `analyze_failed_usage` (failed and cancelled attempts, #252) by the row's
+  `model`, so they cover all spend and deleting a video can lower them,
   `speaker_coercions_total` (§8.1 — the D4b quality canary),
   `audio_bytes_used`, and zero-filled
   `feed_gap_channels{reason="suspected|no_anchor|listing_window_exhausted"}`.

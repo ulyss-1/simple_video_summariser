@@ -9,6 +9,9 @@ pass at startup and then one every ``interval_sec``.
 A pass lists up to ``limit`` rows of ``dead`` / ``done`` jobs and rows whose
 job was deleted (``job_id`` NULL: ``DELETE /videos/{id}``, #251) and, for each:
 
+Usage (#252): the pass handles none. A trigger moved a row's stored usage to
+``analyze_failed_usage`` when its job went ``dead`` or was deleted.
+
 * older than ``expired_after``: delete the row, no API call (Anthropic has
   expired the batch by then);
 * otherwise ``cancel_orphan_batch``: ``cancelled`` and ``not_cancellable``

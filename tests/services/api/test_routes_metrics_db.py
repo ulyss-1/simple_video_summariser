@@ -314,3 +314,34 @@ def test_cache_tokens_and_calls_sum_over_recorded_rows_and_null_adds_nothing(
     assert _sample(body, prefix + '"cache_read"}') == "5"
     assert _sample(body, prefix + '"cache_write"}') == "7"
     assert _sample(body, 'llm_calls_total{model="claude"}') == "2"
+
+
+def test_failed_attempt_usage_is_added_to_the_llm_families(
+    api: TestClient, db: psycopg.Connection[Any]
+) -> None:
+    """#252: one analyses row plus one failed-attempt row render as their sum."""
+    db.execute("INSERT INTO videos (video_id) VALUES ('aaaaaaaaaaa')")
+    row = db.execute(
+        "INSERT INTO transcripts (video_id, source, segments, full_text)"
+        " VALUES ('aaaaaaaaaaa', 'whisper', '[]', 'x') RETURNING id"
+    ).fetchone()
+    assert row is not None
+    db.execute(
+        "INSERT INTO analyses (video_id, transcript_id, chunk_strategy, model, prompt_version, tldr,"
+        " input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, calls, cost_usd)"
+        " VALUES ('aaaaaaaaaaa', %s, 's', 'claude', 'v1', 't', 10, 1, 2, 3, 4, 0.25)",
+        (row[0],),
+    )
+    db.execute(
+        "INSERT INTO analyze_failed_usage (video_id, model, outcome, input_tokens, output_tokens,"
+        " cache_read_tokens, cache_write_tokens, calls, cost_usd)"
+        " VALUES ('aaaaaaaaaaa', 'claude', 'failed', 5, 2, 1, 1, 1, 0.5),"
+        " ('aaaaaaaaaaa', 'claude', 'cancelled', 1, 0, 0, 0, 1, NULL)"
+    )
+
+    body = api.get("/metrics").text
+
+    assert _sample(body, 'llm_tokens_total{model="claude",direction="input"}') == "16"
+    assert _sample(body, 'llm_tokens_total{model="claude",direction="output"}') == "3"
+    assert _sample(body, 'llm_calls_total{model="claude"}') == "6"
+    assert float(_sample(body, "llm_cost_usd_total")) == pytest.approx(0.75)

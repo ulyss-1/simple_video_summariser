@@ -462,7 +462,8 @@ def token_usage_by_model(conn: psycopg.Connection[Any]) -> dict[str, tuple[int, 
     """``model -> (input, output, cache read, cache write tokens, calls)`` summed over analyses.
 
     One statement (#60, #139). ``NULL`` values contribute nothing, so a column that is
-    ``NULL`` in every row of a model sums to 0.
+    ``NULL`` in every row of a model sums to 0. Failed and cancelled attempts
+    (``analyze_failed_usage``, #252) are summed in, by the row's ``model``.
     """
     rows = conn.execute(
         """
@@ -470,15 +471,29 @@ def token_usage_by_model(conn: psycopg.Connection[Any]) -> dict[str, tuple[int, 
                COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
                COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0),
                COALESCE(SUM(calls), 0)
-        FROM analyses GROUP BY model
+        FROM (
+            SELECT model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, calls
+            FROM analyses
+            UNION ALL
+            SELECT model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, calls
+            FROM analyze_failed_usage
+        ) u GROUP BY model
         """
     ).fetchall()
     return {str(row[0]): tuple(int(v) for v in row[1:]) for row in rows}
 
 
 def total_cost_usd(conn: psycopg.Connection[Any]) -> float | None:
-    """``SUM(cost_usd)`` over analyses with a known price; ``None`` when there are none (#60)."""
-    row = conn.execute("SELECT SUM(cost_usd) FROM analyses WHERE cost_usd IS NOT NULL").fetchone()
+    """``SUM(cost_usd)`` over analyses and failed attempts (#252) with a known price; ``None`` when there are none (#60)."""
+    row = conn.execute(
+        """
+        SELECT SUM(cost_usd) FROM (
+            SELECT cost_usd FROM analyses
+            UNION ALL
+            SELECT cost_usd FROM analyze_failed_usage
+        ) u WHERE cost_usd IS NOT NULL
+        """
+    ).fetchone()
     assert row is not None
     return None if row[0] is None else float(row[0])
 

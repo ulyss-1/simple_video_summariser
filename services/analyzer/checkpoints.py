@@ -12,12 +12,13 @@ from typing import Any
 import psycopg
 
 from common.errors import BugError
-from common.models import BatchCheckpoint
+from common.models import BatchCheckpoint, Usage
 from common.repo.llm_batches import (
     delete_checkpoint,
     delete_job_checkpoints,
     get_checkpoint,
     insert_checkpoint,
+    record_usage,
 )
 
 
@@ -27,10 +28,17 @@ class JobCheckpoints:
         conn: psycopg.Connection[Any],
         job_id: int,
         cancelled: Callable[[], bool],
+        *,
+        video_id: str,
+        model: str,
     ) -> None:
         self._conn = conn
         self.job_id = job_id
         self._cancelled = cancelled
+        self._video_id = video_id
+        self._model = model
+        #: Batch usage this attempt counted in memory (#252): what ``record_usage`` returned.
+        self.counted: list[Usage] = []
 
     def cancelled(self) -> bool:
         return self._cancelled()
@@ -50,7 +58,14 @@ class JobCheckpoints:
         return insert_checkpoint(self._conn, self.job_id, step_key, batch_id, request_sha256)
 
     def forget(self, step_key: str) -> None:
-        delete_checkpoint(self._conn, self.job_id, step_key)
+        delete_checkpoint(
+            self._conn, self.job_id, step_key, video_id=self._video_id, model=self._model
+        )
+
+    def record_usage(self, step_key: str, usage: Usage) -> Usage:
+        stored = record_usage(self._conn, self.job_id, step_key, usage, model=self._model)
+        self.counted.append(stored)
+        return stored
 
     def clear(self) -> None:
         delete_job_checkpoints(self._conn, self.job_id)

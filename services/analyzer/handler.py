@@ -27,7 +27,7 @@ import psycopg
 from adapters.summarize.prompt_loader import format_timestamped
 from common.chunking import chunk_segments, chunk_strategy
 from common.config import Settings
-from common.errors import BugError, LLMInvalidOutputError
+from common.errors import BugError, Cancelled, LLMInvalidOutputError
 from common.models import (
     Analysis,
     Chunk,
@@ -40,9 +40,11 @@ from common.models import (
     Segment,
     Summarizer,
     Topic,
+    Usage,
 )
 from common.queue import Job, analyze_dedupe_key
 from common.repo.analyses import analysis_exists, save_analysis
+from common.repo.failed_usage import insert_failed_usage
 from common.repo.transcripts import get_best_transcript, get_chunks, save_chunks
 from common.repo.videos import get_video_meta
 from common.worker import JobContext
@@ -212,7 +214,9 @@ class _Tally:
     unpriced: bool = False
 
     def add(self, summarizer: Summarizer) -> None:
-        usage = summarizer.take_usage()
+        self.add_usage(summarizer.take_usage())
+
+    def add_usage(self, usage: Usage) -> None:
         self.input_tokens += usage.input_tokens
         self.output_tokens += usage.output_tokens
         self.cache_read_tokens += usage.cache_read_tokens
@@ -224,6 +228,21 @@ class _Tally:
             else:
                 self.cost += usage.cost_usd
                 self.priced = True
+
+    def minus(self, other: _Tally) -> Usage:
+        """What is left of this tally once ``other`` (a part of it) is taken out (#252)."""
+        calls = self.calls - other.calls
+        cost = self.total_cost
+        if cost is not None and calls > 0:
+            cost = max(0.0, round(cost - (other.total_cost or 0.0), 8))
+        return Usage(
+            input_tokens=self.input_tokens - other.input_tokens,
+            output_tokens=self.output_tokens - other.output_tokens,
+            cache_read_tokens=self.cache_read_tokens - other.cache_read_tokens,
+            cache_write_tokens=self.cache_write_tokens - other.cache_write_tokens,
+            calls=calls,
+            cost_usd=cost if calls > 0 else None,
+        )
 
     @property
     def total_cost(self) -> float | None:
@@ -254,18 +273,68 @@ def make_analyze_handler(
                 configured_dedupe_key=expected_key,
             )
         conn = connect()
+        tally = _Tally()
+        checkpoints: JobCheckpoints | None = None
         try:
-            if isinstance(summarizer, JobScopedSummarizer):
-                checkpoints = JobCheckpoints(conn, job.id, lambda: ctx.cancelled)
-                summarizer.begin_job(checkpoints)
-                try:
-                    _analyze(conn, job, ctx, started, checkpoints)
-                finally:
-                    summarizer.end_job()
-            else:
-                _analyze(conn, job, ctx, started, None)
+            try:
+                if isinstance(summarizer, JobScopedSummarizer):
+                    checkpoints = JobCheckpoints(
+                        conn,
+                        job.id,
+                        lambda: ctx.cancelled,
+                        video_id=job.video_id,
+                        model=summarizer.model,
+                    )
+                    summarizer.begin_job(checkpoints)
+                    try:
+                        _analyze(conn, job, ctx, started, checkpoints, tally)
+                    finally:
+                        summarizer.end_job()
+                else:
+                    _analyze(conn, job, ctx, started, None, tally)
+            except Exception as exc:
+                _record_failed_attempt(conn, job, ctx, tally, checkpoints, exc)
+                raise
         finally:
             conn.close()
+
+    def _record_failed_attempt(
+        conn: psycopg.Connection[Any],
+        job: Job,
+        ctx: JobContext,
+        tally: _Tally,
+        checkpoints: JobCheckpoints | None,
+        exc: Exception,
+    ) -> None:
+        """Record what this attempt spent and no analysis carries (#252). Never raises.
+
+        Drains the summarizer first, so a reused object carries nothing into the
+        next job even if the write fails. Usage of checkpointed batches this
+        attempt counted stays on their ``llm_batches`` rows (still resumable) and
+        is left out; it moves to a record when the row is forgotten or the
+        orphan pass deletes the row of a ``dead`` job.
+        """
+        try:
+            tally.add(summarizer)
+            counted = _Tally()
+            for stored in checkpoints.counted if checkpoints is not None else ():
+                counted.add_usage(stored)
+            usage = tally.minus(counted)
+            conn.rollback()  # the failure may have left the transaction aborted
+            insert_failed_usage(
+                conn,
+                video_id=job.video_id,
+                job_id=job.id,
+                model=summarizer.model,
+                outcome="cancelled" if isinstance(exc, Cancelled) else "failed",
+                usage=usage,
+            )
+        except Exception as write_exc:  # noqa: BLE001 - never mask the original error
+            ctx.logger.warning(
+                "could not record the usage of a failed analyze attempt",
+                video_id=job.video_id,
+                error_type=type(write_exc).__name__,
+            )
 
     def _analyze(
         conn: psycopg.Connection[Any],
@@ -273,6 +342,7 @@ def make_analyze_handler(
         ctx: JobContext,
         started: float,
         checkpoints: JobCheckpoints | None,
+        tally: _Tally,
     ) -> None:
         video_id = job.video_id
         meta = get_video_meta(conn, video_id)
@@ -346,8 +416,6 @@ def make_analyze_handler(
                 },
             )
             return
-
-        tally = _Tally()
 
         ctx.check_cancelled()
         total_chunks = len(chunks)
