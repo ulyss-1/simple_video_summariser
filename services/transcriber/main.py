@@ -6,10 +6,11 @@ through #13's ``Worker``. Any number of replicas can run side by side, because
 a process keeps nothing between jobs except:
 
 * the queue connections (one to claim, one for the heartbeat), and
-* one lazily built ``Transcriber``, shared by every ``transcribe`` job. The
-  Whisper model behind it (2-3 GB for ``large-v3``) loads on its first use, so
-  a replica that only ingests never pays for it, and a failed load is never
-  cached: the next ``transcribe`` job tries again.
+* one lazily built ``Transcriber``, shared by every ``transcribe`` job. It runs
+  the Whisper model (2-3 GB for ``large-v3``) in a child process per job that a
+  cancel kills (#324), so this process never loads it, a replica that only
+  ingests never pays for it, and a failed load is never cached: the next
+  ``transcribe`` job tries again.
 
 Ingest hands off to transcribe only through the queue (a ``transcribe`` row),
 so a different replica can pick it up. Each job opens its own database

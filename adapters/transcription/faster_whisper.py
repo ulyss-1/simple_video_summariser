@@ -5,8 +5,13 @@ Importing this module never imports ``faster_whisper`` - only the first
 ``transcribe()`` call does, lazily, so an image without
 ``requirements.whisper.txt`` installed can still import it (task #56 builds
 the transcriber image separately). Constructing a transcriber never loads
-the model either; the first ``transcribe()`` call loads it once, and later
-calls on the same instance reuse it.
+the model either; the first in-process ``transcribe()`` call loads it once, and
+later calls on the same instance reuse it.
+
+With a ``cancelled`` callable (the worker path, issue #324) the work runs in a
+child process per call (``faster_whisper_child``), which the parent kills, whole
+process group, when ``cancelled()`` turns true. The parent never imports
+``faster_whisper`` or loads the model in that mode.
 """
 
 from __future__ import annotations
