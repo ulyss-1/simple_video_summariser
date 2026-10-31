@@ -4,7 +4,7 @@
 **Derived from:** `plan.md` (design draft, 2026-09-13)
 **Scope:** concrete component, data, interface, and contract definitions. This
 document assumes every decision in `plan.md` §4 and does not re-argue them; it
-specifies _how_ they are realized.
+specifies *how* they are realized.
 
 **Expected scale.** This is a single-operator system: one person following a set
 of channels and reading the summaries. The design target is
@@ -44,7 +44,7 @@ transcripts — which the plan identifies as its highest-leverage structural
 choice.
 
 **Resolution:** jobs carry an explicit `dedupe_key`, and uniqueness is enforced
-by a **partial** unique index covering only _active_ states:
+by a **partial** unique index covering only *active* states:
 
 ```sql
 dedupe_key TEXT NOT NULL
@@ -61,7 +61,7 @@ version is a distinct key. Replays within a version remain idempotent.
 ### C2 — Fixed lease vs. multi-hour transcription (defect)
 
 §8 sets a ~6 h lease and has the planner requeue anything `running` past it.
-But D3 accepts that a long episode _legitimately_ takes multiple hours. A
+But D3 accepts that a long episode *legitimately* takes multiple hours. A
 stricter lease kills healthy work; a looser one leaves genuinely dead jobs
 stranded for hours. A fixed timeout cannot distinguish the two.
 
@@ -81,23 +81,23 @@ store its own.
 
 **Resolution:** split by provenance.
 
-| Column           | Table         | Why                                                                                        |
-| ---------------- | ------------- | ------------------------------------------------------------------------------------------ |
+| Column | Table | Why |
+|---|---|---|
 | `speaker_source` | `transcripts` | How transcript-level labels arose (`subtitle_labels` / `none`) — a property of acquisition |
-| `speaker_roster` | `analyses`    | LLM-derived, versioned with `prompt_version` and `model`                                   |
+| `speaker_roster` | `analyses` | LLM-derived, versioned with `prompt_version` and `model` |
 
 ### C4 — "Backfill" names two unrelated operations (collision)
 
-§6.2 uses _backfill_ for the prompt-version re-analysis sweep; D9b uses
-_backfill_ for ingesting a channel's historical catalog. Different triggers,
+§6.2 uses *backfill* for the prompt-version re-analysis sweep; D9b uses
+*backfill* for ingesting a channel's historical catalog. Different triggers,
 different cost profiles, different priorities.
 
 **Resolution:** distinct names used consistently from here on.
 
-| Term                  | Meaning                                | Trigger                 | Priority    |
-| --------------------- | -------------------------------------- | ----------------------- | ----------- |
-| **Channel backfill**  | Ingest historical videos of a channel  | Explicit API call       | Low (`-10`) |
-| **Re-analysis sweep** | Re-run `analyze` on stored transcripts | `PROMPT_VERSION` change | Low (`-5`)  |
+| Term | Meaning | Trigger | Priority |
+|---|---|---|---|
+| **Channel backfill** | Ingest historical videos of a channel | Explicit API call | Low (`-10`) |
+| **Re-analysis sweep** | Re-run `analyze` on stored transcripts | `PROMPT_VERSION` change | Low (`-5`) |
 
 ### Minor corrections
 
@@ -352,12 +352,12 @@ failure is recoverable while a chunk failure may not be.
 
 ## 4. Job kinds
 
-| Kind            | Producer             | Consumer    | Typical duration | Cost of retry        |
-| --------------- | -------------------- | ----------- | ---------------- | -------------------- |
-| `ingest`        | api, planner         | transcriber | 2–10 s           | negligible           |
-| `transcribe`    | transcriber          | transcriber | 20 min – 6 h     | **very high**        |
-| `analyze`       | transcriber, planner | analyzer    | 1–10 min         | moderate (LLM spend) |
-| `notify` _(v2)_ | analyzer             | notifier    | seconds          | negligible           |
+| Kind | Producer | Consumer | Typical duration | Cost of retry |
+|---|---|---|---|---|
+| `ingest` | api, planner | transcriber | 2–10 s | negligible |
+| `transcribe` | transcriber | transcriber | 20 min – 6 h | **very high** |
+| `analyze` | transcriber, planner | analyzer | 1–10 min | moderate (LLM spend) |
+| `notify` *(v2)* | analyzer | notifier | seconds | negligible |
 
 `ingest` and `transcribe` are both handled by the transcriber service but are
 **separate kinds** so the expensive path is independently observable, retryable,
@@ -365,13 +365,13 @@ and rate-limitable.
 
 ### Priority bands
 
-| Band              | Value | Used by                                                                                    |
-| ----------------- | ----- | ------------------------------------------------------------------------------------------ |
-| Interactive       | `+10` | `POST /videos` — a human is waiting                                                        |
-| Normal            | `0`   | RSS-discovered new videos                                                                  |
-| Batch submission  | `0`   | `POST /videos/batch` (#341): a pasted list queues alongside new uploads, not ahead of them |
-| Re-analysis sweep | `-5`  | `PROMPT_VERSION` change (C4)                                                               |
-| Channel backfill  | `-10` | historical catalog ingest (D9b, C4)                                                        |
+| Band | Value | Used by |
+|---|---|---|
+| Interactive | `+10` | `POST /videos` — a human is waiting |
+| Normal | `0` | RSS-discovered new videos |
+| Batch submission | `0` | `POST /videos/batch` (#341): a pasted list queues alongside new uploads, not ahead of them |
+| Re-analysis sweep | `-5` | `PROMPT_VERSION` change (C4) |
+| Channel backfill | `-10` | historical catalog ingest (D9b, C4) |
 
 Claim ordering is `priority DESC, run_after ASC`. This is what prevents a
 200-episode backfill from starving today's episodes (D9b).
@@ -730,7 +730,7 @@ CREATE INDEX chunks_lookup_idx ON transcript_chunks (transcript_id, chunk_strate
 ```
 
 `chunk_strategy` encodes the parameters (`time:<CHUNK_SEC>:<OVERLAP_SEC>`), so
-changing `CHUNK_SEC` produces a _new_ chunk set rather than silently
+changing `CHUNK_SEC` produces a *new* chunk set rather than silently
 invalidating stored ones — the failure mode D9c warns about.
 
 ```sql
@@ -978,7 +978,7 @@ Until per-channel settings exist there is one global flag, `SKIP_SHORTS`
   `settings.SKIP_SHORTS` to it. Until it does, the poll records and queues
   every entry and ingest is the only enforcement point.
 
-**Auto-caption policy.** D2 ranks `youtube_auto` _below_ Whisper. Concretely
+**Auto-caption policy.** D2 ranks `youtube_auto` *below* Whisper. Concretely
 `ingest` does not take auto-captions when Whisper is available; it enqueues
 `transcribe`. Auto-captions are used only when `AUTO_CAPTION_FALLBACK=1` and
 transcription has already dead-lettered — a degraded result beats none, and
@@ -1112,40 +1112,40 @@ and C4's sweep meaningful.
 Read routes (`routes_read.py`) and write routes (`routes_write.py`) are
 separated per D13.
 
-| Method   | Path                                               | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| -------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST`   | `/videos`                                          | body `{url}`; also the restore action for a deleted video (#239): it clears the tombstone and processes the video again from scratch, nothing of the old data comes back; priority `+10`; returns job id (`restarted` is `false` unless the call revived a cancelled job); restarts a cancelled video (#304): when the video has no `pending`/`running` job, no analysis and is not `unavailable`, and its newest job of any kind is `dead` with `error_class = 'CANCELLED'`, that job is revived in place with `retry_dead` (same id, kind, key and payload; no new row; priority raised to `+10`) and the answer is `202` with `restarted: true`; any other state, a failed (non-cancelled) dead job, a cancelled re-analysis of an analysed video (#323) and a job still `running` with a cancel request answer `200`, `restarted: false`, so a repeat restarts once; `retry_dead` reporting `superseded` falls through to the `200` answer; delete keeps priority, since a tombstoned video has no jobs left and gets the fresh `ingest` below; clears a matching deletion tombstone atomically and, in the same transaction, deletes the video's remaining job rows (locks: jobs by id, then the `videos` row), so a fresh `ingest` is enqueued. `409 cancellation in progress` (nothing written, tombstone kept) while the deleted video still has a `running` job carrying a cancel request (#303)                                                   |
-| `DELETE` | `/videos/{id}`                                     | permanently deletes the video and derived data, at once and also with a running job (#303, owner decision: delete has priority over a running job): `204`, never `409`. In one transaction it cancels the video's jobs with the #237 rules, deletes every job row that is not `running`, keeps each `running` row as a `CANCELLED` record (its worker ends it at the next checkpoint and carries on), and records a tombstone so only explicit `POST /videos` can restore it. Shares its implementation with `POST /videos/delete` (one-ID form). `404` for an unknown or already deleted video, `422` for a malformed ID                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `POST`   | `/videos/batch`                                    | body `{urls}`, JSON only (`415` otherwise), strict: 1 to `MAX_BATCH_SUBMIT` (200, a module constant read per request) strings of at most `MAX_REF_CHARS`; a wrong-shaped body is one `422` that does not echo the input and nothing is submitted (#341). Each string goes through `parse_video_ref` and then exactly `submit_video` (tombstone restore, idempotence, #304 restart) in **its own transaction**, in request order (a batch-wide transaction would hold many videos' locks and could deadlock with a bulk or channel delete), at priority `0`, not `+10`: a pasted list must not outrank RSS uploads (D9b); an existing pending job below `0` is raised to `0`, nothing is lowered. Answers `200` `{results: [{index, outcome, ...}], counts}`, one result per input item in order; `outcome` is `queued` / `restarted` (`video_id`, `job_id`), `already_submitted` (`video_id`, `job_id`, `state`), `duplicate` (`video_id`, `first_index`; submitted once), `invalid` (`reason: "not_a_video_ref"`; the input is never echoed), `cancellation_in_progress` (`video_id`) or `failed` (`video_id`; a database error on that item only, the rest carry on and a resubmission is safe)                                                                                                                                                                                                                                                           |
-| `POST`   | `/videos/delete`                                   | body `{video_ids}`, JSON only (`415` otherwise), strict: 1 to `MAX_BULK_DELETE` (200, a module constant read per request) unique canonical 11-character IDs; any violation is one `422` with a fixed message that does not echo the input, and nothing is deleted (#238). Per video exactly what `DELETE /videos/{id}` does (#303), in **one transaction** with the multi-video lock order: every job of every target video `FOR UPDATE` by `id`, then the `videos` rows `FOR UPDATE` by `video_id`; all or nothing. Answers `200` `{results: [{video_id, outcome}], counts: {deleted, not_found}}` in request order, `outcome` `deleted` or `not_found` (no `videos` row: unknown or already deleted; no tombstone is written for an unknown ID). After the commit the API unlinks every returned media path under `AUDIO_DIR`; a failure is logged (`video.delete.unlink_failed`) and the answer stays `200`. Channel deletion (#339) reuses the repository function without the cap                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `POST`   | `/videos/{id}/cancel`                              | body `{}`, JSON only (`415` otherwise); stores a cancel request for every `pending` or `running` job of the video (#237). Pending jobs end `CANCELLED` at once; running ones get `cancel_requested_at` and stop at their next checkpoint. Answers `{video_id, jobs: [{job_id, kind, outcome}]}` with `outcome` `cancelled` or `cancel_requested`: `202` if any is `cancel_requested`, else `200` (`jobs: []` when nothing was active); `404` for an unknown or deleted video (so a cancel after `DELETE` is `404`, #303), `422` for a malformed ID. Deletes nothing                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `POST`   | `/channels`                                        | forward-only; sets `monitor_from`. Accepts a channel ID, `youtube.com/channel/` URL, or `@handle`, `/c/` or `/user/` reference; a name is resolved synchronously with one bounded yt-dlp call (at most 20 s, #81, an exception to the no-processing rule in §1): `404` if it does not exist, `503` on timeout or rate limit, `502` on bad output                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `GET`    | `/deleted-videos`                                  | `?offset=&limit=` (`offset` 0..`MAX_OFFSET`, `limit` 1..200, default 50, else `422` as `GET /videos`); `{items: [{video_id, title, channel_id, channel_title, deleted_at, restorable}], total}` of the deletion tombstones, `deleted_at DESC, video_id ASC`. `title` and `channel_id` are NULL for tombstones from before #239; `channel_title` comes from a `LEFT JOIN channels` (NULL when the channel is gone or untitled). `restorable` is `false` exactly while the video has a `running` job with a cancel request (`POST /videos` answers `409` then, #303). Tombstones never expire. Restore is `POST /videos` (#239)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `GET`    | `/channels`                                        | paginated channel list (id, title, active, video count), powers the Library channel filter                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `GET`    | `/channels/{id}`                                   | one channel, active or not: `{channel_id, title, active, monitor_from, added_at, video_count}` (`video_count` counts its `videos` rows as `GET /channels` does); no subprocess, no write; `404` unknown, `422` malformed ID (#235)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `POST`   | `/channels/{id}/unfollow`                          | body `{}`, JSON only (`415` otherwise); unfollow and keep the videos (#235). In one transaction, channel row first: `active = false`, poll health and feed-gap columns reset, and the channel's pending or running backfill request ended exactly as `backfill/cancel` does. Answers `200` `{channel_id, active: false, changed, backfill: {backfill_id, cancelled_jobs} \| null}`; `changed: false` and nothing else written for an already inactive channel (an ad-hoc stub's request is still ended), so repeating is safe. Videos, transcripts, analyses, tombstones, the catalog snapshot and every other job are untouched. `POST /channels` follows it again, forward-only from `now()`. `404` unknown, `422` malformed ID. Deleting the channel with its videos is #339                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `DELETE` | `/channels/{id}`                                   | delete the channel and every video of it, whatever the `origin` (`rss`, `backfill` or `adhoc`), in one transaction (#339). Each video gets exactly what `POST /videos/delete` does (tombstone, derived data, jobs per #303), through the shared repository function without `MAX_BULK_DELETE`; the active backfill request is ended with the #116 rule first, all of the channel's `backfill_requests` rows are deleted, `channel_catalog_entries` go by their cascade, then the `channels` row. Lock order: channel row `FOR NO KEY UPDATE`, active request, jobs by `id`, `videos` by `video_id`, the row delete (the lock-order note in section 4). Answers `200` `{channel_id, deleted_videos, cancelled_backfill: {backfill_id, cancelled_jobs} \| null}`; media files are unlinked after the commit as in `POST /videos/delete`. Tombstones keep the owner rule: following the channel again and backfilling does not bring the videos back, only an explicit `POST /videos` does. `404` unknown, `422` for a malformed or percent-encoded ID, `503` on a database failure with nothing changed                                                                                                                                                                                                                                                                                                                                                       |
-| `POST`   | `/channels/{id}/backfill`                          | `{limit, dry_run}`; priority `-10` (D9b)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `POST`   | `/channels/{id}/backfill-requests`                 | `{limit <= 5000, dry_run}`; only records a request, the planner `channel_backfill` task runs it (#115); `409` while the channel has a pending or running one                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `GET`    | `/channels/{id}/backfill-requests/{request_id}`    | state, attempts, enqueued, timestamps and `result` (the shape of the synchronous response) (#115)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `POST`   | `/playlists/resolve`                               | body `{url}`, JSON only (`415` otherwise): a public playlist ID, a `playlist?list=` URL or a `watch?v=&list=` URL (`parse_playlist_ref`: ID starts `PL`, `OL`, `UU` or `FL`, 12 to 64 characters; mixes `RD`, liked videos `LL`, watch later `WL` and anything else are `422` with one fixed message that echoes nothing). Runs one flat yt-dlp listing of `https://www.youtube.com/playlist?list=<id>` (90 s, inside the proxy timeout; the second API exception to "the API performs no processing" after catalog discovery, #81/#242) of at most `MAX_PLAYLIST_ENTRIES` (200, a module constant read per request) entries, **no database connection held** while it runs, then one short read to mark known videos. Writes and stores nothing. Answers `200` `{playlist_id, title, total_count, truncated, entries: [{position, video_id, title, url, known, processing_status}]}` in playlist order, repeats and non-video IDs dropped; `url` is the canonical watch URL; `known` is true for a `videos` row or a deletion tombstone, `processing_status` is the library status or `deleted`; `truncated` is true when the playlist holds more than was returned. Private and deleted entries are listed as YouTube lists them (`[Private video]`). `404` for a missing or private playlist, `503` timeout or rate limit, `502` bad listing; no yt-dlp text in any response. The UI submits the picked videos through `POST /videos/batch` (#342, #343) |
-| `POST`   | `/channels/{id}/catalog/discover`                  | `{limit}` in `50`, `200`, `500`, `5000` (default `50`); one bounded flat listing (90 s, inside the proxy timeout), stores it and returns the page, newest first; `404` unregistered channel, `502` bad listing, `503` timeout or rate limit; adds nothing to `videos` (#242)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `GET`    | `/channels/{id}/catalog?limit=`                    | the stored snapshot, newest first, no subprocess and no write; each row has `title`, a canonical `url` derived from the validated ID, `description` and `published_at` (null until `enrichment_state` is `done`), `known` and the library `processing_status`; `404` until a discovery stored rows (#242)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `POST`   | `/channels/{id}/catalog/{video_id}/metadata/retry` | `202` and `pending` for a `failed` row; `404` if the video is not in the channel's catalog, `409` while the row is not `failed` (#242)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `POST`   | `/channels/{id}/catalog/process`                   | `{video_ids}` (1 to 5000, unique, canonical); `202` with one result per ID in request order: `queued` with its `job_id`, `already_known`, or `rejected` (`not_in_catalog`); idempotent (#242)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `POST`   | `/channels/{id}/backfill/cancel`                   | `{backfill_id}`; ends the matching active request and deletes only its pending backfill-priority `ingest` jobs; a matching running `ingest` finishes normally and is excluded from `cancelled`, while already-created `transcribe` and `analyze` jobs are not cancelled (#116, #166)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `POST`   | `/videos/{id}/reanalyze`                           | force new `analyze` at current version                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `GET`    | `/videos`                                          | paginated library view (each item also has `last_cancelled`, #325); filters: channel, state, date; repeated paired `sort=title                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | published | status | channel`, `order=asc | desc` (up to four unique keys) |
-| `GET`    | `/videos/{id}`                                     | latest analysis + job state. Also `last_cancelled: {job_id, kind, finished_at} \| null` (#300): non-null exactly when the video's newest job (`created_at DESC, id DESC`) is `dead` with `error_class = 'CANCELLED'`, so a page can tell a cancelled video from a never-processed one (`status` stays `idle`/`done`, `last_failure` is unchanged). `GET /videos` carries the same field on every item (#325), read from the same `nc_*` columns; the `status` filter and sort are unchanged, so a cancelled video is selected by `idle` and sorts with it                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `GET`    | `/videos/{id}/analyses`                            | all runs (Compare view, D7)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `GET`    | `/videos/{id}/transcript`                          | paginated segments                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `GET`    | `/videos/{id}/render`                              | **server-side HTML render** (D12c)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `GET`    | `/search?q=`                                       | FTS over `search_docs` (title, latest analysis, preferred transcript); `matched_in` and transcript `ts_headline` excerpts. Transcript search uses a mapped built-in PostgreSQL configuration or `simple`; with `simple`, exact whole runs/tokens can match, but text inside an unspaced run cannot unless whitespace or punctuation creates a token boundary (#167).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `GET`    | `/ops/channels`                                    | current poll health plus nullable feed-gap state; strict `failing` or `attention` filter (mutually exclusive), failures first, then oldest gaps, then healthy channels                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `GET`    | `/ops/jobs`                                        | filter by state/kind — powers Ops view                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `POST`   | `/ops/jobs/{id}/retry`                             | resurrect a dead job                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `GET`    | `/healthz`                                         | liveness + queue depth by kind/state                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `GET`    | `/metrics`                                         | Prometheus text format (optional)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Method | Path | Notes |
+|---|---|---|
+| `POST` | `/videos` | body `{url}`; also the restore action for a deleted video (#239): it clears the tombstone and processes the video again from scratch, nothing of the old data comes back; priority `+10`; returns job id (`restarted` is `false` unless the call revived a cancelled job); restarts a cancelled video (#304): when the video has no `pending`/`running` job, no analysis and is not `unavailable`, and its newest job of any kind is `dead` with `error_class = 'CANCELLED'`, that job is revived in place with `retry_dead` (same id, kind, key and payload; no new row; priority raised to `+10`) and the answer is `202` with `restarted: true`; any other state, a failed (non-cancelled) dead job, a cancelled re-analysis of an analysed video (#323) and a job still `running` with a cancel request answer `200`, `restarted: false`, so a repeat restarts once; `retry_dead` reporting `superseded` falls through to the `200` answer; delete keeps priority, since a tombstoned video has no jobs left and gets the fresh `ingest` below; clears a matching deletion tombstone atomically and, in the same transaction, deletes the video's remaining job rows (locks: jobs by id, then the `videos` row), so a fresh `ingest` is enqueued. `409 cancellation in progress` (nothing written, tombstone kept) while the deleted video still has a `running` job carrying a cancel request (#303) |
+| `DELETE` | `/videos/{id}` | permanently deletes the video and derived data, at once and also with a running job (#303, owner decision: delete has priority over a running job): `204`, never `409`. In one transaction it cancels the video's jobs with the #237 rules, deletes every job row that is not `running`, keeps each `running` row as a `CANCELLED` record (its worker ends it at the next checkpoint and carries on), and records a tombstone so only explicit `POST /videos` can restore it. Shares its implementation with `POST /videos/delete` (one-ID form). `404` for an unknown or already deleted video, `422` for a malformed ID |
+| `POST` | `/videos/batch` | body `{urls}`, JSON only (`415` otherwise), strict: 1 to `MAX_BATCH_SUBMIT` (200, a module constant read per request) strings of at most `MAX_REF_CHARS`; a wrong-shaped body is one `422` that does not echo the input and nothing is submitted (#341). Each string goes through `parse_video_ref` and then exactly `submit_video` (tombstone restore, idempotence, #304 restart) in **its own transaction**, in request order (a batch-wide transaction would hold many videos' locks and could deadlock with a bulk or channel delete), at priority `0`, not `+10`: a pasted list must not outrank RSS uploads (D9b); an existing pending job below `0` is raised to `0`, nothing is lowered. Answers `200` `{results: [{index, outcome, ...}], counts}`, one result per input item in order; `outcome` is `queued` / `restarted` (`video_id`, `job_id`), `already_submitted` (`video_id`, `job_id`, `state`), `duplicate` (`video_id`, `first_index`; submitted once), `invalid` (`reason: "not_a_video_ref"`; the input is never echoed), `cancellation_in_progress` (`video_id`) or `failed` (`video_id`; a database error on that item only, the rest carry on and a resubmission is safe) |
+| `POST` | `/videos/delete` | body `{video_ids}`, JSON only (`415` otherwise), strict: 1 to `MAX_BULK_DELETE` (200, a module constant read per request) unique canonical 11-character IDs; any violation is one `422` with a fixed message that does not echo the input, and nothing is deleted (#238). Per video exactly what `DELETE /videos/{id}` does (#303), in **one transaction** with the multi-video lock order: every job of every target video `FOR UPDATE` by `id`, then the `videos` rows `FOR UPDATE` by `video_id`; all or nothing. Answers `200` `{results: [{video_id, outcome}], counts: {deleted, not_found}}` in request order, `outcome` `deleted` or `not_found` (no `videos` row: unknown or already deleted; no tombstone is written for an unknown ID). After the commit the API unlinks every returned media path under `AUDIO_DIR`; a failure is logged (`video.delete.unlink_failed`) and the answer stays `200`. Channel deletion (#339) reuses the repository function without the cap |
+| `POST` | `/videos/{id}/cancel` | body `{}`, JSON only (`415` otherwise); stores a cancel request for every `pending` or `running` job of the video (#237). Pending jobs end `CANCELLED` at once; running ones get `cancel_requested_at` and stop at their next checkpoint. Answers `{video_id, jobs: [{job_id, kind, outcome}]}` with `outcome` `cancelled` or `cancel_requested`: `202` if any is `cancel_requested`, else `200` (`jobs: []` when nothing was active); `404` for an unknown or deleted video (so a cancel after `DELETE` is `404`, #303), `422` for a malformed ID. Deletes nothing |
+| `POST` | `/channels` | forward-only; sets `monitor_from`. Accepts a channel ID, `youtube.com/channel/` URL, or `@handle`, `/c/` or `/user/` reference; a name is resolved synchronously with one bounded yt-dlp call (at most 20 s, #81, an exception to the no-processing rule in §1): `404` if it does not exist, `503` on timeout or rate limit, `502` on bad output |
+| `GET` | `/deleted-videos` | `?offset=&limit=` (`offset` 0..`MAX_OFFSET`, `limit` 1..200, default 50, else `422` as `GET /videos`); `{items: [{video_id, title, channel_id, channel_title, deleted_at, restorable}], total}` of the deletion tombstones, `deleted_at DESC, video_id ASC`. `title` and `channel_id` are NULL for tombstones from before #239; `channel_title` comes from a `LEFT JOIN channels` (NULL when the channel is gone or untitled). `restorable` is `false` exactly while the video has a `running` job with a cancel request (`POST /videos` answers `409` then, #303). Tombstones never expire. Restore is `POST /videos` (#239) |
+| `GET` | `/channels` | paginated channel list (id, title, active, video count), powers the Library channel filter |
+| `GET` | `/channels/{id}` | one channel, active or not: `{channel_id, title, active, monitor_from, added_at, video_count}` (`video_count` counts its `videos` rows as `GET /channels` does); no subprocess, no write; `404` unknown, `422` malformed ID (#235) |
+| `POST` | `/channels/{id}/unfollow` | body `{}`, JSON only (`415` otherwise); unfollow and keep the videos (#235). In one transaction, channel row first: `active = false`, poll health and feed-gap columns reset, and the channel's pending or running backfill request ended exactly as `backfill/cancel` does. Answers `200` `{channel_id, active: false, changed, backfill: {backfill_id, cancelled_jobs} \| null}`; `changed: false` and nothing else written for an already inactive channel (an ad-hoc stub's request is still ended), so repeating is safe. Videos, transcripts, analyses, tombstones, the catalog snapshot and every other job are untouched. `POST /channels` follows it again, forward-only from `now()`. `404` unknown, `422` malformed ID. Deleting the channel with its videos is #339 |
+| `DELETE` | `/channels/{id}` | delete the channel and every video of it, whatever the `origin` (`rss`, `backfill` or `adhoc`), in one transaction (#339). Each video gets exactly what `POST /videos/delete` does (tombstone, derived data, jobs per #303), through the shared repository function without `MAX_BULK_DELETE`; the active backfill request is ended with the #116 rule first, all of the channel's `backfill_requests` rows are deleted, `channel_catalog_entries` go by their cascade, then the `channels` row. Lock order: channel row `FOR NO KEY UPDATE`, active request, jobs by `id`, `videos` by `video_id`, the row delete (the lock-order note in section 4). Answers `200` `{channel_id, deleted_videos, cancelled_backfill: {backfill_id, cancelled_jobs} \| null}`; media files are unlinked after the commit as in `POST /videos/delete`. Tombstones keep the owner rule: following the channel again and backfilling does not bring the videos back, only an explicit `POST /videos` does. `404` unknown, `422` for a malformed or percent-encoded ID, `503` on a database failure with nothing changed |
+| `POST` | `/channels/{id}/backfill` | `{limit, dry_run}`; priority `-10` (D9b) |
+| `POST` | `/channels/{id}/backfill-requests` | `{limit <= 5000, dry_run}`; only records a request, the planner `channel_backfill` task runs it (#115); `409` while the channel has a pending or running one |
+| `GET` | `/channels/{id}/backfill-requests/{request_id}` | state, attempts, enqueued, timestamps and `result` (the shape of the synchronous response) (#115) |
+| `POST` | `/playlists/resolve` | body `{url}`, JSON only (`415` otherwise): a public playlist ID, a `playlist?list=` URL or a `watch?v=&list=` URL (`parse_playlist_ref`: ID starts `PL`, `OL`, `UU` or `FL`, 12 to 64 characters; mixes `RD`, liked videos `LL`, watch later `WL` and anything else are `422` with one fixed message that echoes nothing). Runs one flat yt-dlp listing of `https://www.youtube.com/playlist?list=<id>` (90 s, inside the proxy timeout; the second API exception to "the API performs no processing" after catalog discovery, #81/#242) of at most `MAX_PLAYLIST_ENTRIES` (200, a module constant read per request) entries, **no database connection held** while it runs, then one short read to mark known videos. Writes and stores nothing. Answers `200` `{playlist_id, title, total_count, truncated, entries: [{position, video_id, title, url, known, processing_status}]}` in playlist order, repeats and non-video IDs dropped; `url` is the canonical watch URL; `known` is true for a `videos` row or a deletion tombstone, `processing_status` is the library status or `deleted`; `truncated` is true when the playlist holds more than was returned. Private and deleted entries are listed as YouTube lists them (`[Private video]`). `404` for a missing or private playlist, `503` timeout or rate limit, `502` bad listing; no yt-dlp text in any response. The UI submits the picked videos through `POST /videos/batch` (#342, #343) |
+| `POST` | `/channels/{id}/catalog/discover` | `{limit}` in `50`, `200`, `500`, `5000` (default `50`); one bounded flat listing (90 s, inside the proxy timeout), stores it and returns the page, newest first; `404` unregistered channel, `502` bad listing, `503` timeout or rate limit; adds nothing to `videos` (#242) |
+| `GET` | `/channels/{id}/catalog?limit=` | the stored snapshot, newest first, no subprocess and no write; each row has `title`, a canonical `url` derived from the validated ID, `description` and `published_at` (null until `enrichment_state` is `done`), `known` and the library `processing_status`; `404` until a discovery stored rows (#242) |
+| `POST` | `/channels/{id}/catalog/{video_id}/metadata/retry` | `202` and `pending` for a `failed` row; `404` if the video is not in the channel's catalog, `409` while the row is not `failed` (#242) |
+| `POST` | `/channels/{id}/catalog/process` | `{video_ids}` (1 to 5000, unique, canonical); `202` with one result per ID in request order: `queued` with its `job_id`, `already_known`, or `rejected` (`not_in_catalog`); idempotent (#242) |
+| `POST` | `/channels/{id}/backfill/cancel` | `{backfill_id}`; ends the matching active request and deletes only its pending backfill-priority `ingest` jobs; a matching running `ingest` finishes normally and is excluded from `cancelled`, while already-created `transcribe` and `analyze` jobs are not cancelled (#116, #166) |
+| `POST` | `/videos/{id}/reanalyze` | force new `analyze` at current version |
+| `GET` | `/videos` | paginated library view (each item also has `last_cancelled`, #325); filters: channel, state, date; repeated paired `sort=title|published|status|channel`, `order=asc|desc` (up to four unique keys) |
+| `GET` | `/videos/{id}` | latest analysis + job state. Also `last_cancelled: {job_id, kind, finished_at} \| null` (#300): non-null exactly when the video's newest job (`created_at DESC, id DESC`) is `dead` with `error_class = 'CANCELLED'`, so a page can tell a cancelled video from a never-processed one (`status` stays `idle`/`done`, `last_failure` is unchanged). `GET /videos` carries the same field on every item (#325), read from the same `nc_*` columns; the `status` filter and sort are unchanged, so a cancelled video is selected by `idle` and sorts with it |
+| `GET` | `/videos/{id}/analyses` | all runs (Compare view, D7) |
+| `GET` | `/videos/{id}/transcript` | paginated segments |
+| `GET` | `/videos/{id}/render` | **server-side HTML render** (D12c) |
+| `GET` | `/search?q=` | FTS over `search_docs` (title, latest analysis, preferred transcript); `matched_in` and transcript `ts_headline` excerpts. Transcript search uses a mapped built-in PostgreSQL configuration or `simple`; with `simple`, exact whole runs/tokens can match, but text inside an unspaced run cannot unless whitespace or punctuation creates a token boundary (#167). |
+| `GET` | `/ops/channels` | current poll health plus nullable feed-gap state; strict `failing` or `attention` filter (mutually exclusive), failures first, then oldest gaps, then healthy channels |
+| `GET` | `/ops/jobs` | filter by state/kind — powers Ops view |
+| `POST` | `/ops/jobs/{id}/retry` | resurrect a dead job |
+| `GET` | `/healthz` | liveness + queue depth by kind/state |
+| `GET` | `/metrics` | Prometheus text format (optional) |
 
 `GET /videos` accepts repeated `sort` and `order` parameters paired by position,
 in primary-to-quaternary precedence order. Keys are unique and capped at the
@@ -1229,17 +1229,17 @@ private, members-only, or Shorts-only. These are presumed to fall into the same
 `plan.md` §8 flags this as "worth designing explicitly". It is the difference
 between a fast dead-letter and four wasted Whisper runs.
 
-| Class                | Examples                                                      | Handling                                                                                                                                                              |
-| -------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PERMANENT_SOURCE`   | video removed, private, geo-blocked, age-gated                | dead-letter immediately; set `videos.unavailable`; **no retry**                                                                                                       |
-| `TRANSIENT_NETWORK`  | timeout, 5xx, DNS                                             | retry with backoff                                                                                                                                                    |
-| `RATE_LIMITED`       | 429, bot-check                                                | retry with long backoff; respect `Retry-After`                                                                                                                        |
-| `TOOL_FAILURE`       | yt-dlp extractor broken                                       | retry twice, then dead-letter **with an alert** — means "go update yt-dlp" (§16.11)                                                                                   |
-| `LLM_INVALID_OUTPUT` | schema validation failed                                      | one repair attempt, then dead-letter                                                                                                                                  |
-| `LLM_UNAVAILABLE`    | provider 5xx, connection refused                              | retry with backoff                                                                                                                                                    |
-| `RESOURCE`           | disk full, OOM                                                | dead-letter; alert — retrying makes it worse                                                                                                                          |
-| `BUG`                | unhandled exception                                           | dead-letter with traceback in `last_error`                                                                                                                            |
-| `CANCELLED`          | a user's cancel request or a delete of the video (#237, #303) | not a failure: `dead`, no retry, no alert, logged at INFO. `classify()` never returns it. Unlike a reaped job, whose class is NULL, a cancelled job always carries it |
+| Class | Examples | Handling |
+|---|---|---|
+| `PERMANENT_SOURCE` | video removed, private, geo-blocked, age-gated | dead-letter immediately; set `videos.unavailable`; **no retry** |
+| `TRANSIENT_NETWORK` | timeout, 5xx, DNS | retry with backoff |
+| `RATE_LIMITED` | 429, bot-check | retry with long backoff; respect `Retry-After` |
+| `TOOL_FAILURE` | yt-dlp extractor broken | retry twice, then dead-letter **with an alert** — means "go update yt-dlp" (§16.11) |
+| `LLM_INVALID_OUTPUT` | schema validation failed | one repair attempt, then dead-letter |
+| `LLM_UNAVAILABLE` | provider 5xx, connection refused | retry with backoff |
+| `RESOURCE` | disk full, OOM | dead-letter; alert — retrying makes it worse |
+| `BUG` | unhandled exception | dead-letter with traceback in `last_error` |
+| `CANCELLED` | a user's cancel request or a delete of the video (#237, #303) | not a failure: `dead`, no retry, no alert, logged at INFO. `classify()` never returns it. Unlike a reaped job, whose class is NULL, a cancelled job always carries it |
 
 `error_class` is stored on the job so the Ops view can distinguish "YouTube
 changed something" from "my LLM is down" at a glance.
@@ -1282,7 +1282,7 @@ web/src/
 - **Channel controls (#340).** The catalog page loads `GET /channels/{id}`
   (`useChannelDetail`) and shows a Channel section with `Unfollow channel`
   (`POST /channels/{id}/unfollow`, `useUnfollowChannel`) and `Delete channel and its
-videos` (`DELETE /channels/{id}`, `useDeleteChannel`), each behind an inline
+  videos` (`DELETE /channels/{id}`, `useDeleteChannel`), each behind an inline
   confirmation. A delete leaves for the Library with a one-shot notice, then
   removes the channel's cached queries and those of its videos found in the cache
   (`forgetChannel` in `hooks/forgetVideos.ts`). The Library's active channel filter
@@ -1324,7 +1324,7 @@ videos` (`DELETE /channels/{id}`, `useDeleteChannel`), each behind an inline
   Vitest, with `jsdom` and `@testing-library/react` for component tests
   (#127).
 - **CSP:** `frame-src https://www.youtube-nocookie.com` only; `default-src
-'self'`. Enforced in `ops/nginx.conf` (§11.3), not in application code.
+  'self'`. Enforced in `ops/nginx.conf` (§11.3), not in application code.
 - **Served by nginx, same origin as the API** via `/api` proxy (§11.2), so no
   CORS configuration exists to get wrong.
 
@@ -1368,7 +1368,6 @@ The `react-youtube` and `youtube-player` wrappers were rejected for the same
 reason, since they load that script too.
 
 **When to revisit:** switch to the official script if any of these happens:
-
 - the undocumented protocol breaks and cannot be fixed quickly;
 - we need player features the protocol does not expose (for example,
   bidirectional sync, which D12b defers);
@@ -1386,45 +1385,45 @@ section.
 Single `common/config.py` using pydantic-settings; services import it rather
 than reading `os.environ` directly.
 
-| Variable                                                                                           | Default                                                  | Consumer                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| -------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`                                                                                     | —                                                        | all                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `SUMMARIZER`                                                                                       | `ollama`                                                 | analyzer: `ollama`, `anthropic` or `free` (#364)                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `OLLAMA_MODEL` / `OLLAMA_HOST`                                                                     | `qwen3.5:4b`                                             | analyzer (see 16.7)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `OLLAMA_OUTPUT_RESERVE_TOKENS`                                                                     | `2048`                                                   | analyzer: tokens of `OLLAMA_NUM_CTX` kept free for the reply; prompt budget is `OLLAMA_NUM_CTX - OLLAMA_OUTPUT_RESERVE_TOKENS`, and startup fails if it is `>= OLLAMA_NUM_CTX` (#85)                                                                                                                                                                                                                                                                                                                          |
-| `ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY_FILE` / `ANTHROPIC_MODEL`                                 | — / — / `claude-haiku-4-5`                               | analyzer (D6: API key only); the explicit file path is the opt-in Compose-secret source                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `FREE_LLM_PROVIDERS_FILE`                                                                          | — (the shipped `adapters/summarize/free_providers.toml`) | analyzer, `SUMMARIZER=free` (#364): TOML list of OpenAI-compatible providers (`name`, `base_url`, `model`, `context_tokens`, `key_setting`), tried in file order                                                                                                                                                                                                                                                                                                                                              |
-| `FREE_LLM_TIMEOUT_SEC` / `FREE_LLM_COOLDOWN_SEC`                                                   | `120` / `120`                                            | analyzer: per-request timeout; how long a provider that rate-limited or failed is skipped (#364)                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `GROQ_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY` / `CEREBRAS_API_KEY` / `PUTER_AUTH_TOKEN` | —                                                        | analyzer only: the free-tier keys a provider names as its `key_setting`; a provider without a key is skipped (#364)                                                                                                                                                                                                                                                                                                                                                                                           |
-| `ANTHROPIC_BATCH`                                                                                  | `1`                                                      | use Batch API — 50% cost (16.8)                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `PROMPT_VERSION`                                                                                   | `v1`                                                     | analyzer, planner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `SWEEP_MAX_JOBS_ANTHROPIC`                                                                         | `100`                                                    | planner: cumulative per-`PROMPT_VERSION` count of re-analysis sweep jobs allowed while `SUMMARIZER=anthropic` (`0` = none); ignored for ollama (#99)                                                                                                                                                                                                                                                                                                                                                          |
-| `CHUNK_SEC`                                                                                        | `900`                                                    | transcriber, analyzer                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `OVERLAP_SEC`                                                                                      | `60`                                                     | transcriber, analyzer                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `WHISPER_MODEL`                                                                                    | `large-v3`                                               | transcriber                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `WHISPER_COMPUTE`                                                                                  | `int8`                                                   | transcriber                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `WHISPER_THREADS`                                                                                  | `0` (auto)                                               | transcriber                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `PREFER_WHISPER`                                                                                   | `0`                                                      | transcriber                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `AUTO_CAPTION_FALLBACK`                                                                            | `1`                                                      | transcriber, planner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `SKIP_SHORTS`                                                                                      | `0`                                                      | planner (poll), transcriber (ingest): `1` records YouTube Shorts found by RSS polling or backfill as `unavailable = 'short'` and never processes them; `0` (default, owner decision on #80) includes them. Never applies to `adhoc` submissions. A global flag for now; the owner intends to promote it to a per-channel choice once per-channel settings exist (§7.1, Shorts policy)                                                                                                                         |
-| `AUDIO_KEEP` / `AUDIO_TTL_DAYS` / `AUDIO_MAX_GB`                                                   | `1` / `30` / `20`                                        | transcriber, planner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `AUDIO_MIN_FREE_GB` / `AUDIO_MIN_FREE_PCT`                                                         | `2` / `5`                                                | planner: free-space floor on the `AUDIO_DIR` volume (#105). When free space is below the larger of the two, audio retention evicts the oldest audio beyond what `AUDIO_MAX_GB` would, never a running job's. `0` for either disables that half; `AUDIO_MAX_GB` and `AUDIO_MIN_FREE_GB` are finite floats (`inf`/`NaN`/negative fail at startup, #197); `AUDIO_MIN_FREE_PCT` is `0 <= x < 100`. A floor at or above the volume size evicts nothing and logs `planner.audio_retention.free_space_floor_invalid` |
-| `POLL_INTERVAL_SEC`                                                                                | `3600`                                                   | planner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `RECONCILE_INTERVAL_SEC`                                                                           | `21600`                                                  | planner: how often each active channel's newest uploads are checked against the RSS feed for videos it dropped (#93)                                                                                                                                                                                                                                                                                                                                                                                          |
-| `BACKFILL_INTERVAL_SEC`                                                                            | `60`                                                     | planner: how often the `channel_backfill` task takes one bounded slice of the oldest pending backfill request (#115)                                                                                                                                                                                                                                                                                                                                                                                          |
-| `CATALOG_ENRICH_INTERVAL_SEC` / `CATALOG_ENRICH_BATCH_SIZE`                                        | `30` / `10`                                              | planner: how often the `catalog_enrichment` task runs and how many channel catalog rows (one yt-dlp call each) it enriches per run (#242)                                                                                                                                                                                                                                                                                                                                                                     |
-| `UPCOMING_MAX_WAIT_DAYS`                                                                           | `14`                                                     | transcriber: ingest reschedules a premiere or live stream until it is available, and dead-letters it this many days after discovery (#65)                                                                                                                                                                                                                                                                                                                                                                     |
-| `CANCELLED_JOB_RETENTION_DAYS`                                                                     | `7`                                                      | planner: the `reap` task deletes a `dead` / `CANCELLED` job of a deleted video (tombstone, no `videos` row) this many days after it finished (#327); its returned count includes them                                                                                                                                                                                                                                                                                                                         |
-| `HEARTBEAT_SEC` / `REAP_AFTER_SEC`                                                                 | `60` / `300`                                             | workers, planner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `MAX_ATTEMPTS_TRANSCRIBE`                                                                          | `2`                                                      | transcriber                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `INGEST_MAX_RUNTIME_SEC` / `ANALYZE_MAX_RUNTIME_SEC` / `TRANSCRIBE_MAX_RTF`                        | `600` / `3600` / `3.0`                                   | workers (§11.5)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `TRANSCRIBER_CPUS`                                                                                 | `3.0`                                                    | compose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `ALERT_WEBHOOK_URL`                                                                                | unset (no channel)                                       | planner: secret; `TOOL_FAILURE` / `RESOURCE` dead-letters are POSTed here (#67)                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `ALERT_WEBHOOK_FORMAT`                                                                             | `json`                                                   | planner: `json` (`{"text": ...}`, Slack-compatible) or `text` (plain body plus `Title` header, ntfy)                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `ALERT_MIN_INTERVAL_SEC`                                                                           | `3600`                                                   | planner: at most one alert per error class in this window; later dead-letters are counted into the next one                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `DB_POOL_MIN_SIZE` / `DB_POOL_MAX_SIZE`                                                            | `1` / `5`                                                | api: bounds of the Postgres connection pool opened at startup (#95); positive, and `MIN <= MAX` (equal is fine)                                                                                                                                                                                                                                                                                                                                                                                               |
-| `DB_POOL_TIMEOUT_SEC`                                                                              | `2`                                                      | api: how long a request waits for a pooled connection before `503`; positive, at most `4` so the wait fits inside the 5 s healthcheck timeout (11.4)                                                                                                                                                                                                                                                                                                                                                          |
-| `LOG_LEVEL` / `LOG_FORMAT`                                                                         | `INFO` / `json`                                          | all                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Variable | Default | Consumer |
+|---|---|---|
+| `DATABASE_URL` | — | all |
+| `SUMMARIZER` | `ollama` | analyzer: `ollama`, `anthropic` or `free` (#364) |
+| `OLLAMA_MODEL` / `OLLAMA_HOST` | `qwen3.5:4b` | analyzer (see 16.7) |
+| `OLLAMA_OUTPUT_RESERVE_TOKENS` | `2048` | analyzer: tokens of `OLLAMA_NUM_CTX` kept free for the reply; prompt budget is `OLLAMA_NUM_CTX - OLLAMA_OUTPUT_RESERVE_TOKENS`, and startup fails if it is `>= OLLAMA_NUM_CTX` (#85) |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY_FILE` / `ANTHROPIC_MODEL` | — / — / `claude-haiku-4-5` | analyzer (D6: API key only); the explicit file path is the opt-in Compose-secret source |
+| `FREE_LLM_PROVIDERS_FILE` | — (the shipped `adapters/summarize/free_providers.toml`) | analyzer, `SUMMARIZER=free` (#364): TOML list of OpenAI-compatible providers (`name`, `base_url`, `model`, `context_tokens`, `key_setting`), tried in file order |
+| `FREE_LLM_TIMEOUT_SEC` / `FREE_LLM_COOLDOWN_SEC` | `120` / `120` | analyzer: per-request timeout; how long a provider that rate-limited or failed is skipped (#364) |
+| `GROQ_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY` / `CEREBRAS_API_KEY` / `PUTER_AUTH_TOKEN` | — | analyzer only: the free-tier keys a provider names as its `key_setting`; a provider without a key is skipped (#364) |
+| `ANTHROPIC_BATCH` | `1` | use Batch API — 50% cost (16.8) |
+| `PROMPT_VERSION` | `v1` | analyzer, planner |
+| `SWEEP_MAX_JOBS_ANTHROPIC` | `100` | planner: cumulative per-`PROMPT_VERSION` count of re-analysis sweep jobs allowed while `SUMMARIZER=anthropic` (`0` = none); ignored for ollama (#99) |
+| `CHUNK_SEC` | `900` | transcriber, analyzer |
+| `OVERLAP_SEC` | `60` | transcriber, analyzer |
+| `WHISPER_MODEL` | `large-v3` | transcriber |
+| `WHISPER_COMPUTE` | `int8` | transcriber |
+| `WHISPER_THREADS` | `0` (auto) | transcriber |
+| `PREFER_WHISPER` | `0` | transcriber |
+| `AUTO_CAPTION_FALLBACK` | `1` | transcriber, planner |
+| `SKIP_SHORTS` | `0` | planner (poll), transcriber (ingest): `1` records YouTube Shorts found by RSS polling or backfill as `unavailable = 'short'` and never processes them; `0` (default, owner decision on #80) includes them. Never applies to `adhoc` submissions. A global flag for now; the owner intends to promote it to a per-channel choice once per-channel settings exist (§7.1, Shorts policy) |
+| `AUDIO_KEEP` / `AUDIO_TTL_DAYS` / `AUDIO_MAX_GB` | `1` / `30` / `20` | transcriber, planner |
+| `AUDIO_MIN_FREE_GB` / `AUDIO_MIN_FREE_PCT` | `2` / `5` | planner: free-space floor on the `AUDIO_DIR` volume (#105). When free space is below the larger of the two, audio retention evicts the oldest audio beyond what `AUDIO_MAX_GB` would, never a running job's. `0` for either disables that half; `AUDIO_MAX_GB` and `AUDIO_MIN_FREE_GB` are finite floats (`inf`/`NaN`/negative fail at startup, #197); `AUDIO_MIN_FREE_PCT` is `0 <= x < 100`. A floor at or above the volume size evicts nothing and logs `planner.audio_retention.free_space_floor_invalid` |
+| `POLL_INTERVAL_SEC` | `3600` | planner |
+| `RECONCILE_INTERVAL_SEC` | `21600` | planner: how often each active channel's newest uploads are checked against the RSS feed for videos it dropped (#93) |
+| `BACKFILL_INTERVAL_SEC` | `60` | planner: how often the `channel_backfill` task takes one bounded slice of the oldest pending backfill request (#115) |
+| `CATALOG_ENRICH_INTERVAL_SEC` / `CATALOG_ENRICH_BATCH_SIZE` | `30` / `10` | planner: how often the `catalog_enrichment` task runs and how many channel catalog rows (one yt-dlp call each) it enriches per run (#242) |
+| `UPCOMING_MAX_WAIT_DAYS` | `14` | transcriber: ingest reschedules a premiere or live stream until it is available, and dead-letters it this many days after discovery (#65) |
+| `CANCELLED_JOB_RETENTION_DAYS` | `7` | planner: the `reap` task deletes a `dead` / `CANCELLED` job of a deleted video (tombstone, no `videos` row) this many days after it finished (#327); its returned count includes them |
+| `HEARTBEAT_SEC` / `REAP_AFTER_SEC` | `60` / `300` | workers, planner |
+| `MAX_ATTEMPTS_TRANSCRIBE` | `2` | transcriber |
+| `INGEST_MAX_RUNTIME_SEC` / `ANALYZE_MAX_RUNTIME_SEC` / `TRANSCRIBE_MAX_RTF` | `600` / `3600` / `3.0` | workers (§11.5) |
+| `TRANSCRIBER_CPUS` | `3.0` | compose |
+| `ALERT_WEBHOOK_URL` | unset (no channel) | planner: secret; `TOOL_FAILURE` / `RESOURCE` dead-letters are POSTed here (#67) |
+| `ALERT_WEBHOOK_FORMAT` | `json` | planner: `json` (`{"text": ...}`, Slack-compatible) or `text` (plain body plus `Title` header, ntfy) |
+| `ALERT_MIN_INTERVAL_SEC` | `3600` | planner: at most one alert per error class in this window; later dead-letters are counted into the next one |
+| `DB_POOL_MIN_SIZE` / `DB_POOL_MAX_SIZE` | `1` / `5` | api: bounds of the Postgres connection pool opened at startup (#95); positive, and `MIN <= MAX` (equal is fine) |
+| `DB_POOL_TIMEOUT_SEC` | `2` | api: how long a request waits for a pooled connection before `503`; positive, at most `4` so the wait fits inside the 5 s healthcheck timeout (11.4) |
+| `LOG_LEVEL` / `LOG_FORMAT` | `INFO` / `json` | all |
 
 Pool sizing rule: `api replicas x DB_POOL_MAX_SIZE + workers + planner + migrate` must stay below Postgres `max_connections` (default 100). Only the api pools; workers, planner, CLI and migrate open one connection each through `common.db.connect()`.
 
@@ -1436,16 +1435,16 @@ Pool sizing rule: `api replicas x DB_POOL_MAX_SIZE + workers + planner + migrate
 
 Six runtime containers, four build contexts, three custom images.
 
-| Container               | Image                                | Built from                                                                       | Replicas      | Role                              |
-| ----------------------- | ------------------------------------ | -------------------------------------------------------------------------------- | ------------- | --------------------------------- |
-| `db`                    | `postgres:18-alpine` (digest-pinned) | upstream                                                                         | 1             | data + queue                      |
-| `migrate`               | `ytdigest-backend`                   | `ops/Dockerfile.backend`                                                         | one-shot      | `alembic upgrade head`            |
-| `api`                   | `ytdigest-backend`                   | same image                                                                       | 1..N          | HTTP API                          |
-| `planner`               | `ytdigest-backend`                   | same image                                                                       | **exactly 1** | periodic tasks (§1)               |
-| `analyzer`              | `ytdigest-backend`                   | same image                                                                       | 1..N          | worker: `analyze`                 |
-| `transcriber`           | `ytdigest-whisper`                   | `ops/Dockerfile.whisper`, on the `deps` stage of `ops/Dockerfile.backend` (#135) | 1..N          | worker: `ingest`, `transcribe`    |
-| `web`                   | `ytdigest-web`                       | `ops/Dockerfile.frontend`                                                        | 1             | nginx: static SPA + reverse proxy |
-| `metabase` _(optional)_ | upstream                             | —                                                                                | 1             | ad-hoc queries, read-only role    |
+| Container | Image | Built from | Replicas | Role |
+|---|---|---|---|---|
+| `db` | `postgres:18-alpine` (digest-pinned) | upstream | 1 | data + queue |
+| `migrate` | `ytdigest-backend` | `ops/Dockerfile.backend` | one-shot | `alembic upgrade head` |
+| `api` | `ytdigest-backend` | same image | 1..N | HTTP API |
+| `planner` | `ytdigest-backend` | same image | **exactly 1** | periodic tasks (§1) |
+| `analyzer` | `ytdigest-backend` | same image | 1..N | worker: `analyze` |
+| `transcriber` | `ytdigest-whisper` | `ops/Dockerfile.whisper`, on the `deps` stage of `ops/Dockerfile.backend` (#135) | 1..N | worker: `ingest`, `transcribe` |
+| `web` | `ytdigest-web` | `ops/Dockerfile.frontend` | 1 | nginx: static SPA + reverse proxy |
+| `metabase` *(optional)* | upstream | — | 1 | ad-hoc queries, read-only role |
 
 **One backend image serves four containers.** `api`, `planner`, `analyzer`, and
 `migrate` differ only by their `command`. Building four near-identical images
@@ -1538,28 +1537,25 @@ sees it; it is an exact version plus the index digest; and it needs no extra
 build tooling. A checksum-verified release binary needs `unzip` in a builder
 stage for no gain, and the `deno` PyPI wheel would be a third dependency. The
 `COPY --from=deno` sits in the `deps` stage, which holds no application code,
-so both the backend and whisper images share the layer and a code change keeps
-it cached (verified with `docker build --progress=plain` after a change in
-`common/`).
-Deno 2.9.8 is what yt-dlp 2026.10.21 asks for (`deno>=2.9.8`) and `yt-dlp-ejs`
-0.8.0 is what its `default` extra pins; the three move together when yt-dlp is
-bumped (#68, checked by #369). Deno finds its cache under the `app` user's
-home (`/home/app/.cache/deno`), so nothing needs to be made world-writable.
-D12's "no Node in production" is untouched: this is Deno, in the backend
-image, not Node.
+so the backend and whisper images share the layer and a code change keeps it
+cached. Deno 2.9.8 is what yt-dlp 2026.10.21 asks for (`deno>=2.9.8`) and
+`yt-dlp-ejs` 0.8.0 is what its `default` extra pins; the three move together
+when yt-dlp is bumped (#68, checked by #369). Deno keeps its cache under the
+`app` user's home, so nothing needs to be made world-writable. D12's "no Node
+in production" is untouched: this is Deno, in the backend image, not Node.
 
 Measured with `docker image inspect --format '{{.Size}}'`, "before" built from
 the unchanged `master` Dockerfile under a throwaway tag:
 
-| Image              | Before (bytes) | After (bytes) | Difference                   |
-| ------------------ | -------------- | ------------- | ---------------------------- |
-| `ytdigest-backend` | 963,928,988    | 1,103,383,953 | +139,454,965 (about 133 MiB) |
-| `ytdigest-whisper` | 1,564,257,560  | 1,703,719,895 | +139,462,335 (about 133 MiB) |
+| Image | Before (bytes) | After (bytes) | Difference |
+|---|---|---|---|
+| `ytdigest-backend` | 963,950,672 | 1,103,413,398 | +139,462,726 (about 133 MiB) |
+| `ytdigest-whisper` | 1,564,278,058 | 1,703,740,811 | +139,462,753 (about 133 MiB) |
 
 **Python locks (#145).** The images install from `requirements.backend.lock`
 and `requirements.whisper.lock`, generated from the matching `requirements.*.txt`
 by `scripts/lock_requirements.py`. A lock pins every package, transitive ones
-included, and carries the sha256 of _every_ file PyPI publishes for that
+included, and carries the sha256 of *every* file PyPI publishes for that
 version, not only the one the generating machine chose, because WSL, the CI
 runner and `python:3.14-slim` can pick different manylinux wheels for the same
 version. `pip install --require-hashes --no-deps` then installs exactly that
@@ -1577,7 +1573,7 @@ advisory id; an OSV outage ends green with a notice. It reports only: fixing is 
 regenerate-and-PR flow. On a red run, regenerate with
 `backend --upgrade`, `whisper --upgrade` and `dev --upgrade`, run `pytest -m image`, and open a PR.
 
-**Layer ordering matters:** the lock is copied and installed _before_
+**Layer ordering matters:** the lock is copied and installed *before*
 application code. Editing a Python file then rebuilds only the final `COPY`
 layers, not the dependency install.
 
@@ -1855,11 +1851,11 @@ x-backend-env: &backend-env
 
 x-logging: &logging
   driver: json-file
-  options: { max-size: "10m", max-file: "3" }
+  options: {max-size: "10m", max-file: "3"}
 
 services:
   db:
-    image: postgres:18-alpine@sha256:898c60cb390d1085bc97bdd6a1ae968757421df394b071848b52b1c09c89d6a5 # >=18.6 (architecture.md 16.1)
+    image: postgres:18-alpine@sha256:898c60cb390d1085bc97bdd6a1ae968757421df394b071848b52b1c09c89d6a5   # >=18.6 (architecture.md 16.1)
     environment:
       POSTGRES_USER: ytdigest
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
@@ -1876,7 +1872,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
-      start_interval: 1s # so `up --wait` does not wait a full interval
+      start_interval: 1s    # so `up --wait` does not wait a full interval
     networks: [internal]
     logging: *logging
     restart: unless-stopped
@@ -1885,11 +1881,11 @@ services:
   # service startup (AGENTS.md -> Rules); the long-running services wait for
   # this to exit 0. It owns the only build of the backend image.
   migrate:
-    build: { context: ., dockerfile: ops/Dockerfile.backend }
+    build: {context: ., dockerfile: ops/Dockerfile.backend}
     image: ytdigest-backend:latest
     command: alembic upgrade head
     environment: *backend-env
-    depends_on: { db: { condition: service_healthy } }
+    depends_on: {db: {condition: service_healthy}}
     networks: [internal]
     restart: "no"
     logging: *logging
@@ -1899,23 +1895,23 @@ services:
     command: uvicorn services.api.main:app --host 0.0.0.0 --port 8000
     environment: *backend-env
     depends_on:
-      migrate: { condition: service_completed_successfully }
+      migrate: {condition: service_completed_successfully}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 20s
-      start_interval: 1s # so `up --wait` does not wait a full interval
+      start_interval: 1s    # so `up --wait` does not wait a full interval
     networks: [internal, edge]
     logging: *logging
     restart: unless-stopped
 
   web:
-    build: { context: ., dockerfile: ops/Dockerfile.frontend }
+    build: {context: ., dockerfile: ops/Dockerfile.frontend}
     image: ytdigest-web:latest
-    ports: ["127.0.0.1:8080:8080"] # loopback only (D13)
-    depends_on: { api: { condition: service_healthy } }
+    ports: ["127.0.0.1:8080:8080"]    # loopback only (D13)
+    depends_on: {api: {condition: service_healthy}}
     networks: [edge]
     logging: *logging
     restart: unless-stopped
@@ -1930,23 +1926,19 @@ services:
       AUDIO_MAX_GB: ${AUDIO_MAX_GB:-20}
       AUDIO_KEEP: ${AUDIO_KEEP:-1}
     depends_on:
-      migrate: { condition: service_completed_successfully }
-    volumes: [audio:/data/audio] # needs it to unlink purged files
+      migrate: {condition: service_completed_successfully}
+    volumes: [audio:/data/audio]        # needs it to unlink purged files
     # The loop touches /tmp/heartbeat each pass and sleeps in slices of at
     # most 30 s (#38), so it fits the same 180 s test as the other workers.
     # Dollar signs are doubled so Compose leaves them for the shell.
     healthcheck: &worker-health
-      test:
-        [
-          "CMD-SHELL",
-          "test $$(( $$(date +%s) - $$(stat -c %Y /tmp/heartbeat) )) -lt 180",
-        ]
+      test: ["CMD-SHELL", "test $$(( $$(date +%s) - $$(stat -c %Y /tmp/heartbeat) )) -lt 180"]
       interval: 60s
       retries: 3
       start_period: 60s
-      start_interval: 5s # so `up --wait` does not wait a full interval
+      start_interval: 5s    # so `up --wait` does not wait a full interval
     # Hard constraint: exactly one planner - see architecture.md section 1.
-    deploy: { replicas: 1 }
+    deploy: {replicas: 1}
     # Must stay above WORKER_SHUTDOWN_GRACE_SEC (default 20 s, not set here);
     # Docker's own default of 10 s would SIGKILL a worker mid-drain.
     stop_grace_period: 30s
@@ -1966,10 +1958,10 @@ services:
       # environment; a Docker secret file is #136.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     depends_on:
-      migrate: { condition: service_completed_successfully }
-    extra_hosts: ["host.docker.internal:host-gateway"] # host Ollama (11.5)
+      migrate: {condition: service_completed_successfully}
+    extra_hosts: ["host.docker.internal:host-gateway"]   # host Ollama (11.5)
     healthcheck: *worker-health
-    stop_grace_period: 30s # above WORKER_SHUTDOWN_GRACE_SEC
+    stop_grace_period: 30s              # above WORKER_SHUTDOWN_GRACE_SEC
     networks: [internal, egress]
     logging: *logging
     restart: unless-stopped
@@ -2002,12 +1994,12 @@ services:
       - audio:/data/audio
       - whisper-models:/models
     depends_on:
-      migrate: { condition: service_completed_successfully }
+      migrate: {condition: service_completed_successfully}
     healthcheck: *worker-health
     deploy:
       resources:
-        limits: { cpus: "${TRANSCRIBER_CPUS:-3.0}", memory: 6G }
-    stop_grace_period: 30s # above WORKER_SHUTDOWN_GRACE_SEC
+        limits: {cpus: "${TRANSCRIBER_CPUS:-3.0}", memory: 6G}
+    stop_grace_period: 30s              # above WORKER_SHUTDOWN_GRACE_SEC
     networks: [internal, egress]
     logging: *logging
     restart: unless-stopped
@@ -2062,7 +2054,7 @@ everything else starts.
 
 **Worker health checks.** Workers expose no HTTP port, so liveness is a
 heartbeat file: the claim loop touches `/tmp/heartbeat` each iteration, and the
-healthcheck asserts it is under 180 s old. This is distinct from the _job_
+healthcheck asserts it is under 180 s old. This is distinct from the *job*
 heartbeat in C2 — that one detects a dead worker holding a job; this one tells
 Docker to restart a wedged process. Both are needed; neither substitutes for
 the other.
@@ -2255,10 +2247,10 @@ Decided in #59, beyond the list above:
   keep their commands (no wrapper, no shell). They restart on a source edit
   through Docker Compose Watch (#142): `develop.watch` with `action: restart`
   in `compose.override.yml` only. Compose Watch is built into `docker
-compose`, so it adds no dependency, matching #59's "no `watchfiles`"
+  compose`, so it adds no dependency, matching #59's "no `watchfiles`"
   decision; `sync` is not used because the mounts are read-only. The dev loop
   is `docker compose up -d --build` followed by `docker compose watch
---no-up` in its own terminal, or `docker compose up --watch --build` in the
+  --no-up` in its own terminal, or `docker compose up --watch --build` in the
   foreground; `-d` and `--watch` cannot be combined. Without watch nothing
   restarts by itself, and `docker compose restart <service>` still picks up
   an edit. `api` has no rule (uvicorn reloads it). Each worker watches
@@ -2306,17 +2298,17 @@ gauges, no tracing stack.
 
 ## 13. Testing strategy
 
-| Layer                | Approach                                                                                                                             |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Queue semantics      | Real Postgres (testcontainers); concurrent claim, dedupe (C1), reap (C2)                                                             |
-| Chunking             | Pure function; property test — chunks cover the transcript, overlaps bounded                                                         |
-| VTT parsing          | Fixture files incl. malformed and rolling-caption duplicates                                                                         |
-| Adapters             | Recorded `yt-dlp --dump-json` fixtures; no network in CI                                                                             |
-| Summarizer           | `FakeSummarizer` returning canned JSON; plus schema-violation fixtures                                                               |
-| Error classification | Table-driven over real yt-dlp/provider error strings                                                                                 |
-| API                  | FastAPI `TestClient` against a seeded database                                                                                       |
-| Browser (#177)       | Playwright (`@playwright/test`, chromium only) in `web/e2e/` against `vite preview` of the production build; offline, `/api` stubbed |
-| Quality (manual)     | Golden set of ~20 videos; compare runs via the Compare view (D5)                                                                     |
+| Layer | Approach |
+|---|---|
+| Queue semantics | Real Postgres (testcontainers); concurrent claim, dedupe (C1), reap (C2) |
+| Chunking | Pure function; property test — chunks cover the transcript, overlaps bounded |
+| VTT parsing | Fixture files incl. malformed and rolling-caption duplicates |
+| Adapters | Recorded `yt-dlp --dump-json` fixtures; no network in CI |
+| Summarizer | `FakeSummarizer` returning canned JSON; plus schema-violation fixtures |
+| Error classification | Table-driven over real yt-dlp/provider error strings |
+| API | FastAPI `TestClient` against a seeded database |
+| Browser (#177) | Playwright (`@playwright/test`, chromium only) in `web/e2e/` against `vite preview` of the production build; offline, `/api` stubbed |
+| Quality (manual) | Golden set of ~20 videos; compare runs via the Compare view (D5) |
 
 The quality evaluation is deliberately manual. Automating "is this summary
 good" is a research project; comparing two runs side by side is a UI feature
@@ -2328,17 +2320,17 @@ that already exists for other reasons.
 
 Refines `plan.md` §12 with concrete exit criteria.
 
-| Phase | Deliverable                                                                                                                         | Exit criterion                                              |
-| ----- | ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| 0     | Coverage + **three-way transcription bake-off** (whisper large-v3 / turbo / parakeet); **confirm `ctranslate2` cp314 wheel** (16.2) | RTF, WER, proper-noun accuracy; TTL 30 vs 90 decided (16.6) |
-| 1     | Migrations, `common/`, adapters, CLI single-video path                                                                              | `ytdigest run <url>` → analysis in DB                       |
-| 2     | `queue.py` + `worker.py`; split transcriber/analyzer                                                                                | Survives `kill -9` mid-transcribe; no duplicate work        |
-| 3     | `planner`: RSS, reaper, audio purge, sweep                                                                                          | One week unattended, no manual intervention                 |
-| 4     | `api`: read/write/ops routes, FTS, SSR render path                                                                                  | All data reachable over HTTP                                |
-| 4b    | React SPA, six views                                                                                                                | Operable without `psql`                                     |
-| 5     | Prompt v2, local-vs-cloud comparison                                                                                                | D5 decided on measured evidence                             |
-| 6     | pgvector semantic search (D9c) / diarization (D4)                                                                                   | —                                                           |
-| 7     | notifier: PDF + email + weekly digest (D12c)                                                                                        | One month unattended delivery                               |
+| Phase | Deliverable | Exit criterion |
+|---|---|---|
+| 0 | Coverage + **three-way transcription bake-off** (whisper large-v3 / turbo / parakeet); **confirm `ctranslate2` cp314 wheel** (16.2) | RTF, WER, proper-noun accuracy; TTL 30 vs 90 decided (16.6) |
+| 1 | Migrations, `common/`, adapters, CLI single-video path | `ytdigest run <url>` → analysis in DB |
+| 2 | `queue.py` + `worker.py`; split transcriber/analyzer | Survives `kill -9` mid-transcribe; no duplicate work |
+| 3 | `planner`: RSS, reaper, audio purge, sweep | One week unattended, no manual intervention |
+| 4 | `api`: read/write/ops routes, FTS, SSR render path | All data reachable over HTTP |
+| 4b | React SPA, six views | Operable without `psql` |
+| 5 | Prompt v2, local-vs-cloud comparison | D5 decided on measured evidence |
+| 6 | pgvector semantic search (D9c) / diarization (D4) | — |
+| 7 | notifier: PDF + email + weekly digest (D12c) | One month unattended delivery |
 
 **Phase 1 depends on Phase 0.** If subtitle coverage is high, the transcriber's
 Whisper path is an edge case and Phase 1 can defer it entirely, going
@@ -2348,15 +2340,15 @@ subtitles-only until Phase 2.
 
 ## 15. Carried-forward open items
 
-| #   | Item                                                         | Blocks                                            | Resolution path                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| --- | ------------------------------------------------------------ | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| O1  | Real channel list + subtitle coverage                        | Phase 1 scope                                     | **Resolved 2026-10-13 (owner): the Whisper/STT path is deferred from Phase 1 — Phase 1 ships subtitles-only (section 14).** Measured 2026-09-27 (task #2): 9 owner-chosen channels, 15 RSS entries each: manual subtitles 6 videos (1.95 h), auto-only 64 (48.72 h), none 0, error 2 (transient), 63 Shorts excluded. Every non-Short had at least auto-captions, so by default speech-to-text load is ~0 h; with `PREFER_WHISPER=1` it is ~48.7 h per window. The STT adapter stays built (#20, closed) but off by default; revisit when STT quality is wanted or a channel with no captions appears. Evidence: `_docs/progress.md`, "Phase 0 findings"; script `scripts/phase0/subtitle_coverage.py`                                                                       |
-| O2  | Transcription engine: whisper vs parakeet                    | D3 validity, D4 diarization premise, audio sizing | **Provisionally resolved 2026-10-13 (owner): `faster-whisper large-v3` (int8) — Option A, the D3 default — is the Phase-1 engine.** Because O1 defers STT from Phase 1, no Phase-1 flow depends on the engine being final, so this is a default rather than a measured choice. The measured call still needs the deploy-host bake-off (>=3 real clips, >=1 noisy or accented) from #3, on a host prepared by #78; dev-machine numbers do not count and no real figures exist yet. The `Transcriber` port (section 3) keeps the switch cheap: B (`large-v3-turbo`) is a `WHISPER_MODEL` flip, C (`parakeet-tdt-0.6b-v3`) is one new adapter plus an engine selector (section 16.6). Until the bake-off, D3 stands and the D4 revisit (only if Parakeet wins) is not triggered |
-| O3  | `AUDIO_TTL_DAYS` 30 vs 90                                    | Disk provisioning                                 | **Resolved 2026-10-13 (owner): `AUDIO_TTL_DAYS=30`.** Disk need = audio hours ingested per day x TTL days x MB per audio hour (16 kHz mono opus, 7.2/D6b), bounded by `AUDIO_MAX_GB` (default 20). With O1 deferring STT, the by-default hours-per-day input is ~0 (audio is fetched only on the Whisper path), so 30 days is amply within `AUDIO_MAX_GB` and the `AUDIO_MAX_GB` cap is the real bound regardless. 30 keeps retained audio (and the re-analysis window) tighter; raise it if `PREFER_WHISPER=1` is turned on and re-analysis of older episodes becomes routine. The MB-per-hour figure is still unmeasured but is moot while the cap, not the TTL, binds                                                                                                     |
-| O4  | Local vs cloud summarizer (D5)                               | Cost model                                        | Phase 5, via Compare view                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| O5  | Embedding model + dimension (D9c)                            | v2 schema                                         | Deferred; chunk table already prepared                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| O7  | `ctranslate2` wheel availability for Python 3.14             | transcriber image build                           | **Resolved 2026-09-27 (task #4): wheels exist for the whole tree (ctranslate2 4.8.2, av 18.1.0, tokenizers 0.23.2, onnxruntime 1.30.0); `faster-whisper` 1.2.1 installs and transcribes on `python:3.14-slim`.** The transcriber can derive from the 3.14 backend image; the 3.13 split is not needed, which is what #56 implements (built on the backend's `deps` stage, #135; wheels only). Details in 16.2; also `_docs/progress.md`, "Phase 0 findings"                                                                                                                                                                                                                                                                                                                  |
-| O6  | Whether `speaker_coercions_total` justifies diarization (D4) | v2 scope                                          | Observe during Phase 5                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| # | Item | Blocks | Resolution path |
+|---|---|---|---|
+| O1 | Real channel list + subtitle coverage | Phase 1 scope | **Resolved 2026-10-13 (owner): the Whisper/STT path is deferred from Phase 1 — Phase 1 ships subtitles-only (section 14).** Measured 2026-09-27 (task #2): 9 owner-chosen channels, 15 RSS entries each: manual subtitles 6 videos (1.95 h), auto-only 64 (48.72 h), none 0, error 2 (transient), 63 Shorts excluded. Every non-Short had at least auto-captions, so by default speech-to-text load is ~0 h; with `PREFER_WHISPER=1` it is ~48.7 h per window. The STT adapter stays built (#20, closed) but off by default; revisit when STT quality is wanted or a channel with no captions appears. Evidence: `_docs/progress.md`, "Phase 0 findings"; script `scripts/phase0/subtitle_coverage.py` |
+| O2 | Transcription engine: whisper vs parakeet | D3 validity, D4 diarization premise, audio sizing | **Provisionally resolved 2026-10-13 (owner): `faster-whisper large-v3` (int8) — Option A, the D3 default — is the Phase-1 engine.** Because O1 defers STT from Phase 1, no Phase-1 flow depends on the engine being final, so this is a default rather than a measured choice. The measured call still needs the deploy-host bake-off (>=3 real clips, >=1 noisy or accented) from #3, on a host prepared by #78; dev-machine numbers do not count and no real figures exist yet. The `Transcriber` port (section 3) keeps the switch cheap: B (`large-v3-turbo`) is a `WHISPER_MODEL` flip, C (`parakeet-tdt-0.6b-v3`) is one new adapter plus an engine selector (section 16.6). Until the bake-off, D3 stands and the D4 revisit (only if Parakeet wins) is not triggered |
+| O3 | `AUDIO_TTL_DAYS` 30 vs 90 | Disk provisioning | **Resolved 2026-10-13 (owner): `AUDIO_TTL_DAYS=30`.** Disk need = audio hours ingested per day x TTL days x MB per audio hour (16 kHz mono opus, 7.2/D6b), bounded by `AUDIO_MAX_GB` (default 20). With O1 deferring STT, the by-default hours-per-day input is ~0 (audio is fetched only on the Whisper path), so 30 days is amply within `AUDIO_MAX_GB` and the `AUDIO_MAX_GB` cap is the real bound regardless. 30 keeps retained audio (and the re-analysis window) tighter; raise it if `PREFER_WHISPER=1` is turned on and re-analysis of older episodes becomes routine. The MB-per-hour figure is still unmeasured but is moot while the cap, not the TTL, binds |
+| O4 | Local vs cloud summarizer (D5) | Cost model | Phase 5, via Compare view |
+| O5 | Embedding model + dimension (D9c) | v2 schema | Deferred; chunk table already prepared |
+| O7 | `ctranslate2` wheel availability for Python 3.14 | transcriber image build | **Resolved 2026-09-27 (task #4): wheels exist for the whole tree (ctranslate2 4.8.2, av 18.1.0, tokenizers 0.23.2, onnxruntime 1.30.0); `faster-whisper` 1.2.1 installs and transcribes on `python:3.14-slim`.** The transcriber can derive from the 3.14 backend image; the 3.13 split is not needed, which is what #56 implements (built on the backend's `deps` stage, #135; wheels only). Details in 16.2; also `_docs/progress.md`, "Phase 0 findings" |
+| O6 | Whether `speaker_coercions_total` justifies diarization (D4) | v2 scope | Observe during Phase 5 |
 
 ---
 
@@ -2366,22 +2358,22 @@ Every choice in this document was re-verified against current releases. The
 table summarizes; the discussion below covers only where the answer changes
 something.
 
-| Component          | Specified                 | Current (Sep 2026)                 | Action                               |
-| ------------------ | ------------------------- | ---------------------------------- | ------------------------------------ |
-| PostgreSQL         | 17                        | **18.6**                           | **Upgrade** — §16.1                  |
-| Python             | 3.12                      | **3.14.7** (3.15 in Oct)           | **3.14 — matches host** — §16.2      |
-| Node (build only)  | 22                        | **24 LTS** (26 → LTS Oct 2026)     | **Upgrade** — §16.3                  |
-| React              | 19                        | **19.3** (Sep 9, 2026)             | **Upgrade + Compiler** — §16.4       |
-| Vite               | 7-era assumptions         | **8.0.9** (Rolldown)               | **Adopt** — §16.5                    |
-| Transcription      | faster-whisper `large-v3` | **Parakeet / parakeet.cpp** exists | **Add to Phase 0 bake-off** — §16.6  |
-| Local LLM          | `qwen3:8b`                | Qwen3.5-4B class for CPU           | Revised — §16.7                      |
-| Cloud LLM          | `claude-haiku-4-5`        | Still current tier; **Batch API**  | **Adopt batch** — §16.8              |
-| TanStack Query     | v5                        | v5.102 stable; v6 in RC            | **No change** — stay v5              |
-| pgvector           | assumed                   | 0.8.2; VectorChord exists          | **No change** — §16.9                |
-| FastAPI            | 0.11x era                 | **0.139.x**                        | Minor — §16.10                       |
-| yt-dlp             | current                   | still the leader                   | No change; risk reconfirmed — §16.11 |
-| nginx              | 1.27                      | fine                               | No change                            |
-| Alembic / psycopg3 | current                   | fine                               | No change                            |
+| Component | Specified | Current (Sep 2026) | Action |
+|---|---|---|---|
+| PostgreSQL | 17 | **18.6** | **Upgrade** — §16.1 |
+| Python | 3.12 | **3.14.7** (3.15 in Oct) | **3.14 — matches host** — §16.2 |
+| Node (build only) | 22 | **24 LTS** (26 → LTS Oct 2026) | **Upgrade** — §16.3 |
+| React | 19 | **19.3** (Sep 9, 2026) | **Upgrade + Compiler** — §16.4 |
+| Vite | 7-era assumptions | **8.0.9** (Rolldown) | **Adopt** — §16.5 |
+| Transcription | faster-whisper `large-v3` | **Parakeet / parakeet.cpp** exists | **Add to Phase 0 bake-off** — §16.6 |
+| Local LLM | `qwen3:8b` | Qwen3.5-4B class for CPU | Revised — §16.7 |
+| Cloud LLM | `claude-haiku-4-5` | Still current tier; **Batch API** | **Adopt batch** — §16.8 |
+| TanStack Query | v5 | v5.102 stable; v6 in RC | **No change** — stay v5 |
+| pgvector | assumed | 0.8.2; VectorChord exists | **No change** — §16.9 |
+| FastAPI | 0.11x era | **0.139.x** | Minor — §16.10 |
+| yt-dlp | current | still the leader | No change; risk reconfirmed — §16.11 |
+| nginx | 1.27 | fine | No change |
+| Alembic / psycopg3 | current | fine | No change |
 
 ### 16.1 PostgreSQL 17 → 18
 
@@ -2412,7 +2404,7 @@ at ≥18.6 rather than tracking `:18` loosely.
 **Decision:** Python 3.14, matching the Ubuntu server's system Python.
 
 Note that containers do not inherit the host's interpreter — the image version
-and the host version are independent. Parity is therefore a _choice_, and a
+and the host version are independent. Parity is therefore a *choice*, and a
 defensible one: it means a venv on the host, an ad-hoc script, and the container
 all behave identically, which removes a class of "works outside the container,
 fails inside" confusion during Phase 0–1 when much of the work is CLI-driven.
@@ -2425,8 +2417,8 @@ host catch up on its own schedule.
 
 **The one real risk — binary wheels for the transcriber.** `ctranslate2`
 (under `faster-whisper`) ships platform-specific wheels and has historically
-lagged new CPython minors: it notably had no 3.13 wheels _and no source
-distribution_ for a period, which left 3.12 as the only option. CTranslate2
+lagged new CPython minors: it notably had no 3.13 wheels *and no source
+distribution* for a period, which left 3.12 as the only option. CTranslate2
 release notes confirm 3.13 support. 3.14 support was unconfirmed when this
 section was first written. It has since been verified, with the result below.
 With no sdist fallback, a missing wheel is a hard build failure, not a slow
@@ -2435,32 +2427,32 @@ source compile.
 **Verified 2026-09-27 (task #4): 3.14 works.** The checks ran in throwaway
 containers on the Docker Desktop daemon, never on the host.
 
-- _Wheel download._ `pip download faster-whisper --only-binary=:all:
---python-version 3.14` resolved the full tree from wheels for
+- *Wheel download.* `pip download faster-whisper --only-binary=:all:
+  --python-version 3.14` resolved the full tree from wheels for
   Linux x86_64 (glibc), with no sdists. It ran twice with identical results:
   once natively inside `python:3.14-slim` and once cross-platform with
   `--platform manylinux_2_{17..28}_x86_64 --platform manylinux2014_x86_64`.
-- _Smoke test._ In `python:3.14-slim` (Python 3.14.7, pip 26.2.1, Debian
+- *Smoke test.* In `python:3.14-slim` (Python 3.14.7, pip 26.2.1, Debian
   glibc 2.41), `pip install --only-binary=:all: faster-whisper` succeeded. The
   `tiny` model (CPU, `int8`) then transcribed three clips without error: a
   5 s 440 Hz sine passed as a numpy array (0 segments, as expected), the same
   sine with `vad_filter=True` (which loads `onnxruntime`), and a 5.5 s
   espeak-ng speech WAV decoded from a file path through PyAV. For the WAV it
-  returned _"the quick brown fox jump over the rainy dog. The low world, this
-  is a test."_
+  returned *"the quick brown fox jump over the rainy dog. The low world, this
+  is a test."*
 
-| Package                                                                                                                                                                                                                                 | Version | Wheel resolved for cp314                 | Result |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- | ---------------------------------------- | ------ |
-| faster-whisper                                                                                                                                                                                                                          | 1.2.1   | `py3-none-any`                           | pass   |
-| ctranslate2                                                                                                                                                                                                                             | 4.8.2   | `cp314-cp314-manylinux_2_27/2_28_x86_64` | pass   |
-| av (PyAV)                                                                                                                                                                                                                               | 18.1.0  | `cp311-abi3-manylinux_2_28_x86_64`       | pass   |
-| tokenizers                                                                                                                                                                                                                              | 0.23.2  | `cp310-abi3-manylinux_2_17_x86_64`       | pass   |
-| onnxruntime                                                                                                                                                                                                                             | 1.30.0  | `cp314-cp314-manylinux_2_28_x86_64`      | pass   |
-| numpy                                                                                                                                                                                                                                   | 2.5.3   | `cp314-cp314-manylinux_2_27/2_28_x86_64` | pass   |
-| pyyaml                                                                                                                                                                                                                                  | 6.0.3   | `cp314-cp314-manylinux_2_17/2_28_x86_64` | pass   |
-| protobuf                                                                                                                                                                                                                                | 7.36.2  | `cp310-abi3-manylinux2014_x86_64`        | pass   |
-| hf-xet                                                                                                                                                                                                                                  | 1.6.0   | `cp38-abi3-manylinux_2_17_x86_64`        | pass   |
-| flatbuffers 25.12.19, huggingface-hub 1.33.0, httpx 0.28.1, httpcore 1.0.9, h11 0.16.0, anyio 4.15.1, idna 3.20, certifi 2026.7.22, click 8.5.0, filelock 4.0.4, fsspec 2026.9.0, packaging 26.3, tqdm 4.70.1, typing-extensions 4.16.0 | —       | pure-Python `py3-none-any`               | pass   |
+| Package | Version | Wheel resolved for cp314 | Result |
+|---|---|---|---|
+| faster-whisper | 1.2.1 | `py3-none-any` | pass |
+| ctranslate2 | 4.8.2 | `cp314-cp314-manylinux_2_27/2_28_x86_64` | pass |
+| av (PyAV) | 18.1.0 | `cp311-abi3-manylinux_2_28_x86_64` | pass |
+| tokenizers | 0.23.2 | `cp310-abi3-manylinux_2_17_x86_64` | pass |
+| onnxruntime | 1.30.0 | `cp314-cp314-manylinux_2_28_x86_64` | pass |
+| numpy | 2.5.3 | `cp314-cp314-manylinux_2_27/2_28_x86_64` | pass |
+| pyyaml | 6.0.3 | `cp314-cp314-manylinux_2_17/2_28_x86_64` | pass |
+| protobuf | 7.36.2 | `cp310-abi3-manylinux2014_x86_64` | pass |
+| hf-xet | 1.6.0 | `cp38-abi3-manylinux_2_17_x86_64` | pass |
+| flatbuffers 25.12.19, huggingface-hub 1.33.0, httpx 0.28.1, httpcore 1.0.9, h11 0.16.0, anyio 4.15.1, idna 3.20, certifi 2026.7.22, click 8.5.0, filelock 4.0.4, fsspec 2026.9.0, packaging 26.3, tqdm 4.70.1, typing-extensions 4.16.0 | — | pure-Python `py3-none-any` | pass |
 
 Python 3.13 (`python:3.13-slim`, 3.13.15) was also run through both steps.
 Both passed, with the same versions and the `cp313` builds of the three
@@ -2468,7 +2460,7 @@ version-specific wheels (ctranslate2, numpy, onnxruntime), and an identical
 transcript. So the fallback in mitigation 2 is known to work too, but it is
 not needed.
 
-_Pitfall with the download check._ Passing a single
+*Pitfall with the download check.* Passing a single
 `--platform manylinux_2_28_x86_64` makes pip accept **only** that exact tag.
 Unlike an install on a real glibc system, it does not also accept older
 `manylinux_2_17` / `manylinux2014` wheels. `tokenizers` publishes only
@@ -2508,7 +2500,7 @@ C++ ports need no Python runtime at inference and `ctranslate2` leaves the
 dependency tree altogether. Another reason to run that measurement in Phase 0
 before hardening the image.
 
-Nothing in the design _uses_ 3.14's new features — free-threading is irrelevant
+Nothing in the design *uses* 3.14's new features — free-threading is irrelevant
 here (concurrency is process-level via the job queue), and t-strings,
 subinterpreters, and deferred annotations are all unused. The move is for
 parity, not capability.
@@ -2563,7 +2555,7 @@ dependencies.
 
 ### 16.5 Vite 8 with Rolldown
 
-Vite 8.0 shipped 2026-03-12, replacing esbuild _and_ Rollup with **Rolldown**, a
+Vite 8.0 shipped 2026-03-12, replacing esbuild *and* Rollup with **Rolldown**, a
 Rust bundler, reporting 10–30× faster builds with plugin compatibility
 maintained. Current is 8.0.9.
 
@@ -2596,7 +2588,7 @@ quality. That reasoning is sound, but the option set has changed. NVIDIA's
 That last point is the significant one. **D4 deferred diarization specifically
 because `pyannote` would add a heavy CPU dependency to a strained host.** If
 Sortformer delivers diarization at these speeds, the premise of that deferral
-weakens, and D4b's LLM-inferred speakers — whose accepted weakness is _silent_
+weakens, and D4b's LLM-inferred speakers — whose accepted weakness is *silent*
 misattribution, the worst failure mode in the system per §13 — could be replaced
 or cross-checked by real acoustic diarization.
 
@@ -2623,7 +2615,7 @@ If Parakeet wins, revisit D4 in the same pass.
 ### 16.7 Local LLM — the CPU verdict hardens
 
 The model landscape moved (Qwen3.5, Gemma 4, gpt-oss-20b, DeepSeek V4), but the
-hardware arithmetic moved against local inference on _this_ host.
+hardware arithmetic moved against local inference on *this* host.
 
 Current field guidance for CPU-only inference assumes **32+ cores and 64 GB+ RAM**
 to reach 10–25 tok/s on a 7–14B model. The target host is a low-power Intel
@@ -2650,7 +2642,7 @@ million tokens**. The current lineup is Haiku 4.5, Sonnet 5 ($3/$15), Opus 5
 and this system is the ideal batch candidate — N1 declares latency tolerance as
 a first-class requirement, and analyses are queued work with no waiting user.
 Prompt caching (90% off cached input) stacks with it, and the map-reduce design
-sends the _same system prompt and roster_ across every chunk of an episode,
+sends the *same system prompt and roster* across every chunk of an episode,
 which is exactly the shape caching rewards.
 
 Revised cost estimate for a 2-hour episode under map-reduce (~8 chunks,
@@ -2741,23 +2733,23 @@ targets a scale or throughput problem this system does not have.
 
 ## Appendix A — Decision traceability
 
-| `plan.md` decision          | Realized in                                                                       |
-| --------------------------- | --------------------------------------------------------------------------------- |
-| D1 transcript-only          | §7.1 — no media pipeline beyond audio                                             |
-| D2 subtitles first          | §6 `transcript_rank()`, §7.1 auto-caption policy                                  |
-| D3 quality-first Whisper    | §7.2, `engine_meta` RTF recording, §12 metric                                     |
-| D4b LLM speaker inference   | §7.4 roster pass, §8.1 closed-set enforcement, C3                                 |
-| D5 summarizer seam          | §3 `Summarizer` port, §10 `SUMMARIZER`                                            |
-| D6 API key only             | §10 — no subscription credential exists in config                                 |
-| D6b audio TTL + cap         | §6 `media` table, §7.2, planner purge                                             |
-| D7 durable transcripts      | §6 separation, `analyses` append-only, C1                                         |
-| D8 structured JSON          | §8.1 pydantic validation before write                                             |
-| D9 map-reduce               | §7.3, §7.4                                                                        |
-| D9b forward-only + backfill | §6 `monitor_from`, §4 priority bands, C4                                          |
-| D9c semantic-search-ready   | §6 `transcript_chunks`, `chunk_strategy`                                          |
-| D10 Postgres queue          | §5, §6 `jobs`                                                                     |
-| D11 four services           | §1, §2 dependency rule                                                            |
-| D12 React SPA               | §9, §11.3 `Dockerfile.frontend` — no Node at runtime                              |
-| D12b click-to-seek          | §9 `Player`/`Timestamp`, §9.1 player transport                                    |
-| D12c SSR render path        | §8.3 `GET /videos/{id}/render`                                                    |
-| D13 auth-additive           | §2 route split, §8.3 `require_auth` no-op, §11.4 loopback bind + internal network |
+| `plan.md` decision | Realized in |
+|---|---|
+| D1 transcript-only | §7.1 — no media pipeline beyond audio |
+| D2 subtitles first | §6 `transcript_rank()`, §7.1 auto-caption policy |
+| D3 quality-first Whisper | §7.2, `engine_meta` RTF recording, §12 metric |
+| D4b LLM speaker inference | §7.4 roster pass, §8.1 closed-set enforcement, C3 |
+| D5 summarizer seam | §3 `Summarizer` port, §10 `SUMMARIZER` |
+| D6 API key only | §10 — no subscription credential exists in config |
+| D6b audio TTL + cap | §6 `media` table, §7.2, planner purge |
+| D7 durable transcripts | §6 separation, `analyses` append-only, C1 |
+| D8 structured JSON | §8.1 pydantic validation before write |
+| D9 map-reduce | §7.3, §7.4 |
+| D9b forward-only + backfill | §6 `monitor_from`, §4 priority bands, C4 |
+| D9c semantic-search-ready | §6 `transcript_chunks`, `chunk_strategy` |
+| D10 Postgres queue | §5, §6 `jobs` |
+| D11 four services | §1, §2 dependency rule |
+| D12 React SPA | §9, §11.3 `Dockerfile.frontend` — no Node at runtime |
+| D12b click-to-seek | §9 `Player`/`Timestamp`, §9.1 player transport |
+| D12c SSR render path | §8.3 `GET /videos/{id}/render` |
+| D13 auth-additive | §2 route split, §8.3 `require_auth` no-op, §11.4 loopback bind + internal network |

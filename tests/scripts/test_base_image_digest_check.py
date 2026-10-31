@@ -517,7 +517,7 @@ def _real(path: str) -> list[object]:
     return list(check.pinned_references(text))
 
 
-def test_the_repository_pins_exactly_the_seven_expected_references() -> None:
+def test_the_repository_pins_exactly_the_eight_expected_references() -> None:
     refs = [r for path in CHECKED_FILES for r in _real(path)]
 
     found = sorted((r.name, r.tag) for r in refs)  # type: ignore[attr-defined]
@@ -526,11 +526,19 @@ def test_the_repository_pins_exactly_the_seven_expected_references() -> None:
         + [("library/node", "24-alpine")] * 2
         + [("library/python", "3.14-slim")] * 3
         + [("library/postgres", "18-alpine")]
+        + [("denoland/deno", "bin-2.9.8")]  # the backend's Deno stage (#134)
     )
     digests: dict[tuple[str, str], set[str]] = {}
     for r in refs:
         digests.setdefault((r.name, r.tag), set()).add(r.digest)  # type: ignore[attr-defined]
     assert all(len(d) == 1 for d in digests.values()), digests
+
+
+def test_a_namespaced_non_semver_tag_such_as_the_deno_bin_image_is_parsed_whole() -> None:
+    digest = "sha256:" + "b" * 64
+    [ref] = check.pinned_references(f"FROM denoland/deno:bin-2.9.8@{digest} AS deno\n")
+
+    assert (ref.name, ref.tag, ref.digest) == ("denoland/deno", "bin-2.9.8", digest)  # no library/ prefix
 
 
 def _from_images(text: str) -> list[str]:
