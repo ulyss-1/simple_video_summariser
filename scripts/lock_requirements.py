@@ -3,6 +3,7 @@
     python scripts/lock_requirements.py backend|whisper|dev [--upgrade | --upgrade-package NAME]
     python scripts/lock_requirements.py --check-installed requirements.backend.lock requirements.dev.lock
     python scripts/lock_requirements.py --report-outdated
+    python scripts/lock_requirements.py --report-vulnerabilities
 
 ``requirements.backend.lock`` and ``requirements.whisper.lock`` are generated
 from ``requirements.backend.txt`` and ``requirements.whisper.txt``, and
@@ -43,6 +44,14 @@ daily). A trailing ``# hold: <reason>`` comment on a pin's own line turns a behi
 a ``::notice`` instead of a red run; a malformed or misplaced hold is a repository fault.
 A PyPI outage ends that section silent and green.
 
+``--report-vulnerabilities`` (issue #279) is a second report-only check: it reads the pins of
+all three locks and asks OSV.dev (``POST /v1/querybatch``, then ``GET /v1/vulns/<id>`` per
+advisory) whether a locked version has a published vulnerability. Exit ``0`` and no stdout when
+nothing applies; ``1`` and one ``::error`` annotation plus one line per (lock, package, advisory)
+when something does; ``0`` with one ``::notice`` when OSV could not be used (an outage reports
+nothing and retries next run); ``2`` when a lock file is missing or unparseable. It needs no pip,
+no platform check and writes no file. Only public package names and versions are sent.
+
 Standard library only; pip is invoked as a subprocess.
 """
 
@@ -50,6 +59,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import importlib.metadata
 import json
 import os
@@ -59,6 +69,8 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -869,6 +881,238 @@ def report_outdated(
     return (1 if changes or direct_code else 0), out + direct_out, outage + direct_err
 
 
+# ---- known vulnerabilities in the locked versions (issue #279) ----
+
+#: Transport seam: (method, url, body or None, timeout seconds) -> (HTTP status, body bytes).
+Osv = Callable[[str, str, bytes | None, float], tuple[int, bytes]]
+
+OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
+OSV_VULN_URL = "https://api.osv.dev/v1/vulns/"
+#: OSV's documented limit of queries in one querybatch request.
+BATCH_SIZE = 1000
+#: Most result pages followed for one package.
+MAX_PAGES = 10
+#: Most advisory detail requests per run.
+MAX_DETAILS = 50
+#: Longest OSV-supplied string that is printed.
+OSV_FIELD_LIMIT = 64
+VULN_TITLE = "Locked Python dependencies have known vulnerabilities"
+SKIP_TITLE = "Vulnerability check skipped"
+VULN_STEPS = (
+    (
+        "bump the pin or regenerate the lock "
+        "(python scripts/lock_requirements.py <target> --upgrade-package NAME)"
+    ),
+    "run pytest -m image for a runtime pin",
+    "then open a PR (architecture.md 11.3)",
+)
+
+
+def make_osv(max_bytes: int = MAX_BODY_BYTES) -> Osv:
+    """The default OSV seam: the only code of this mode that touches urllib."""
+
+    def osv(method: str, url: str, body: bytes | None, timeout: float) -> tuple[int, bytes]:
+        request = urllib.request.Request(
+            url, data=body, method=method, headers={"Content-Type": "application/json"}
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                status: int = response.status
+                data: bytes = response.read(max_bytes + 1)
+        except urllib.error.HTTPError as err:
+            return err.code, b""
+        if len(data) > max_bytes:
+            raise OSError(f"answer is larger than {max_bytes} bytes")
+        return status, data
+
+    return osv
+
+
+class _OsvOutage(Exception):
+    """OSV could not be used; the message is one line and never holds a response body."""
+
+
+def _osv_json(
+    osv: Osv, method: str, url: str, body: object, timeout: float, max_body: int
+) -> object:
+    try:
+        status, data = osv(method, url, None if body is None else json.dumps(body).encode(), timeout)
+    except (OSError, http.client.HTTPException, ValueError) as err:
+        raise _OsvOutage(type(err).__name__) from err
+    if status != 200:
+        raise _OsvOutage(f"HTTP {status}")
+    if len(data) > max_body:
+        raise _OsvOutage(f"answer is larger than {max_body} bytes")
+    try:
+        return json.loads(data)
+    except ValueError as err:
+        raise _OsvOutage(f"invalid JSON ({type(err).__name__})") from err
+
+
+def _query_results(
+    osv: Osv, queries: list[dict[str, object]], timeout: float, max_body: int
+) -> list[tuple[list[str], str | None]]:
+    """(advisory ids, next page token) per query, matched by position."""
+    answer = _osv_json(osv, "POST", OSV_BATCH_URL, {"queries": queries}, timeout, max_body)
+    try:
+        results = answer["results"]  # type: ignore[index]
+        if not isinstance(results, list) or len(results) != len(queries):
+            raise _OsvOutage("results do not match the queries sent")
+        parsed: list[tuple[list[str], str | None]] = []
+        for result in results:
+            ids = [v["id"] for v in result.get("vulns", [])]
+            token = result.get("next_page_token")
+            if not all(isinstance(i, str) for i in ids) or not (token is None or isinstance(token, str)):
+                raise TypeError("id")
+            parsed.append((ids, token or None))
+    except (KeyError, TypeError, AttributeError) as err:
+        raise _OsvOutage("unexpected answer shape") from err
+    return parsed
+
+
+def _cut(text: object) -> str:
+    return workflow_escape(str(text)[:OSV_FIELD_LIMIT])
+
+
+def _fixed_versions(detail: Mapping[str, object], name: str, locked: str) -> list[str]:
+    found: set[str] = set()
+    affected = detail.get("affected")
+    for entry in affected if isinstance(affected, list) else []:
+        package = entry.get("package") if isinstance(entry, dict) else None
+        if not isinstance(package, dict) or package.get("ecosystem") != "PyPI":
+            continue
+        if not isinstance(package.get("name"), str) or canonical_name(package["name"]) != name:
+            continue
+        for rng in entry.get("ranges") or []:
+            for event in (rng.get("events") or []) if isinstance(rng, dict) else []:
+                fixed = event.get("fixed") if isinstance(event, dict) else None
+                if isinstance(fixed, str) and behind(locked, fixed)[0]:
+                    found.add(fixed)
+    return sorted(found, key=lambda v: (numeric_version(v) is None, numeric_version(v) or (), v))
+
+
+def _advisory_text(detail: Mapping[str, object] | None, name: str, version: str) -> str:
+    if detail is None:
+        return "details unavailable"
+    raw_aliases = detail.get("aliases")
+    aliases = [a for a in raw_aliases if isinstance(a, str)] if isinstance(raw_aliases, list) else []
+    cves = [a for a in aliases if a.startswith("CVE-")]
+    alias = (cves or aliases or [""])[0]
+    db = detail.get("database_specific")
+    sev = db.get("severity") if isinstance(db, dict) else None
+    severity = _cut(sev).upper() if isinstance(sev, str) and sev else "unknown"
+    fixed = _fixed_versions(detail, name, version)
+    fix = f"fixed in {', '.join(_cut(v) for v in fixed)}" if fixed else "no fixed version published"
+    return (f"[{_cut(alias)}] " if alias else "") + f"severity {severity} - {fix}"
+
+
+def _fetch_details(
+    osv: Osv, ids: Sequence[str], timeout: float, max_body: int, max_details: int
+) -> dict[str, Mapping[str, object] | None]:
+    """Detail record per id; None when unavailable. Withdrawn advisories are left out."""
+    details: dict[str, Mapping[str, object] | None] = {}
+    for number, vuln_id in enumerate(ids):
+        if number >= max_details:
+            details[vuln_id] = None
+            continue
+        url = OSV_VULN_URL + urllib.parse.quote(vuln_id, safe="")
+        try:
+            record = _osv_json(osv, "GET", url, None, timeout, max_body)
+        except _OsvOutage:
+            details[vuln_id] = None
+            continue
+        if not isinstance(record, dict):
+            details[vuln_id] = None
+        elif "withdrawn" not in record:
+            details[vuln_id] = record
+    return details
+
+
+def report_vulnerabilities(
+    *, root: Path = ROOT, osv: Osv, inline_limit: int = INLINE_LIMIT, max_body: int = MAX_BODY_BYTES,
+    timeout: float = FETCH_TIMEOUT, batch_size: int = BATCH_SIZE, max_pages: int = MAX_PAGES,
+    max_details: int = MAX_DETAILS,
+) -> tuple[int, str, str]:
+    """(exit code, stdout, stderr) of the OSV check. Never writes a file."""
+    pins: list[tuple[str, str, str]] = []  # (lock file, name, version)
+    try:
+        for target in TARGETS:
+            lock_name = TARGETS[target][1]
+            try:
+                parsed = parse_lock(_read(root, lock_name))
+            except LockError as err:
+                if str(err).startswith(lock_name):
+                    raise
+                raise LockError(f"{lock_name}: {err}") from err
+            pins += [(lock_name, n, v) for n, (v, _) in parsed.items()]
+    except LockError as err:
+        return 2, "", f"lock_requirements: {err}\n"
+
+    distinct = sorted({(n, v) for _, n, v in pins})
+    stderr = ""
+    found: dict[tuple[str, str], list[str]] = {}
+    try:
+        for start in range(0, len(distinct), batch_size):
+            chunk = distinct[start : start + batch_size]
+            queries: list[dict[str, object]] = [
+                {"package": {"name": n, "ecosystem": "PyPI"}, "version": v} for n, v in chunk
+            ]
+            for (name, version), query, (ids, token) in zip(
+                chunk, queries, _query_results(osv, queries, timeout, max_body), strict=True
+            ):
+                gathered = list(ids)
+                pages = 1
+                while token:
+                    if pages >= max_pages:
+                        stderr += (
+                            f"lock_requirements: {name}=={version}: advisory list truncated "
+                            f"after {max_pages} pages\n"
+                        )
+                        break
+                    ((more, token),) = _query_results(
+                        osv, [{**query, "page_token": token}], timeout, max_body
+                    )
+                    gathered += more
+                    pages += 1
+                if gathered:
+                    found[(name, version)] = sorted(set(gathered))
+    except _OsvOutage as err:
+        notice = (
+            f"::notice title={SKIP_TITLE}::OSV.dev could not be used ({workflow_escape(str(err))}); "
+            "will retry on the next run\n"
+        )
+        return 0, notice, ""
+
+    all_ids = sorted({i for ids in found.values() for i in ids})
+    details = _fetch_details(osv, all_ids, timeout, max_body, max_details)
+    kept = {pkg: [i for i in ids if i in details] for pkg, ids in found.items()}
+    kept = {pkg: ids for pkg, ids in kept.items() if ids}
+    if not kept:
+        return 0, "", stderr
+
+    order = {TARGETS[t][1]: n for n, t in enumerate(TARGETS)}
+    lines = [
+        f"{lock_name}: {_cut(name)}=={_cut(version)} {_cut(vuln_id)} "
+        + _advisory_text(details[vuln_id], name, version)
+        for lock_name, name, version in sorted(pins, key=lambda p: (order[p[0]], p[1]))
+        for vuln_id in kept.get((name, version), [])
+    ]
+    shown = [
+        f"{_cut(n)}=={_cut(v)} ({', '.join(_cut(i) for i in ids)})"
+        for (n, v), ids in sorted(kept.items())
+    ]
+    total = sum(len(ids) for ids in kept.values())
+    summary = ", ".join(shown[:inline_limit])
+    if len(shown) > inline_limit:
+        summary += f", +{len(shown) - inline_limit} more"
+    steps = "; ".join(f"{n}) {s}" for n, s in enumerate(VULN_STEPS, start=1))
+    annotation = (
+        f"::error title={VULN_TITLE}::{total} advisories in {len(kept)} locked packages: "
+        f"{summary}. Next: {steps}"
+    )
+    return 1, "\n".join([annotation, *lines]) + "\n", stderr
+
+
 def _installed() -> dict[str, str]:
     return {
         canonical_name(d.metadata["Name"]): d.version for d in importlib.metadata.distributions()
@@ -881,6 +1125,7 @@ def main(
     root: Path = ROOT,
     run_pip: RunPip | None = None,
     fetch: Fetch | None = None,
+    osv: Osv | None = None,
     platform: tuple[str, str, str, tuple[int, int]] | None = None,
     installed: Mapping[str, str] | None = None,
     inline_limit: int = INLINE_LIMIT,
@@ -897,10 +1142,23 @@ def main(
                         help="fail when an installed package differs from the locks or is in none")
     parser.add_argument("--report-outdated", action="store_true",
                         help="report-only: exit 1 when an --upgrade regeneration would change a lock")
+    parser.add_argument("--report-vulnerabilities", action="store_true",
+                        help="report-only: exit 1 when OSV.dev lists a vulnerability for a locked pin")
     args = parser.parse_args(argv)
-    if args.report_outdated and (args.target or args.upgrade or args.upgrade_package
-                                 or args.check_installed):
-        parser.error("--report-outdated takes no other argument")
+    if args.report_outdated and args.report_vulnerabilities:
+        parser.error("--report-outdated and --report-vulnerabilities cannot be combined")
+    for flag, on in (("--report-outdated", args.report_outdated),
+                     ("--report-vulnerabilities", args.report_vulnerabilities)):
+        if on and (args.target or args.upgrade or args.upgrade_package or args.check_installed):
+            parser.error(f"{flag} takes no other argument")
+
+    if args.report_vulnerabilities:
+        code, out, err = report_vulnerabilities(
+            root=root, osv=osv or make_osv(), inline_limit=inline_limit, timeout=fetch_timeout
+        )
+        sys.stdout.write(out)
+        sys.stderr.write(err)
+        return code
 
     if args.report_outdated:
         system, machine, impl, version = platform or (

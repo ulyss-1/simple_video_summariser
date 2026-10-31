@@ -6,7 +6,9 @@
 # green and retries next week. It also reports direct == pins that are behind
 # PyPI (#278): a pin held back on purpose carries `# hold: <reason>` and shows
 # as a ::notice instead of turning the run red; yt-dlp is left to its own daily
-# check (#68, ytdlp-update-check.yml). CI proper lives in ci.yml (#61).
+# check (#68, ytdlp-update-check.yml). A second step (#279) asks OSV.dev whether a locked
+# version has a published vulnerability: red with one annotation, and green with a notice
+# when OSV is unreachable (retried next week). CI proper lives in ci.yml (#61).
 name: Python lock update check
 
 on:
@@ -28,3 +30,6 @@ jobs:
           python-version: "3.14"
       - name: Report locks that an --upgrade regeneration would change
         run: python scripts/lock_requirements.py --report-outdated
+      - name: Report locked versions with known vulnerabilities (OSV.dev)
+        if: ${{ !cancelled() }}
+        run: python scripts/lock_requirements.py --report-vulnerabilities
