@@ -491,6 +491,28 @@ returned 409 (the list is refetched), shows `Still stopping its processing. Try
 again in a minute.` and no button. 422, 429, 503 and network failures keep the
 confirmation open with a `role="alert"` and fixed text.
 
+### 7.15 Estimated analysis cost on the video page (#153)
+
+In the block with `Re-analyse` (shown when `video.transcript !== null`), a
+`<section aria-labelledby>` with the `<h2>` `Estimated analysis cost` (the Section
+pattern; `components/AnalysisEstimate.tsx`, data from `useAnalysisEstimate`, key
+`['video', id, 'analysis-estimate']`). The `Re-analyse` button has
+`aria-describedby` pointing at the section body. One `<li>` per model, in API order,
+and the state comes typed from the API: the page never computes a price.
+
+| `state` | Copy |
+|---|---|
+| `estimated` | `{model}: about $0.0227 (estimate, USD)` (`formatCost`, 4 decimals), and a `<small>` hint `Based on the median of the last {samples} recorded analyses`, plus ` · batch pricing` when `batch` is true |
+| `unknown` | `{model}: no estimate` and one sentence by `reason`: `No transcript yet` (`no_transcript`), `No recorded costs for this model yet` (`no_cost_samples`), `No price known for this model` (`no_price`) |
+| `free` | `{model}: no API cost` |
+
+An estimate is never a bare `$` figure: the words `estimate` and `USD` are on every
+`estimated` row. Loading is `<p role="status">Loading cost estimate…</p>`; an error
+is a `role="alert"` with the fixed text `Could not load the cost estimate` and a
+`Retry` button (none for a 4xx); raw server text is never shown. A failure stays in
+its section: the rest of the page, `Re-analyse` included, keeps working. No icon,
+colour or tooltip carries meaning.
+
 ---
 
 ## 8. Accessibility patterns in use

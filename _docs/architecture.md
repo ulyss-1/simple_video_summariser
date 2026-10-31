@@ -1337,6 +1337,11 @@ web/src/
   genuine client state is the player handle, held in one context.
 - **`Timestamp` is a single component.** Claims, quotes, topics, and transcript
   segments all render through it, so seek behavior exists in exactly one place.
+- **Analysis cost estimate (#153).** The video page, when the video has a
+  transcript, shows an `Estimated analysis cost` section from
+  `GET /videos/{id}/analysis-estimate`: one row per model, each `estimated`
+  (flagged as an estimate in USD), `unknown` (with a reason sentence) or `free`;
+  the page renders the typed state and computes nothing (design-system 7.15).
 - **Types generated from OpenAPI** at build time; a backend contract change
   fails the frontend build rather than surfacing at runtime (D12).
 - **Channel catalog (#242).** `/channels/add` registers a channel

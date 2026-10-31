@@ -78,6 +78,13 @@ function stubFetch(respond: Responder) {
     // The "Compare analyses" count request (#53) is covered in
     // VideoDetail.compareLink.dom.test.tsx; here it only has to fail quietly.
     if (url.pathname.endsWith('/analyses')) return Promise.resolve(json({ detail: 'not under test' }, 404))
+    // The cost estimate (#153) is covered in VideoDetail.estimate.dom.test.tsx; here it
+    // only has to answer, and not count as a request of the page under test.
+    if (url.pathname.endsWith('/analysis-estimate')) {
+      return Promise.resolve(
+        json({ video_id: ID, summarizer: 'ollama', transcript_chars: null, batch: true, estimates: [] }),
+      )
+    }
     requests.push(url)
     return Promise.resolve(respond(url, requests.length))
   })
