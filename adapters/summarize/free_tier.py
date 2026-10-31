@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import tomllib
 import urllib.error
 import urllib.request
@@ -59,7 +60,19 @@ _logger = logging.getLogger(__name__)
 DEFAULT_PROVIDERS_FILE = Path(__file__).with_name("free_providers.toml")
 
 #: The ``Settings`` fields a provider may name as its ``key_setting``.
-KEY_SETTINGS = ("GROQ_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "CEREBRAS_API_KEY")
+KEY_SETTINGS = (
+    "GROQ_API_KEY",
+    "GEMINI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "CEREBRAS_API_KEY",
+    "PUTER_AUTH_TOKEN",
+)
+
+#: How a provider is spoken to. ``openai``: chat completions at ``base_url`` +
+#: ``/chat/completions``. ``puter``: the call route behind Puter's ``puter.ai.chat``,
+#: ``base_url`` is the whole URL (undocumented by Puter, so best effort).
+PROTOCOLS = ("openai", "puter")
+_THINK_BLOCK = re.compile(r"\A\s*<(think|thought)>.*?</\1>", re.DOTALL)
 
 MIN_CONTEXT_TOKENS = 4096
 _OUTPUT_RESERVE_TOKENS = 2048
@@ -79,9 +92,12 @@ class Provider:
     context_tokens: int
     key_setting: str
     api_key: str | None  # None: the key setting is unset, the provider is skipped
+    protocol: str = "openai"
 
     @property
     def url(self) -> str:
+        if self.protocol == "puter":
+            return self.base_url
         return self.base_url.rstrip("/") + "/chat/completions"
 
 
@@ -124,10 +140,15 @@ def load_providers(path: Path, settings: Settings) -> list[Provider]:
             raise FreeTierConfigError(
                 f"{where}: key_setting must be one of {', '.join(KEY_SETTINGS)}"
             )
+        protocol = entry.get("protocol", "openai")
+        if protocol not in PROTOCOLS:
+            raise FreeTierConfigError(f"{where}: protocol must be one of {', '.join(PROTOCOLS)}")
         secret = getattr(settings, key_setting)
         key = secret.get_secret_value().strip() if secret is not None else ""
         providers.append(
-            Provider(name, base_url, _text(entry, "model", where), context, key_setting, key or None)
+            Provider(
+                name, base_url, _text(entry, "model", where), context, key_setting, key or None, protocol
+            )
         )
     return providers
 
@@ -257,18 +278,28 @@ class FreeTierSummarizer(OllamaSummarizer):
             if skipped is not None:
                 failures.append(f"{provider.name}: {skipped}")
                 continue
-            payload: dict[str, Any] = {
-                "model": provider.model,
-                "messages": sent,
-                "stream": False,
-            }
-            if format is not None:
-                payload["response_format"] = {"type": "json_object"}
-            request = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            request = json.dumps(
+                self._payload(provider, sent, format), ensure_ascii=False
+            ).encode("utf-8")
             content = self._try(provider, method, request, is_repair, failures)
             if content is not None:
-                return _strip_think(content)
+                return _THINK_BLOCK.sub("", _strip_think(content), count=1)
         raise LLMUnavailableError("no free-tier provider answered: " + "; ".join(failures))
+
+    @staticmethod
+    def _payload(
+        provider: Provider, messages: list[Message], format: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        if provider.protocol == "puter":
+            return {
+                "interface": "puter-chat-completion",
+                "method": "complete",
+                "args": {"model": provider.model, "messages": messages},
+            }
+        payload: dict[str, Any] = {"model": provider.model, "messages": messages, "stream": False}
+        if format is not None:
+            payload["response_format"] = {"type": "json_object"}
+        return payload
 
     @staticmethod
     def _with_schema_hint(messages: list[Message], format: dict[str, Any] | None) -> list[Message]:
@@ -349,7 +380,7 @@ class FreeTierSummarizer(OllamaSummarizer):
         if len(response.body) > MAX_RESPONSE_BYTES:
             fail("response too large")
             return None
-        parsed = self._parse(response.body)
+        parsed = self._parse(response.body, provider.protocol)
         if parsed is None:
             fail("reply is not a chat completion")
             return None
@@ -380,13 +411,19 @@ class FreeTierSummarizer(OllamaSummarizer):
         return content
 
     @staticmethod
-    def _parse(body: bytes) -> tuple[str, str | None, tuple[int, int]] | None:
+    def _parse(body: bytes, protocol: str = "openai") -> tuple[str, str | None, tuple[int, int]] | None:
         try:
             doc = json.loads(body.decode("utf-8"))
         except (ValueError, RecursionError):
             return None
         if not isinstance(doc, dict):
             return None
+        if protocol == "puter":
+            # {"success": true, "result": {"message": ..., "finish_reason": ..., "usage": ...}}
+            result = doc.get("result")
+            if doc.get("success") is not True or not isinstance(result, dict):
+                return None
+            doc = {"choices": [result], "usage": result.get("usage")}
         choices = doc.get("choices")
         choice = choices[0] if isinstance(choices, list) and choices else None
         message = choice.get("message") if isinstance(choice, dict) else None

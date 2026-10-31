@@ -8,8 +8,9 @@
 #   context_tokens  context window to plan for; the smallest of the list sizes
 #                   the chunks
 #   key_setting     which Settings field holds the API key (GROQ_API_KEY,
-#                   GEMINI_API_KEY, OPENROUTER_API_KEY or CEREBRAS_API_KEY);
-#                   a provider whose key is unset is skipped
+#                   GEMINI_API_KEY, OPENROUTER_API_KEY, CEREBRAS_API_KEY or
+#                   PUTER_AUTH_TOKEN); a provider whose key is unset is skipped
+#   protocol        optional: "openai" (default) or "puter" (see below)
 # Free tiers are rate-limited and the transcript text goes to the provider.
 
 [[provider]]
@@ -39,3 +40,16 @@ base_url = "https://api.cerebras.ai/v1"
 model = "gpt-oss-120b"
 context_tokens = 32768
 key_setting = "CEREBRAS_API_KEY"
+
+# Puter: Gemma 4 costs the account nothing, and a new account gets a free monthly
+# allowance for the other models. This is the route behind puter.ai.chat() in
+# Puter's JavaScript SDK, which Puter does not document: if it changes, this
+# provider fails and the list moves on. Last, so it is the fallback of last resort.
+# base_url is the full URL for protocol = "puter".
+[[provider]]
+name = "puter"
+base_url = "https://api.puter.com/drivers/call"
+model = "gemma-4-26b-a4b-it"
+context_tokens = 32768
+key_setting = "PUTER_AUTH_TOKEN"
+protocol = "puter"
