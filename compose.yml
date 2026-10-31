@@ -47,6 +47,22 @@ services:
     logging: *logging
     restart: unless-stopped
 
+  # Build-only (#135): the `deps` stage of ops/Dockerfile.backend, no
+  # application code. The transcriber builds on it. The profile keeps it out of
+  # `up`, so it never runs; Compose still builds it as the transcriber's
+  # build context.
+  deps:
+    # provenance: false is load-bearing. The default provenance attestation
+    # carries timestamps, so every rebuild of this image would get a new
+    # digest, and the whisper image built on it would never hit its cache.
+    build:
+      context: .
+      dockerfile: ops/Dockerfile.backend
+      target: deps
+      provenance: false
+    image: ytdigest-deps:latest
+    profiles: [build-only]
+
   # One-shot: runs `alembic upgrade head` and exits. Migrations never run on
   # service startup (AGENTS.md -> Rules); the long-running services wait for
   # this to exit 0. It owns the only build of the backend image.
@@ -151,15 +167,14 @@ services:
     build:
       context: .
       dockerfile: ops/Dockerfile.whisper
-      # ops/Dockerfile.whisper is `FROM ytdigest-backend:latest`. Naming that
-      # image as a build context from the `migrate` service makes Compose
-      # build `migrate` first and use the result, so the whisper image is
-      # never built on a stale or missing backend image. The key is the
-      # image name WITHOUT the tag: verified on Compose 2.40 / BuildKit
-      # 0.26, the tagged form "ytdigest-backend:latest" is silently ignored
-      # and the FROM is pulled from Docker Hub instead.
+      # ops/Dockerfile.whisper is `FROM ytdigest-deps`. Naming that image as
+      # a build context from the build-only `deps` service makes Compose
+      # build `deps` first and use the result, so the whisper image is
+      # never built on a stale or missing base. The key is the image name
+      # WITHOUT the tag: verified on Compose 2.40 / BuildKit 0.26, a tagged
+      # key is silently ignored and the FROM is pulled from Docker Hub.
       additional_contexts:
-        ytdigest-backend: "service:migrate"
+        ytdigest-deps: "service:deps"
     image: ytdigest-whisper:latest
     command: python -m services.transcriber.main
     environment:

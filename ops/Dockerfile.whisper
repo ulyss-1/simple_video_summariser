@@ -1,12 +1,17 @@
-# Speech-to-text image (architecture.md 11.3, 16.2): the backend image plus
-# faster-whisper, for the transcriber service only. Build the backend image
-# first, from the repo root:
-#   docker build -f ops/Dockerfile.backend -t ytdigest-backend:latest .
-#   docker build -f ops/Dockerfile.whisper -t ytdigest-whisper:latest .
-FROM ytdigest-backend:latest
+# Speech-to-text image (architecture.md 11.3, 16.2): the backend's dependencies
+# stage plus faster-whisper, then the same application code as the backend, for
+# the transcriber service only (#135). The whisper install sits before the
+# application COPY, so a code change leaves it CACHED. `docker compose -f
+# compose.yml build` does all of this; by hand, from the repo root:
+#   docker build -f ops/Dockerfile.backend --target deps --provenance=false \
+#       -t ytdigest-deps:latest .
+#   docker build -f ops/Dockerfile.whisper \
+#       --build-context ytdigest-deps=docker-image://ytdigest-deps:latest \
+#       -t ytdigest-whisper:latest .
+FROM ytdigest-deps
 USER root
 # The lock is bind-mounted at build time, next to /tmp, so it is never written
-# into a layer and /app stays exactly the backend's /app. It holds only what
+# into a layer. It holds only what
 # the whisper layer adds to the backend venv (scripts/lock_requirements.py,
 # #145), hash-pinned, so --no-deps and --require-hashes apply.
 WORKDIR /tmp
@@ -26,6 +31,14 @@ RUN /opt/venv/bin/pip check
 # app or the first model download fails with a permission error.
 RUN mkdir -p /models && chown app:app /models
 WORKDIR /app
+# The application layers: keep these five COPY lines and the chown identical to
+# ops/Dockerfile.backend (tests/test_whisper_image.py compares them).
+COPY --chown=app:app common/ ./common/
+COPY --chown=app:app adapters/ ./adapters/
+COPY --chown=app:app services/ ./services/
+COPY --chown=app:app migrations/ ./migrations/
+COPY --chown=app:app alembic.ini .
+RUN chown app:app /app
 USER app
 # Thread settings: ctranslate2 sizes its OpenMP pool from the host's cores and
 # ignores the container's CPU limit, so OMP_NUM_THREADS caps it explicitly. It

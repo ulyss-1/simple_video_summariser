@@ -24,8 +24,12 @@ from tests.docker_steps import Step, run_steps
 pytestmark = [pytest.mark.integration, pytest.mark.image]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-BACKEND = "ytdigest-backend:latest"
-IMAGE = "ytdigest-whisper:latest"
+# Throwaway tags (#135): a stack running on the same host owns ytdigest-*:latest.
+_SUFFIX = uuid.uuid4().hex[:8]
+BACKEND = f"ytdigest-t135-backend-{_SUFFIX}:latest"
+DEPS = f"ytdigest-t135-deps-{_SUFFIX}:latest"
+IMAGE = f"ytdigest-t135-whisper-{_SUFFIX}:latest"
+DEPS_CONTEXT = f"ytdigest-deps=docker-image://{DEPS}"
 
 # Generates a 4 s 16 kHz mono sine with the image's ffmpeg and transcribes it
 # with the real `tiny` model; a sine has no speech, so zero segments is fine.
@@ -80,11 +84,20 @@ def _steps(*commands: str) -> list[Step]:
 
 
 @pytest.fixture(scope="module", autouse=True)
-def images() -> str:
-    for dockerfile, tag in (("ops/Dockerfile.backend", BACKEND), ("ops/Dockerfile.whisper", IMAGE)):
-        result = _docker("build", "-f", dockerfile, "-t", tag, ".", timeout=1800)
-        assert result.returncode == 0, result.stderr[-4000:]
-    return IMAGE
+def images() -> Iterator[str]:
+    builds = (
+        ("ops/Dockerfile.backend", BACKEND, ()),
+        ("ops/Dockerfile.backend", DEPS, ("--target", "deps")),
+        ("ops/Dockerfile.whisper", IMAGE, ("--build-context", DEPS_CONTEXT)),
+    )
+    try:
+        for dockerfile, tag, extra in builds:
+            result = _docker("build", "-f", dockerfile, *extra, "-t", tag, ".", timeout=1800)
+            assert result.returncode == 0, result.stderr[-4000:]
+        yield IMAGE
+    finally:
+        for _, tag, _ in reversed(builds):
+            _docker("image", "rm", "-f", tag)
 
 
 @pytest.fixture
@@ -256,6 +269,11 @@ def test_a_bad_pin_fails_the_build_with_pips_error_then_the_architecture_pointer
     context = tmp_path / "context"
     (context / "ops").mkdir(parents=True)
     shutil.copy(REPO_ROOT / "ops" / "Dockerfile.whisper", context / "ops")
+    # The application COPY lines need their sources to exist; the install fails first.
+    for name in ("common", "adapters", "services", "migrations"):
+        (context / name).mkdir()
+        (context / name / "placeholder").write_text("")
+    (context / "alembic.ini").write_text("")
     (context / "requirements.whisper.lock").write_text(
         f"faster-whisper==0.0.0 --hash=sha256:{'a' * 64}\n"
     )
@@ -264,6 +282,8 @@ def test_a_bad_pin_fails_the_build_with_pips_error_then_the_architecture_pointer
         result = _docker(
             "build",
             "--progress=plain",
+            "--build-context",
+            DEPS_CONTEXT,
             "-f",
             str(context / "ops" / "Dockerfile.whisper"),
             "-t",
