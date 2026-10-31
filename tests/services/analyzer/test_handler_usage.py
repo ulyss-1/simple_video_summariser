@@ -126,11 +126,18 @@ def test_a_second_job_on_a_reused_summarizer_counts_only_its_own_usage(
         roster=ROSTER, extra_usage=EXTRA, fail_on={"chunk:1": LLMUnavailableError("down")}
     )
     rig = rig_factory(summarizer, segments=THREE_CHUNKS)
+    rig.conn.execute(  # the job row the failed-attempt record points at (make_job's id is 1)
+        "INSERT INTO jobs (id, kind, video_id, dedupe_key, state)"
+        " VALUES (1, 'analyze', %s, 'k', 'running')",
+        (rig.meta.video_id,),
+    )
+    rig.conn.commit()
     with pytest.raises(LLMUnavailableError):
         rig.run()
-    # The failed chunk call left its usage pending: only the job-start take_usage()
-    # discard keeps it out of the next job's totals.
-    assert summarizer._cache != [0, 0] and summarizer._calls > 0
+    # The failed attempt drained the summarizer (#252): its spend is in a failed-attempt
+    # record, not pending for the next job.
+    assert summarizer._cache == [0, 0] and summarizer._calls == 0
+    assert rig.scalar("SELECT count(*) FROM analyze_failed_usage") == 1
     summarizer.fail_on.clear()
 
     rig.run()

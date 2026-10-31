@@ -153,11 +153,18 @@ def test_a_second_job_on_a_reused_summarizer_stores_only_its_own_cost(
         fail_on={"chunk:1": LLMUnavailableError("down")},
     )
     rig = rig_factory(summarizer)
+    rig.conn.execute(  # the job row the failed-attempt record points at (make_job's id is 1)
+        "INSERT INTO jobs (id, kind, video_id, dedupe_key, state)"
+        " VALUES (1, 'analyze', %s, 'k', 'running')",
+        (rig.meta.video_id,),
+    )
+    rig.conn.commit()
     with pytest.raises(LLMUnavailableError):
         rig.run()
-    # The failed chunk call left its 10.0 pending on the summarizer: only the
-    # job-start take_usage() discard keeps it out of the next job's total.
-    assert summarizer._calls == 1 and summarizer._cost == 10.0
+    # The failed attempt drained the summarizer (#252): its spend is in a failed-attempt
+    # record (roster 1.0 + chunk 0 + the failed chunk 1), not pending for the next job.
+    assert summarizer._calls == 0 and summarizer._cost is None
+    assert rig.scalar("SELECT cost_usd FROM analyze_failed_usage") == pytest.approx(21.0)
     summarizer.fail_on.clear()
 
     rig.run()
