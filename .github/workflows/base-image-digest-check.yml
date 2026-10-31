@@ -1,9 +1,11 @@
-# Daily base-image digest and nginx stable-line check (issues #241, #250, architecture.md 11.3).
+# Daily base-image digest, nginx stable-line and node/python/postgres end-of-life check
+# (issues #241, #250, #265, architecture.md 11.3).
 #
 # Reports through a red run with an ::error annotation naming the pinned and
 # the upstream digest. It never edits the Dockerfile and nothing depends on
 # it, so it cannot block a deploy; a Docker Hub outage ends green and retries
-# tomorrow. CI proper lives in ci.yml (#61).
+# tomorrow. The end-of-life part uses dates committed in the run line and makes
+# no network call. CI proper lives in ci.yml (#61).
 name: base image digest check
 
 on:
@@ -21,4 +23,4 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Compare the pinned base image digests with Docker Hub
-        run: python3 scripts/base_image_digest_check.py ops/Dockerfile.frontend ops/Dockerfile.backend ops/Dockerfile.bakeoff compose.yml compose.override.yml --stable-line nginx/nginx-unprivileged
+        run: python3 scripts/base_image_digest_check.py ops/Dockerfile.frontend ops/Dockerfile.backend ops/Dockerfile.bakeoff compose.yml compose.override.yml --stable-line nginx/nginx-unprivileged --end-of-life node:24=2028-04-30 --end-of-life python:3.14=2030-10 --end-of-life postgres:18=2030-11-14

@@ -7,6 +7,7 @@ import json
 import re
 import sys
 from collections.abc import Mapping
+from datetime import date, timedelta
 from pathlib import Path
 from types import ModuleType
 
@@ -630,6 +631,8 @@ def test_workflow_runs_the_script_once_on_every_pinned_file() -> None:
         "python3 scripts/base_image_digest_check.py "
         + " ".join(CHECKED_FILES)
         + f" --stable-line {IMAGE}"
+        + " --end-of-life node:24=2028-04-30 --end-of-life python:3.14=2030-10"
+        + " --end-of-life postgres:18=2030-11-14"
     ]
 
 
@@ -1019,3 +1022,214 @@ def test_digest_current_and_line_current_are_silent(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     assert _run_line(tmp_path, _hub([TAG, *NOISE]), capsys) == (0, "", "")
+
+
+# -- the end-of-life check (issue #265) -----------------------------------------
+
+EOL = date(2028, 4, 30)
+WINDOW = 180
+EOL_OPT = ["--end-of-life", "node:24=2028-04-30"]
+NODE_DOCKERFILE = f"FROM node:24-alpine@{PINNED}\n"
+
+
+class NodeFetch(HubFetch):
+    """Answers the digest conversation for ``node`` only; records every call."""
+
+    def __init__(self, manifest: Response | Exception | None = None) -> None:
+        super().__init__({}, manifest=manifest)
+
+
+def _eol(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    today: date,
+    *,
+    text: str = NODE_DOCKERFILE,
+    flags: list[str] | None = None,
+    fetch: HubFetch | None = None,
+    window: int = WINDOW,
+) -> tuple[int, str, str, HubFetch]:
+    fetch = fetch or NodeFetch()
+    path = tmp_path / "Dockerfile"
+    path.write_bytes(text.encode())
+    args = [str(path), *(EOL_OPT if flags is None else flags)]
+    code = check.main(args, fetch=fetch, today=lambda: today, window=window)
+    out = capsys.readouterr()
+    assert path.read_bytes() == text.encode()
+    return code, out.out, out.err, fetch
+
+
+def test_one_day_before_the_window_is_silent(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    code, out, err, _ = _eol(tmp_path, capsys, EOL - timedelta(days=WINDOW + 1))
+
+    assert (code, out, err) == (0, "", "")
+
+
+@pytest.mark.parametrize("days_left", [WINDOW, 1])
+def test_inside_the_window_gives_one_nears_annotation(
+    days_left: int, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, out, err, _ = _eol(tmp_path, capsys, EOL - timedelta(days=days_left))
+
+    assert (code, err) == (1, "")
+    assert out.count("::error") == 1
+    line = _one(out, "Base image line nears end of life")
+    assert "node" in line and "24" in line and "2028-04-30" in line and f"{days_left} days left" in line
+    assert "docker buildx imagetools inspect node:<new tag>" in line and "--end-of-life" in line
+
+
+@pytest.mark.parametrize("today", [EOL, EOL + timedelta(days=365)])
+def test_on_or_after_the_date_gives_one_past_annotation(
+    today: date, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, out, err, _ = _eol(tmp_path, capsys, today)
+
+    assert (code, err) == (1, "")
+    assert out.count("::error") == 1
+    line = _one(out, "Base image line is past end of life")
+    assert "node" in line and "24" in line and "2028-04-30" in line and "--end-of-life" in line
+    assert "buildx imagetools inspect" in line
+
+
+def test_the_window_is_injectable(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    code, out, _, _ = _eol(tmp_path, capsys, EOL - timedelta(days=11), window=10)
+    assert (code, out) == (0, "")
+    code, out, _, _ = _eol(tmp_path, capsys, EOL - timedelta(days=10), window=10)
+    assert code == 1 and "nears end of life" in out
+
+
+def test_a_month_only_date_means_the_first_day(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    text = f"FROM python:3.14-slim@{PINNED}\n"
+    flags = ["--end-of-life", "python:3.14=2030-10"]
+    first = date(2030, 10, 1)
+
+    before = _eol(tmp_path, capsys, first - timedelta(days=WINDOW + 1), text=text, flags=flags)
+    edge = _eol(tmp_path, capsys, first - timedelta(days=WINDOW), text=text, flags=flags)
+    past = _eol(tmp_path, capsys, first, text=text, flags=flags)
+
+    assert before[:3] == (0, "", "")
+    assert edge[0] == 1 and "nears end of life" in edge[1] and "2030-10-01" in edge[1]
+    assert past[0] == 1 and "is past end of life" in past[1]
+
+
+def test_the_end_of_life_check_adds_no_network_call(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    code, out, _, fetch = _eol(tmp_path, capsys, EOL)
+
+    assert code == 1 and "past end of life" in out
+    assert [c[0] for c in fetch.calls] == ["GET", "HEAD"]  # the digest check only
+
+
+def test_two_references_to_one_line_give_one_annotation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, out, _, _ = _eol(tmp_path, capsys, EOL, text=NODE_DOCKERFILE * 2)
+
+    assert code == 1 and out.count("::error") == 1
+
+
+def test_stale_digest_and_nearing_line_give_two_annotations(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, out, err, _ = _eol(
+        tmp_path, capsys, EOL - timedelta(days=5), fetch=NodeFetch(_manifest(UPSTREAM))
+    )
+
+    assert (code, err) == (1, "")
+    assert out.count("::error") == 2
+    _one(out, "Base image digest is behind")
+    _one(out, "Base image line nears end of life")
+
+
+def test_digest_outage_does_not_hide_a_past_end_of_life(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, out, err, _ = _eol(tmp_path, capsys, EOL, fetch=NodeFetch(_manifest(None, 503)))
+
+    assert code == 1 and out.count("::error") == 1
+    _one(out, "Base image line is past end of life")
+    assert err.count("\n") == 1 and "node:24-alpine" in err
+
+
+def test_everything_current_is_silent(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    fetch = HubFetch({LINE_PATH: _tags_page([TAG, *NOISE])}, manifest=_manifest(PINNED))
+    flags = [*LINE_FLAG, *EOL_OPT]
+
+    result = _eol(
+        tmp_path, capsys, EOL - timedelta(days=400), text=DOCKERFILE.replace("node:24-alpine AS", f"node:24-alpine@{PINNED} AS"), flags=flags, fetch=fetch
+    )
+
+    assert result[:3] == (0, "", "")
+
+
+_EOL_FAULTS = {
+    "no pinned reference": (DOCKERFILE, ["--end-of-life", "postgres:18=2030-11-14"]),
+    "line differs from the tag": (NODE_DOCKERFILE, ["--end-of-life", "node:26=2028-04-30"]),
+    "tag lts": (f"FROM node:lts-alpine@{PINNED}\n", EOL_OPT),
+    "tag alpine": (f"FROM node:alpine@{PINNED}\n", EOL_OPT),
+    "tag latest": (f"FROM node:latest@{PINNED}\n", EOL_OPT),
+    "impossible month": (NODE_DOCKERFILE, ["--end-of-life", "node:24=2028-13-01"]),
+    "impossible day": (NODE_DOCKERFILE, ["--end-of-life", "node:24=2028-02-30"]),
+    "two-digit year": (NODE_DOCKERFILE, ["--end-of-life", "node:24=28-04-30"]),
+    "empty date": (NODE_DOCKERFILE, ["--end-of-life", "node:24="]),
+    "no equals": (NODE_DOCKERFILE, ["--end-of-life", "node:24"]),
+    "twice with different dates": (
+        NODE_DOCKERFILE,
+        ["--end-of-life", "node:24=2028-04-30", "--end-of-life", "node:24=2028-05-30"],
+    ),
+    "also a stable line": (NODE_DOCKERFILE, ["--stable-line", "node", *EOL_OPT]),
+}
+
+
+@pytest.mark.parametrize(("text", "flags"), list(_EOL_FAULTS.values()), ids=list(_EOL_FAULTS))
+def test_an_end_of_life_fault_exits_2_before_any_network_call(
+    text: str, flags: list[str], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, out, err, fetch = _eol(tmp_path, capsys, EOL, text=text, flags=flags)
+
+    assert (code, out) == (2, "")
+    assert err.count("\n") == 1 and "Traceback" not in err
+    assert fetch.calls == []
+
+
+def test_the_same_option_twice_is_not_a_fault(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    code, out, _, _ = _eol(tmp_path, capsys, EOL, flags=EOL_OPT + EOL_OPT, fetch=NodeFetch(_manifest(PINNED)))
+
+    assert code == 1 and out.count("::error") == 1
+
+
+# -- coverage guard: every pinned repository is opted in or exempt ----------------
+
+#: Pinned repositories with no release line or end-of-life calendar.
+EOL_EXEMPT = {"denoland/deno": "exact-version binary stage (#134); the digest check covers it"}
+
+
+def _run_line_options() -> tuple[list[str], list[tuple[str, str]]]:
+    command = re.search(r"scripts/base_image_digest_check\.py (.+)$", _workflow(), re.MULTILINE)
+    assert command
+    words = command.group(1).split()
+    stable = [words[i + 1] for i, w in enumerate(words) if w == "--stable-line"]
+    eol = []
+    for i, w in enumerate(words):
+        if w == "--end-of-life":
+            repository, _, line = words[i + 1].split("=")[0].rpartition(":")
+            eol.append((repository, line))
+    return stable, eol
+
+
+def test_every_pinned_repository_is_opted_in_or_explicitly_exempt() -> None:
+    stable, eol = _run_line_options()
+    pinned = {r.written for path in CHECKED_FILES for r in _real(path)}  # type: ignore[attr-defined]
+
+    opted = stable + [repository for repository, _ in eol]
+    assert len(opted) == len(set(opted)), "a repository is named twice"
+    assert set(opted) == pinned - set(EOL_EXEMPT), "a pinned image is neither opted in nor exempt"
+    assert set(EOL_EXEMPT) <= pinned, "a stale entry in the exemption set"
+
+
+def test_each_end_of_life_line_equals_the_pinned_tags_line() -> None:
+    _, eol = _run_line_options()
+    pinned = [r for path in CHECKED_FILES for r in _real(path)]
+    assert eol
+    for repository, line in eol:
+        tags = {r.tag for r in pinned if r.written == repository}  # type: ignore[attr-defined]
+        assert {t.split("-", 1)[0] for t in tags} == {line}, repository
