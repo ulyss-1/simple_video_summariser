@@ -2876,7 +2876,15 @@ requirements:**
   `scripts/ytdlp_update_check.py`, which goes red with an `::error` naming the
   pinned and latest versions when the pin is behind PyPI, stays silent when it
   is current, and ends green on a PyPI outage. It never edits the pin. The weekly
-  lock report (§11.3, #278) skips yt-dlp, so it is not reported twice.
+  lock report (§11.3, #278) skips yt-dlp and yt-dlp-ejs, so neither is reported twice.
+  The same run, with `--dockerfile ops/Dockerfile.backend` (#369), checks the
+  companions that move with yt-dlp: `yt-dlp-ejs` must equal the pin that the
+  pinned yt-dlp requires in its `default` extra (`requirements.backend.txt`
+  pins it); the Deno image pin in `ops/Dockerfile.backend` must be at least the
+  `deno>=X` minimum of that release (an `::error` if not); a newer Deno release
+  is only a `::notice`. Pins to bump by hand: `yt-dlp` and `yt-dlp-ejs` in
+  `requirements.backend.txt` (then regenerate the lock), the `FROM
+  denoland/deno:bin-X@sha256:...` line in `ops/Dockerfile.backend`.
 - The `TOOL_FAILURE` class in §8.4 should trigger a **visible alert**, not a
   silent dead-letter. A 403 storm means "go update yt-dlp", and that signal is
   useless if it only lands in a database column.

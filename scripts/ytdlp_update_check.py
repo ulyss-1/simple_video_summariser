@@ -18,6 +18,17 @@ Exit codes:
 - ``2``: ``requirements.backend.txt`` has no ``yt-dlp==<version>`` pin, a
   repository fault worth a loud failure.
 
+With ``--dockerfile ops/Dockerfile.backend`` (issue #369) the companions are
+checked too, after the yt-dlp check:
+
+- ``yt-dlp-ejs`` must equal what the pinned yt-dlp requires in its ``default``
+  extra. A mismatch is an ``::error`` (exit ``1``); agreement is silent.
+- the Deno image pin must be at least the ``deno>=X`` minimum of that yt-dlp
+  release. Below it is an ``::error`` (exit ``1``).
+- a newer Deno release than the pin is only an ``::notice`` (exit unchanged).
+- an outage or unusable answer for these checks is one stderr line, exit
+  unchanged; a missing ``yt-dlp-ejs`` or Deno pin is exit ``2``.
+
 The fetch is an injectable seam (``Fetch``), so tests make no network call.
 """
 
@@ -32,6 +43,8 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 PYPI_URL = "https://pypi.org/pypi/yt-dlp/json"
+#: One release's metadata: the ``requires_dist`` of the pinned yt-dlp (#369).
+PYPI_RELEASE_URL = "https://pypi.org/pypi/yt-dlp/{version}/json"
 TIMEOUT_SEC = 20.0
 #: The JSON lists every release of yt-dlp; cap what is read.
 MAX_BODY_BYTES = 32 * 1024 * 1024
@@ -88,9 +101,7 @@ def latest_version(fetch: Fetch) -> str:
     return version
 
 
-def main(argv: Sequence[str] | None = None, *, fetch: Fetch = urllib_fetch) -> int:
-    args = list(sys.argv[1:] if argv is None else argv)
-    path = Path(args[0]) if args else Path("requirements.backend.txt")
+def _check_ytdlp(path: Path, fetch: Fetch) -> int:
     try:
         pinned = pinned_version(path.read_text())
         _parse(pinned)
@@ -116,6 +127,168 @@ def main(argv: Sequence[str] | None = None, *, fetch: Fetch = urllib_fetch) -> i
         )
         return 1
     return 0
+
+
+# ---- companions: yt-dlp-ejs and Deno (issue #369, follow-up to #134) ----
+
+
+#: ``yt-dlp-ejs==X`` in requirements.backend.txt.
+_EJS_PIN = re.compile(
+    r"^\s*yt[-_.]dlp[-_.]ejs\s*==\s*([^\s;#]+)", re.IGNORECASE | re.MULTILINE
+)
+#: The Deno image pin in ops/Dockerfile.backend, ``FROM denoland/deno:bin-X@sha256:...``.
+_DENO_PIN = re.compile(r"^FROM\s+denoland/deno:bin-(\d+(?:\.\d+)*)@sha256:", re.MULTILINE)
+#: One ``requires_dist`` entry of yt-dlp's default extra, e.g. ``yt-dlp-ejs==0.8.0; extra == "default"``.
+#: yt-dlp-ejs is required by the ``default`` extra; the Deno minimum by the ``deno`` extra.
+_EXTRA_REQUIREMENT = re.compile(
+    r"\s*(yt[-_.]dlp[-_.]ejs|deno)\s*(==|>=)\s*([^\s;]+)\s*;\s*extra\s*==\s*[\"'](default|deno)[\"']\s*",
+    re.IGNORECASE,
+)
+_EXTRA_FOR = {"yt-dlp-ejs": "default", "deno": "deno"}
+DENO_RELEASE_URL = "https://api.github.com/repos/denoland/deno/releases/latest"
+
+
+def ejs_pin(requirements: str) -> str:
+    match = _EJS_PIN.search(requirements)
+    if match is None:
+        raise PinNotFound("no yt-dlp-ejs==<version> pin found")
+    return match.group(1)
+
+
+def deno_pin(dockerfile: str) -> str:
+    match = _DENO_PIN.search(dockerfile)
+    if match is None:
+        raise PinNotFound("no FROM denoland/deno:bin-<version>@sha256 pin found")
+    return match.group(1)
+
+
+def _json_answer(fetch: Fetch, url: str) -> object:
+    status, body = fetch(url, TIMEOUT_SEC)
+    if status != 200:
+        raise RuntimeError(f"{url} answered HTTP {status}")
+    if len(body) > MAX_BODY_BYTES:
+        raise RuntimeError(f"{url} reply too large")
+    try:
+        return json.loads(body)
+    except (ValueError, RecursionError):
+        raise RuntimeError(f"{url} reply is not JSON") from None
+
+
+def default_extra_requirements(fetch: Fetch, yt_dlp_version: str) -> dict[str, tuple[str, str]]:
+    """What the pinned yt-dlp release requires: ``yt-dlp-ejs`` in its ``default``
+    extra, the ``deno`` minimum in its ``deno`` extra.
+
+    Maps ``yt-dlp-ejs`` / ``deno`` to ``(operator, version)``. Raises on an
+    outage or a reply that is not PyPI's JSON shape.
+    """
+    url = PYPI_RELEASE_URL.format(version=yt_dlp_version)
+    answer = _json_answer(fetch, url)
+    info = answer.get("info") if isinstance(answer, dict) else None
+    entries = info.get("requires_dist") if isinstance(info, dict) else None
+    if entries is None:
+        raise RuntimeError(f"{url} has no requires_dist")
+    if not isinstance(entries, list):
+        raise TypeError(f"{url} requires_dist is not a list")
+    required: dict[str, tuple[str, str]] = {}
+    for entry in entries:
+        match = _EXTRA_REQUIREMENT.fullmatch(entry) if isinstance(entry, str) else None
+        if match is None:
+            continue
+        name = match.group(1).lower().replace("_", "-").replace(".", "-")
+        if _EXTRA_FOR[name] == match.group(4).lower():
+            required[name] = (match.group(2), match.group(3))
+    return required
+
+
+def latest_deno(fetch: Fetch) -> str:
+    answer = _json_answer(fetch, DENO_RELEASE_URL)
+    tag = answer.get("tag_name") if isinstance(answer, dict) else None
+    if not isinstance(tag, str) or not tag.startswith("v"):
+        raise RuntimeError("the Deno release tag is not vX.Y.Z")
+    _parse(tag[1:])
+    return tag[1:]
+
+
+def _quiet(what: str, err: Exception) -> None:
+    print(
+        f"ytdlp-update-check: {what} unavailable ({type(err).__name__}: {err}); "
+        "will retry on the next run",
+        file=sys.stderr,
+    )
+
+
+def _check_companions(requirements: str, dockerfile: str, fetch: Fetch) -> int:
+    """Check the yt-dlp-ejs and Deno pins against yt-dlp's metadata. Exit 0 or 1.
+
+    Repository faults (no pin) raise ``PinNotFound`` or ``ValueError`` for the caller.
+    """
+    ejs = ejs_pin(requirements)
+    deno = deno_pin(dockerfile)
+    _parse(ejs)
+    _parse(deno)
+    yt_dlp = pinned_version(requirements)
+    code = 0
+    try:
+        required = default_extra_requirements(fetch, yt_dlp)
+    except Exception as err:  # noqa: BLE001 - an outage ends quietly
+        _quiet("yt-dlp's metadata", err)
+        required = {}
+    if "yt-dlp-ejs" in required:
+        op, want = required["yt-dlp-ejs"]
+        if (op == "==" and ejs != want) or (op == ">=" and _parse(ejs) < _parse(want)):
+            print(
+                f"::error title=yt-dlp-ejs pin does not match yt-dlp::pinned yt-dlp-ejs=={ejs}, "
+                f"but yt-dlp=={yt_dlp} requires yt-dlp-ejs{op}{want}. Move the two pins "
+                "together in requirements.backend.txt and the lock (architecture.md 16.11)."
+            )
+            code = 1
+    if "deno" in required:
+        _op, minimum = required["deno"]
+        if _parse(deno) < _parse(minimum):
+            print(
+                f"::error title=Deno pin is below yt-dlp's minimum::pinned deno {deno} in "
+                f"ops/Dockerfile.backend, but yt-dlp=={yt_dlp} requires deno>={minimum}. "
+                "Bump the FROM denoland/deno line and its digest (architecture.md 16.11)."
+            )
+            code = 1
+    try:
+        newest = latest_deno(fetch)
+    except Exception as err:  # noqa: BLE001 - an outage ends quietly
+        _quiet("the Deno release", err)
+    else:
+        if _parse(newest) > _parse(deno):
+            print(
+                f"::notice title=Deno is behind its release::pinned deno {deno}, "
+                f"latest deno {newest}. Consider bumping ops/Dockerfile.backend (not blocking)."
+            )
+    return code
+
+
+def _check_companions_files(path: Path, dockerfile: Path, fetch: Fetch) -> int:
+    try:
+        requirements = path.read_text()
+        docker = dockerfile.read_text()
+        return _check_companions(requirements, docker, fetch)
+    except (PinNotFound, ValueError, OSError) as err:
+        print(f"ytdlp-update-check: cannot read the companion pins: {err}", file=sys.stderr)
+        return 2
+
+
+def main(argv: Sequence[str] | None = None, *, fetch: Fetch = urllib_fetch) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    dockerfile: Path | None = None
+    if "--dockerfile" in args:
+        at = args.index("--dockerfile")
+        if at + 1 >= len(args):
+            print("ytdlp-update-check: --dockerfile needs a path", file=sys.stderr)
+            return 2
+        dockerfile = Path(args[at + 1])
+        del args[at : at + 2]
+    path = Path(args[0]) if args else Path("requirements.backend.txt")
+    code = _check_ytdlp(path, fetch)
+    if code == 2 or dockerfile is None:
+        return code
+    return max(code, _check_companions_files(path, dockerfile, fetch))
 
 
 if __name__ == "__main__":

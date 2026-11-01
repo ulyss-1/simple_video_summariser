@@ -593,6 +593,8 @@ def _read(root: Path, name: str) -> str:
 
 #: yt-dlp is checked daily by ytdlp-update-check.yml (#68), so the weekly report skips it.
 YTDLP_EXCLUDED = "yt-dlp"
+#: yt-dlp-ejs moves only with yt-dlp, and the same daily check reads its pin (#369).
+YTDLP_EJS_EXCLUDED = "yt-dlp-ejs"
 #: Seconds one PyPI request may take (as in #68).
 FETCH_TIMEOUT = 20.0
 #: Most bytes read from one PyPI answer.
@@ -676,9 +678,11 @@ def _make_pin(file: str, number: int, entry: str, hold: str | None) -> DirectPin
         if hold is not None:
             raise _fault(file, number, "`# hold:` is only allowed on a line with one exact == pin")
         return None
-    if pin[0] == YTDLP_EXCLUDED:
+    if pin[0] in (YTDLP_EXCLUDED, YTDLP_EJS_EXCLUDED):
         if hold is not None:
-            raise _fault(file, number, "yt-dlp cannot be held: #68 checks it daily and does not read holds")
+            raise _fault(
+                file, number, f"{pin[0]} cannot be held: the daily yt-dlp check (#68, #369) does not read holds"
+            )
         return None
     return DirectPin(file, number, pin[0], pin[1], hold)
 
