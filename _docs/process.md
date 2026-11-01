@@ -98,6 +98,22 @@ run `git fetch` first and say so if master moved):
 
 Keep it to tables and short lists. Do not pad it with per-issue detail.
 
+Issue details
+
+Whenever the owner asks for details about one issue ("show me details about #N"),
+answer with all four parts, in this order, from live data (`gh issue view N`,
+comments included):
+
+1. Issue name (title, with its number) and a short description of the goal
+2. Suggested options to decide, each with what it means and its trade-off
+3. Metrics that show the impact of each option, so the owner can pick the
+   proper one (for example cost, time, risk, reach, or measured numbers). Say
+   which metric is measured and which is estimated, and name the source
+4. Current status, what is blocking it, and what the owner must answer
+
+Do not omit any of the four, even when the issue has no options: then say so
+and give the metrics that would settle the next decision.
+
 Lifecycle
 
 1. Pick the next open issue from the backlog
