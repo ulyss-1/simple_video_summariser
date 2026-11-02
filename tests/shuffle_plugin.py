@@ -9,16 +9,26 @@ shuffled as a unit, and the tests inside them are shuffled among themselves.
 A module's tests are therefore never interleaved with another module's, so
 module-scoped fixtures (image builds, summarize module fixtures) are still
 set up once per module.
+
+Under ``pytest-xdist`` (CI only, ``-n N --dist loadfile``, issue #296) every
+worker collects on its own and xdist aborts if two workers collect different
+orders. So the seed is drawn once, on the controller, and handed to each worker
+through ``workerinput`` (``pytest_configure_node``); a worker reads it instead of
+drawing its own. ``--shuffle-no-handoff`` switches the handoff off; it exists
+only so a test can prove the handoff is what makes the workers agree.
 """
 
 from __future__ import annotations
 
+import argparse
 import random
+from typing import Any
 
 import pytest
 from _pytest import nodes
 
 _SEED_KEY = pytest.StashKey[int | None]()
+_HANDOFF_KEY = "shuffle_seed"
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -37,9 +47,21 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=False,
         help="Run tests in plain collection order.",
     )
+    group.addoption(
+        "--shuffle-no-handoff",
+        action="store_true",
+        default=False,
+        help=argparse.SUPPRESS,  # test-only: xdist workers draw their own seed
+    )
 
 
+@pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
+    workerinput = getattr(config, "workerinput", None)
+    if workerinput is not None and _HANDOFF_KEY in workerinput:
+        # xdist worker: the controller's seed (or None for --no-shuffle).
+        config.stash[_SEED_KEY] = workerinput[_HANDOFF_KEY]
+        return
     if config.getoption("no_shuffle"):
         config.stash[_SEED_KEY] = None
         return
@@ -47,6 +69,15 @@ def pytest_configure(config: pytest.Config) -> None:
     if seed is None:
         seed = random.SystemRandom().randrange(2**32)
     config.stash[_SEED_KEY] = seed
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_configure_node(node: Any) -> None:
+    """xdist controller hook: give the worker this run's seed."""
+    config = node.config
+    if config.getoption("shuffle_no_handoff"):
+        return
+    node.workerinput[_HANDOFF_KEY] = config.stash.get(_SEED_KEY, None)
 
 
 def _shuffled(

@@ -6,6 +6,18 @@ fixture) — so with `pytest -m "not integration"` no test asks for
 `postgres_dsn`, `postgres_container` is never instantiated, and Docker is
 never touched. This is what makes the fast path safe to run with Docker
 Desktop stopped.
+
+Parallel runs (#296). CI runs the integration step with ``pytest-xdist``
+(``-n N --dist loadfile``); locally the suite stays serial. xdist runs a session
+fixture once per worker process, so every worker owns its own
+``postgres_container`` (a separate ``postgres:18-alpine`` container, so a separate
+server, port and set of databases) and its own ``migrated_template`` inside it. No
+worker can reach another worker's databases, and no cross-process lock is needed.
+Database names stay unique through ``uuid4``, and ``head_dsn`` / ``postgres_dsn``
+drop only the database they created. Because a container is per worker, tests that
+count ``pg_stat_activity`` rows without a ``datname`` filter see only their own
+worker's connections, which is what keeps them correct under ``-n``; they are
+listed next to ``postgres_container``. Proof: ``tests/test_xdist_isolation_db.py``.
 """
 
 from __future__ import annotations
@@ -31,7 +43,7 @@ from common.config import get_settings
 
 # ``pytester`` is a built-in pytest plugin (no dependency); the shuffle plugin
 # is registered here so every run is shuffled (issue #72).
-pytest_plugins = ["pytester", "tests.shuffle_plugin"]
+pytest_plugins = ["pytester", "tests.shuffle_plugin", "tests.run_ledger_plugin"]
 
 # Disable testcontainers' Ryuk reaper (#194). Every container this suite starts
 # is created with ``with PostgresContainer(...)`` / ``with DockerContainer(...)``,
@@ -142,6 +154,16 @@ def postgres_container() -> Iterator[PostgresContainer]:
     The fixture waits for a real connection and ``SELECT 1`` on the mapped
     port, up to 60 s, then fails explicitly naming the endpoint. One run of
     the suite verifies it; no repeat loops (testing-guidelines.md).
+
+    Under xdist (#296) this runs once per worker, so each worker has its own
+    container. These tests count ``pg_stat_activity`` without a ``datname``
+    filter and are safe under ``-n`` only for that reason:
+    ``tests/common/test_queue.py``, ``tests/common/test_queue_bulk_retry.py``,
+    ``tests/common/test_cancel_races.py``,
+    ``tests/common/repo/test_backfill_requests.py``,
+    ``tests/services/analyzer/test_handler.py`` and
+    ``tests/services/api/test_routes_{backfill_cancel,backfill_requests,
+    batch_submit,delete_video,reanalyze,restart}_db.py`` / ``test_routes_write.py``.
     """
     client = _require_docker_daemon(
         DockerClient,
