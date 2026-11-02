@@ -38,8 +38,12 @@ Per-layer approach is in architecture.md §13 — follow it. These rules apply o
   seed is the same on every worker, so `--shuffle-seed=<N>` replays it, serially
   or with `-n`. Each worker has its own Postgres container, so never rely on
   state shared between modules. `--run-ledger=<dir>` plus
-  `scripts/check_run_partition.py` proves each test ran exactly once (command in
-  `AGENTS.md`).
+  `scripts/check_run_partition.py` proves each test ran exactly once. Check a
+  parallel run yourself with
+  `pytest --collect-only -q --no-shuffle -m "integration and not image" > exp.txt`,
+  then `pytest -m "integration and not image" -n 3 --dist loadfile --run-ledger=led`,
+  then `python scripts/check_run_partition.py exp.txt led`. Locally the suite
+  stays serial: `-n` is not in `addopts`.
 - Test via public interfaces; prefer fakes over mocking internals.
 - `tests/` mirrors the package layout; name tests after the behaviour.
 
