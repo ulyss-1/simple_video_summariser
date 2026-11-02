@@ -24,6 +24,15 @@ PLUGINS = ("-p", "tests.shuffle_plugin", "-p", "tests.run_ledger_plugin")
 def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> bool:
     """Only with ``-p tests.xdist_support``: log the item, run nothing."""
     item.ihook.pytest_runtest_logstart(nodeid=item.nodeid, location=item.location)
+    report = pytest.TestReport(
+        nodeid=item.nodeid,
+        location=item.location,
+        keywords={},
+        outcome="passed",
+        longrepr=None,
+        when="call",
+    )
+    item.ihook.pytest_runtest_logreport(report=report)
     item.ihook.pytest_runtest_logfinish(nodeid=item.nodeid, location=item.location)
     return True
 
@@ -62,9 +71,20 @@ def read_ledger_lines(directory: Path) -> dict[str, list[tuple[str, str]]]:
         rows: list[tuple[str, str]] = []
         for line in ledger.read_text(encoding="utf-8").splitlines():
             if line and not line.startswith("#"):
-                nodeid, _, worker = line.rpartition("\t")
+                nodeid, worker, _outcome = line.rsplit("\t", 2)
                 rows.append((nodeid, worker))
         out[ledger.stem] = rows
+    return out
+
+
+def ledger_outcomes(directory: Path) -> dict[str, str]:
+    """node id -> outcome column, over every ledger file."""
+    out: dict[str, str] = {}
+    for ledger in sorted(directory.glob("*.tsv")):
+        for line in ledger.read_text(encoding="utf-8").splitlines():
+            if line and not line.startswith("#"):
+                nodeid, _worker, outcome = line.rsplit("\t", 2)
+                out[nodeid] = outcome
     return out
 
 

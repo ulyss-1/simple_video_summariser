@@ -4,8 +4,12 @@ Inert without ``--run-ledger=<dir>``. With it, every process that *runs* tests
 appends to ``<dir>/<worker_id>.tsv``:
 
 * a first line ``# seed=<N|off> worker=<id>`` (the shuffle seed that process used),
-* then one line ``<nodeid>TAB<worker_id>`` per item, written from
-  ``pytest_runtest_logstart`` so skipped and xfailed tests are recorded too.
+* then one line ``<nodeid>TAB<worker_id>TAB<outcome>`` per item, written from
+  ``pytest_runtest_logreport`` when the test's fate is known, so a test that was
+  only *started* is not recorded. The outcome is ``passed`` / ``failed`` (the
+  ``call`` phase report), ``skipped`` / ``xfailed`` (a legitimate skip or xfail, in
+  either phase) or ``error`` (the setup phase failed, so the test never ran).
+  A teardown error adds no line; pytest fails the run for it itself.
 
 Under xdist the controller replays every worker report through the same hook;
 it records nothing, so each test is written exactly once, by the worker that ran
@@ -33,6 +37,23 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
 
 
+def _outcome(report: pytest.TestReport) -> str | None:
+    """The ledger outcome this report decides, or None when a later phase decides it."""
+    if report.when == "teardown":
+        return None
+    if report.when == "setup":
+        if report.passed:
+            return None  # the call phase decides
+        if report.failed:
+            return "error"
+        return "xfailed" if hasattr(report, "wasxfail") else "skipped"
+    if report.skipped:
+        return "xfailed" if hasattr(report, "wasxfail") else "skipped"
+    if hasattr(report, "wasxfail"):
+        return "xfailed"  # an xfail that failed as expected, or a non-strict xpass
+    return "passed" if report.passed else "failed"
+
+
 class _Ledger:
     """Registered per process only when it runs tests, so the hooks stay inert elsewhere."""
 
@@ -41,8 +62,10 @@ class _Ledger:
         self._handle = path.open("a", encoding="utf-8", buffering=1)
         self._handle.write(f"# seed={'off' if seed is None else seed} worker={worker_id}\n")
 
-    def pytest_runtest_logstart(self, nodeid: str, location: object) -> None:
-        self._handle.write(f"{nodeid}\t{self._worker_id}\n")
+    def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
+        outcome = _outcome(report)
+        if outcome is not None:
+            self._handle.write(f"{report.nodeid}\t{self._worker_id}\t{outcome}\n")
 
     def pytest_unconfigure(self) -> None:
         self._handle.close()

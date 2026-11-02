@@ -5,11 +5,13 @@
 EXPECTED is the output of ``pytest --collect-only -q --no-shuffle <same -m>``
 (node ids, one per line; other lines are ignored). LEDGER_DIR holds the
 ``*.tsv`` files that ``--run-ledger`` (``tests/run_ledger_plugin.py``) wrote:
-``nodeid<TAB>worker_id`` lines, plus ``#`` header lines.
+``nodeid<TAB>worker_id<TAB>outcome`` lines, plus ``#`` header lines. The outcome is
+``passed``, ``failed``, ``skipped``, ``xfailed`` (the test ran, or was legitimately
+skipped) or ``error`` (its setup failed, so it never ran).
 
-Exit 0 when every expected id was recorded exactly once, by one worker. Exit 1
-naming each id that is missing, extra, or recorded more than once (and the
-workers involved). Exit 2 on a usage or input error (including an empty
+Exit 0 when every expected id was recorded exactly once, by one worker, with a ran
+outcome. Exit 1 naming each id that is missing, extra, recorded more than once (and
+the workers involved), or errored in setup. Exit 2 on a usage or input error (including an empty
 expectation or an empty ledger, which would otherwise pass vacuously).
 Standard library only.
 """
@@ -29,21 +31,37 @@ def read_expected(path: Path) -> list[str]:
     return ids
 
 
-def read_ledger(directory: Path) -> dict[str, list[str]]:
-    """node id -> the worker id of each time it was recorded."""
+RAN_OUTCOMES = frozenset({"passed", "failed", "skipped", "xfailed"})
+
+
+def read_ledger(directory: Path) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """(node id -> worker of each record, node id -> outcome of each record)."""
     runs: dict[str, list[str]] = defaultdict(list)
+    outcomes: dict[str, list[str]] = defaultdict(list)
     for ledger in sorted(directory.glob("*.tsv")):
         for line in ledger.read_text(encoding="utf-8").splitlines():
             if not line or line.startswith("#"):
                 continue
-            nodeid, _, worker = line.rpartition("\t")
+            parts = line.rsplit("\t", 2)
+            if len(parts) != 3:
+                parts = [line, "?", "?"]  # malformed: no outcome, reported below
+            nodeid, worker, outcome = parts
             runs[nodeid].append(worker)
-    return runs
+            outcomes[nodeid].append(outcome)
+    return runs, outcomes
 
 
-def check(expected: list[str], runs: dict[str, list[str]]) -> list[str]:
+def check(
+    expected: list[str], runs: dict[str, list[str]], outcomes: dict[str, list[str]]
+) -> list[str]:
     problems: list[str] = []
     wanted = set(expected)
+    for nodeid in sorted(wanted & runs.keys()):
+        for outcome in outcomes[nodeid]:
+            if outcome == "error":
+                problems.append(f"errored in setup (never ran): {nodeid}")
+            elif outcome not in RAN_OUTCOMES:
+                problems.append(f"unknown outcome {outcome!r}: {nodeid}")
     problems += [f"missing (never ran): {i}" for i in sorted(wanted - runs.keys())]
     problems += [f"extra (not in the serial set): {i}" for i in sorted(runs.keys() - wanted)]
     for nodeid in sorted(wanted & runs.keys()):
@@ -68,7 +86,7 @@ def main(argv: list[str]) -> int:
         print(f"error: need an expected file and a ledger directory: {argv}", file=sys.stderr)
         return 2
     expected = read_expected(expected_path)
-    runs = read_ledger(ledger_dir)
+    runs, outcomes = read_ledger(ledger_dir)
     if not expected or not runs:
         print(
             f"error: {len(expected)} expected ids, {len(runs)} ledger ids; "
@@ -76,7 +94,7 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 2
-    problems = check(expected, runs)
+    problems = check(expected, runs, outcomes)
     if problems:
         print(f"partition check FAILED: {len(problems)} problem(s)")
         for problem in problems:

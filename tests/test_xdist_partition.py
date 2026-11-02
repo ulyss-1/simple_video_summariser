@@ -18,6 +18,7 @@ from tests.xdist_support import (
     REPO_ROOT,
     collected_ids,
     ledger_headers,
+    ledger_outcomes,
     read_ledger_lines,
     run_pytest,
 )
@@ -144,13 +145,16 @@ def test_checker_flags_missing_extra_and_duplicate(tmp_path: Path, capsys: pytes
             (directory / f"{stem}.tsv").write_text(body, encoding="utf-8")
         return directory
 
-    good = ledger("good", {"gw0": "# seed=1 worker=gw0\nt.py::a\tgw0\nt.py::b\tgw0\n", "gw1": "t.py::c\tgw1\nt.py::d\tgw1\nt.py::e[x y]\tgw1\n"})
+    good = ledger("good", {
+        "gw0": "# seed=1 worker=gw0\nt.py::a\tgw0\tpassed\nt.py::b\tgw0\tpassed\n",
+        "gw1": "t.py::c\tgw1\tpassed\nt.py::d\tgw1\tpassed\nt.py::e[x y]\tgw1\tpassed\n",
+    })
     assert checker.main([str(expected), str(good)]) == 0
 
     bad = ledger("bad", {
         # t.py::b missing; t.py::zzz extra; t.py::a twice on gw0; t.py::c on two workers
-        "gw0": "t.py::a\tgw0\nt.py::a\tgw0\nt.py::c\tgw0\nt.py::zzz\tgw0\n",
-        "gw1": "t.py::c\tgw1\nt.py::d\tgw1\nt.py::e[x y]\tgw1\n",
+        "gw0": "t.py::a\tgw0\tpassed\nt.py::a\tgw0\tpassed\nt.py::c\tgw0\tpassed\nt.py::zzz\tgw0\tpassed\n",
+        "gw1": "t.py::c\tgw1\tpassed\nt.py::d\tgw1\tpassed\nt.py::e[x y]\tgw1\tpassed\n",
     })
     capsys.readouterr()
     assert checker.main([str(expected), str(bad)]) == 1
@@ -160,6 +164,108 @@ def test_checker_flags_missing_extra_and_duplicate(tmp_path: Path, capsys: pytes
     assert "more than once (gw0, gw0): t.py::a" in out
     assert "by two workers (gw0, gw1): t.py::c" in out
     assert "t.py::d" not in out and "t.py::e" not in out
+
+
+_OUTCOME_SUITE = '''
+import pytest
+
+@pytest.fixture
+def broken():
+    raise RuntimeError("setup boom")
+
+def test_passes(): pass
+def test_setup_errors(broken): pass
+def test_hook_skipped(): pass
+
+@pytest.mark.skip(reason="on purpose")
+def test_marked_skip(): pass
+
+def test_runtime_skip():
+    pytest.skip("on purpose")
+
+@pytest.mark.xfail(reason="on purpose", strict=True)
+def test_xfails(): assert False
+
+@pytest.mark.xfail(run=False, reason="on purpose")
+def test_xfail_not_run(): pass
+'''
+_OUTCOME_CONFTEST = '''
+import pytest
+
+def pytest_collection_modifyitems(items):
+    for item in items:
+        if item.name == "test_hook_skipped":
+            item.add_marker(pytest.mark.skip(reason="skipped by a hook"))
+'''
+
+
+def _outcome_run(tmp_path: Path, *extra: str) -> tuple[Path, Path]:
+    """(expected file, ledger dir) after running the outcome suite."""
+    (tmp_path / "test_outcomes.py").write_text(_OUTCOME_SUITE, encoding="utf-8")
+    (tmp_path / "conftest.py").write_text(_OUTCOME_CONFTEST, encoding="utf-8")
+    plugins = ("-p", "tests.shuffle_plugin", "-p", "tests.run_ledger_plugin")
+    serial = run_pytest(tmp_path, "--collect-only", "-q", "--no-shuffle", *plugins)
+    assert serial.returncode == 0, serial.stdout + serial.stderr
+    expected = tmp_path / "expected.txt"
+    expected.write_text(serial.stdout, encoding="utf-8")
+    ledger = tmp_path / "ledger"
+    run_pytest(tmp_path, "-q", "--no-shuffle", f"--run-ledger={ledger}", *plugins, *extra)
+    return expected, ledger
+
+
+@pytest.mark.parametrize("parallel_args", [(), ("-n", "2", "--dist", "loadfile")])
+def test_ledger_records_outcomes_and_a_setup_error_fails_the_checker(
+    tmp_path: Path, parallel_args: tuple[str, ...], capsys: pytest.CaptureFixture[str]
+) -> None:
+    expected, ledger = _outcome_run(tmp_path, *parallel_args)
+    outcomes = {k.split("::")[1]: v for k, v in ledger_outcomes(ledger).items()}
+    assert outcomes == {
+        "test_passes": "passed",
+        "test_setup_errors": "error",
+        "test_hook_skipped": "skipped",
+        "test_marked_skip": "skipped",
+        "test_runtime_skip": "skipped",
+        "test_xfails": "xfailed",
+        "test_xfail_not_run": "xfailed",
+    }
+    checker = _load_checker()
+    capsys.readouterr()
+    assert checker.main([str(expected), str(ledger)]) == 1
+    out = capsys.readouterr().out
+    assert "errored in setup (never ran): test_outcomes.py::test_setup_errors" in out
+    assert "test_hook_skipped" not in out  # a hook skip is a legitimate skip
+    assert "test_passes" not in out and "test_xfails" not in out
+
+
+def test_legitimate_skips_and_xfails_pass_the_checker(tmp_path: Path) -> None:
+    checker = _load_checker()
+    expected = tmp_path / "expected.txt"
+    expected.write_text("t.py::a\nt.py::b\nt.py::c\nt.py::d\n", encoding="utf-8")
+    led = tmp_path / "led"
+    led.mkdir()
+    (led / "gw0.tsv").write_text(
+        "t.py::a\tgw0\tpassed\nt.py::b\tgw0\tskipped\nt.py::c\tgw0\txfailed\nt.py::d\tgw0\tfailed\n",
+        encoding="utf-8",
+    )
+    assert checker.main([str(expected), str(led)]) == 0  # a failed test did run
+
+
+def test_checker_flags_setup_error_unknown_outcome_and_a_missing_column(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    checker = _load_checker()
+    expected = tmp_path / "expected.txt"
+    expected.write_text("t.py::a\nt.py::b\nt.py::c\n", encoding="utf-8")
+    led = tmp_path / "led"
+    led.mkdir()
+    (led / "gw0.tsv").write_text(
+        "t.py::a\tgw0\terror\nt.py::b\tgw0\tmaybe\nt.py::c\tgw0\n", encoding="utf-8"
+    )
+    assert checker.main([str(expected), str(led)]) == 1
+    out = capsys.readouterr().out
+    assert "errored in setup (never ran): t.py::a" in out
+    assert "unknown outcome 'maybe': t.py::b" in out
+    assert "t.py::c" in out  # the old two-column line is not accepted as ran
 
 
 def test_checker_refuses_a_vacuous_comparison(tmp_path: Path) -> None:

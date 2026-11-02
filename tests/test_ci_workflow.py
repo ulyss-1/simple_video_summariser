@@ -163,6 +163,16 @@ def test_partition_steps_run_in_order_and_the_ledger_is_kept_on_failure() -> Non
         job.index("actions/upload-artifact@"),
     ]
     assert order == sorted(order)
+    # The nested-parallel isolation proof runs alone, after the parallel step, and is
+    # left out of the collected and the parallel set (same flag on both).
+    ignore = "--ignore=tests/test_xdist_isolation_db.py"
+    collect = re.search(r"run: (pytest --collect-only[^\n]*)", job)
+    parallel = re.search(r'run: (pytest -m "integration and not image" -n 3[^\n]*)', job)
+    assert collect and ignore in collect.group(1)
+    assert parallel and ignore in parallel.group(1)
+    serial = re.search(r"run: (pytest tests/test_xdist_isolation_db\.py[^\n]*)", job)
+    assert serial and " -n " not in serial.group(1)
+    assert job.index(serial.group(1)) > job.index("scripts/check_run_partition.py")
     assert "--run-ledger=" in job
     upload = job[order[3] - 200 :]
     assert re.search(r"if: failure\(\)\n\s+uses: actions/upload-artifact@[0-9a-f]{40}", upload)

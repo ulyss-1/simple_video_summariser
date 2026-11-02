@@ -38,7 +38,10 @@ Per-layer approach is in architecture.md §13 — follow it. These rules apply o
   seed is the same on every worker, so `--shuffle-seed=<N>` replays it, serially
   or with `-n`. Each worker has its own Postgres container, so never rely on
   state shared between modules. `--run-ledger=<dir>` plus
-  `scripts/check_run_partition.py` proves each test ran exactly once. Check a
+  `scripts/check_run_partition.py` proves each test ran exactly once and did not
+  error in setup. `tests/test_xdist_isolation_db.py` starts its own nested `-n 2`
+  run, so CI runs it in its own serial step and leaves it out of the parallel set
+  (`--ignore=tests/test_xdist_isolation_db.py`). Check a
   parallel run yourself with
   `pytest --collect-only -q --no-shuffle -m "integration and not image" > exp.txt`,
   then `pytest -m "integration and not image" -n 3 --dist loadfile --run-ledger=led`,
