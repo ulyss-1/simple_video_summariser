@@ -12,6 +12,8 @@ from typing import Any
 
 import pytest
 
+from tests.image_build import compose_override
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PASSWORD = "stack-test-password"
 WAIT_TIMEOUT = "600"
@@ -30,6 +32,12 @@ class Stack:
         timeout: int = 1800,
     ) -> subprocess.CompletedProcess[str]:
         file_args = [arg for f in files for arg in ("-f", f)]
+        # CI's prebuilt dependency bases (#368): the same seam the image tests use.
+        override = compose_override()
+        if override:
+            seam_file = self.tmp_path / f"{self.project}.seam.yml"
+            seam_file.write_text(override)
+            file_args += ["-f", str(seam_file)]
         # An env file instead of process env, which ruff bans here: it also
         # keeps the developer's own .env (and its API key) out of the run.
         # WEB_HOST_PORT empty: Docker picks the host port, so a stack that already

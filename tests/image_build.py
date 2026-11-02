@@ -58,3 +58,34 @@ def whisper_build_args(
     if ref:
         args += ["--build-context", f"whisper-deps=docker-image://{ref}"]
     return args
+
+
+def compose_override(environ: Mapping[str, str] | None = None) -> str:
+    """A compose override file body that applies the seam to the stack build, or "".
+
+    compose.yml names no registry (#368), so the compose-stack tests would build
+    the deps and whisper layers from source even when CI has prebuilt bases.
+    This adds the same named build contexts as ``backend_build_args`` and
+    ``whisper_build_args`` for ``deps``, ``migrate`` (the backend image) and
+    ``transcriber`` (the whisper image). Unset variables give "" (no file).
+    """
+    deps = prebuilt_deps(environ)
+    whisper = _ref(WHISPER_DEPS_VAR, environ)
+    if not deps and not whisper:
+        return ""
+    lines = ["services:"]
+    if deps:
+        for service in ("deps", "migrate"):
+            lines += [
+                f"  {service}:",
+                "    build:",
+                "      additional_contexts:",
+                f"        deps: docker-image://{deps}",
+            ]
+    if deps or whisper:
+        lines += ["  transcriber:", "    build:", "      additional_contexts:"]
+        if deps:
+            lines.append(f"        ytdigest-deps: docker-image://{deps}")
+        if whisper:
+            lines.append(f"        whisper-deps: docker-image://{whisper}")
+    return "\n".join(lines) + "\n"

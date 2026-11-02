@@ -10,6 +10,7 @@ from tests.image_build import (
     DEPS_VAR,
     WHISPER_DEPS_VAR,
     backend_build_args,
+    compose_override,
     deps_context,
     prebuilt_deps,
     whisper_build_args,
@@ -18,6 +19,38 @@ from tests.image_build import (
 LOCAL = "ytdigest-t135-deps-abc:latest"
 FAKE_DEPS = "ghcr.io/example/ytdigest-deps@sha256:" + "d" * 64
 FAKE_WHISPER = "ghcr.io/example/ytdigest-whisper-deps@sha256:" + "e" * 64
+
+
+@pytest.mark.parametrize(
+    "environ", [{}, {DEPS_VAR: ""}, {DEPS_VAR: "  ", WHISPER_DEPS_VAR: " "}]
+)
+def test_compose_override_is_empty_when_nothing_is_prebuilt(environ: dict[str, str]) -> None:
+    assert compose_override(environ) == ""
+
+
+def test_compose_override_applies_the_deps_context_to_every_backend_build() -> None:
+    text = compose_override({DEPS_VAR: FAKE_DEPS})
+
+    for service in ("deps", "migrate"):
+        assert f"  {service}:\n    build:\n      additional_contexts:\n        deps: docker-image://{FAKE_DEPS}\n" in text
+    assert f"        ytdigest-deps: docker-image://{FAKE_DEPS}\n" in text
+    assert "whisper-deps" not in text
+
+
+def test_compose_override_adds_the_whisper_deps_context_only_when_set() -> None:
+    both = compose_override({DEPS_VAR: FAKE_DEPS, WHISPER_DEPS_VAR: FAKE_WHISPER})
+    only_whisper = compose_override({WHISPER_DEPS_VAR: FAKE_WHISPER})
+
+    assert f"        whisper-deps: docker-image://{FAKE_WHISPER}\n" in both
+    assert "migrate" not in only_whisper and "deps: docker-image" not in only_whisper.replace("whisper-deps", "")
+    assert f"        whisper-deps: docker-image://{FAKE_WHISPER}\n" in only_whisper
+
+
+def test_compose_override_names_no_tag_and_no_secret() -> None:
+    text = compose_override({DEPS_VAR: FAKE_DEPS, WHISPER_DEPS_VAR: FAKE_WHISPER})
+
+    assert ":latest" not in text
+    assert text.count("@sha256:") == 4  # deps, migrate, transcriber/ytdigest-deps, whisper-deps
 
 
 @pytest.mark.parametrize("environ", [{}, {DEPS_VAR: ""}, {DEPS_VAR: "  "}])
