@@ -239,7 +239,8 @@ Bind it to an address containers can reach.
 
 **Default choice (used here): bind to the Docker bridge gateway**
 (`docker0`, `172.17.0.1`). It is not exposed on any external interface, and
-needs no firewall rule. Install the committed drop-in. **(sudo)**
+needs no firewall rule unless the host firewall is active with default-deny
+incoming (see "Host firewall" below). Install the committed drop-in. **(sudo)**
 
 ```bash
 sudo install -D -m 644 ops/host/ollama.override.conf \
@@ -248,6 +249,8 @@ sudo systemctl daemon-reload
 sudo systemctl restart ollama
 ```
 
+Model choice and measured speed on this host: `_docs/ollama-model-benchmark.md`.
+
 Trade-off: Ollama is no longer on `127.0.0.1`, so host-local clients must point
 at the bridge address, and Ollama must start after `docker.service` (the
 drop-in sets `After=docker.service`). Pull the model:
@@ -255,6 +258,25 @@ drop-in sets `After=docker.service`). Pull the model:
 ```bash
 OLLAMA_HOST=172.17.0.1:11434 ollama pull "${OLLAMA_MODEL:-qwen3.5:4b}"
 ```
+
+**Host firewall (ufw active, default deny incoming).** A container reaches the
+bridge address as a connection *into the host*, so `ufw` drops it. Symptom:
+host `curl http://172.17.0.1:11434/api/tags` works, the container times out
+(a DROP, not a refusal), and `ops/host/preflight.sh` FAILs
+`ollama-from-container`. Found on the ProBook (2026-11-02). Allow Docker's
+private ranges to reach only the bridge address and port. **(sudo)**
+
+```bash
+sudo ufw allow from 172.16.0.0/12 to 172.17.0.1 port 11434 proto tcp \
+  comment 'Ollama from Docker bridges'
+sudo ufw status numbered
+```
+
+The rule opens nothing to the LAN or internet: Ollama listens only on
+`172.17.0.1`. If a Compose network uses a subnet outside `172.16.0.0/12`
+(Docker falls back to `192.168.x.x` when the pools run out), add one equally
+scoped rule for it. List subnets with
+`docker network inspect $(docker network ls -q) --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}'`.
 
 **Alternative: bind to `0.0.0.0` with firewall rules** that allow 11434 only
 from Docker's default bridge address pool and deny it everywhere else. This
