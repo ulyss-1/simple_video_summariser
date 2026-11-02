@@ -60,6 +60,12 @@ Activate `.venv` first; all Python commands assume it.
   every code PR; engineers and QA run only the tests for the change they are
   working on (`_docs/process.md`)
 - `pytest tests/test_queue.py` - one test file
+- `-n` (pytest-xdist) is CI-only (#296): the CI integration step runs `-n 3 --dist loadfile`
+  and a ledger check; locally the suite stays serial. Replay a parallel run's order with
+  `--shuffle-seed=<N>`; check a parallel run yourself with
+  `pytest --collect-only -q --no-shuffle -m "integration and not image" > exp.txt`, then
+  `pytest -m "integration and not image" -n 3 --dist loadfile --run-ledger=led`, then
+  `python scripts/check_run_partition.py exp.txt led`
 - `ruff check .` and `mypy .` - lint and types
 - `pytest tests/test_pipeline_smoke_docker.py -m image` - the hermetic
   one-video smoke (#137): brings up the real compose stack in a throwaway

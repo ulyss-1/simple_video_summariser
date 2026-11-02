@@ -34,6 +34,12 @@ Per-layer approach is in architecture.md §13 — follow it. These rules apply o
 - Deterministic: no sleep, inject the clock, no test-order
   dependence. The suite runs shuffled; replay a failing order with
   `pytest --shuffle-seed=<N>` using the seed printed by the run.
+- CI runs the integration step in parallel (`-n 3 --dist loadfile`, #296); the
+  seed is the same on every worker, so `--shuffle-seed=<N>` replays it, serially
+  or with `-n`. Each worker has its own Postgres container, so never rely on
+  state shared between modules. `--run-ledger=<dir>` plus
+  `scripts/check_run_partition.py` proves each test ran exactly once (command in
+  `AGENTS.md`).
 - Test via public interfaces; prefer fakes over mocking internals.
 - `tests/` mirrors the package layout; name tests after the behaviour.
 

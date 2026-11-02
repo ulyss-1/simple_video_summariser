@@ -106,8 +106,25 @@ jobs:
         run: pytest -m "not integration"
       # testcontainers starts postgres:18-alpine on the runner's Docker. The
       # `image` tests are excluded here: they run in the `images` job.
+      # #296: the integration tests run on 3 xdist workers (`--dist loadfile`, so a
+      # module-scoped fixture is still set up once per module; each worker has its
+      # own Postgres container, see tests/conftest.py). The set is collected
+      # serially first, every worker records what it ran, and the checker fails
+      # the job when any test was missed or ran twice.
+      - name: Collect the serial integration test set
+        run: pytest --collect-only -q --no-shuffle -m "integration and not image" > "$RUNNER_TEMP/expected-tests.txt"
       - name: pytest -m "integration and not image"
-        run: pytest -m "integration and not image"
+        run: pytest -m "integration and not image" -n 3 --dist loadfile --run-ledger="$RUNNER_TEMP/run-ledger"
+      - name: Check every integration test ran exactly once
+        run: python scripts/check_run_partition.py "$RUNNER_TEMP/expected-tests.txt" "$RUNNER_TEMP/run-ledger"
+      - name: Upload the run ledger
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: run-ledger
+          path: |
+            ${{ runner.temp }}/run-ledger
+            ${{ runner.temp }}/expected-tests.txt
 
   frontend:
     needs: changes

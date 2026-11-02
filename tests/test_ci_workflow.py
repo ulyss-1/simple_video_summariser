@@ -129,3 +129,41 @@ def test_no_workflow_names_a_ghcr_image_by_a_literal_tag() -> None:
     for workflow in CI.parent.glob("*.yml"):
         for ref in re.findall(r"ghcr\.io/[\w./-]+:[\w.-]+", workflow.read_text()):
             raise AssertionError(f"{workflow.name}: {ref}")
+
+
+# --- #296: the integration step runs under pytest-xdist, in the python job only ---
+
+
+def _python_job() -> str:
+    return _job("python")
+
+
+def test_only_the_python_job_integration_step_uses_xdist() -> None:
+    step = re.findall(r'run: (pytest -m "integration and not image"[^\n]*)', _python_job())
+    assert len(step) == 1
+    assert re.search(r" -n 3 --dist loadfile ", step[0] + " ")
+    assert "-n auto" not in _text()  # one reviewable number
+    assert len(re.findall(r"(?:^|\s)-n \d+", _text())) == 1
+    for job in ("images", "bakeoff"):
+        assert " -n " not in _job(job)
+
+
+def test_xdist_is_never_in_addopts() -> None:
+    pyproject = (ROOT / "pyproject.toml").read_text()
+    addopts = re.search(r"^addopts = (\[.*?\])", pyproject, re.MULTILINE | re.DOTALL)
+    assert addopts and "-n" not in addopts.group(1) and "dist" not in addopts.group(1)
+
+
+def test_partition_steps_run_in_order_and_the_ledger_is_kept_on_failure() -> None:
+    job = _python_job()
+    order = [
+        job.index("--collect-only -q --no-shuffle -m \"integration and not image\""),
+        job.index('run: pytest -m "integration and not image" -n 3'),
+        job.index("scripts/check_run_partition.py"),
+        job.index("actions/upload-artifact@"),
+    ]
+    assert order == sorted(order)
+    assert "--run-ledger=" in job
+    upload = job[order[3] - 200 :]
+    assert re.search(r"if: failure\(\)\n\s+uses: actions/upload-artifact@[0-9a-f]{40}", upload)
+    assert "run-ledger" in upload

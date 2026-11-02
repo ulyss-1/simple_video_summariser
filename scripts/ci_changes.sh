@@ -30,6 +30,10 @@ BAKEOFF='^(ops/Dockerfile\.bakeoff(\.dockerignore)?$|compose\.bakeoff\.yml$|scri
 # is deliberately not listed: the `images` job runs it to find its base images.
 PUBLISH='^\.github/workflows/publish-deps-images\.yml$'
 
+# The partition checker (#296) runs only in the `python` job, after the integration
+# step; no image build or image test reads it.
+PARTITION='^scripts/check_run_partition\.py$'
+
 any_outside() { # any changed file that matches none of the given patterns
   local pattern
   pattern=$(IFS='|'; echo "$*")
@@ -47,5 +51,5 @@ fi
 
 any_outside "$DOCS" "$WEBSRC" && echo "python=true" || echo "python=false"
 printf '%s\n' "$files" | grep -qE '^web/' && echo "frontend=true" || echo "frontend=false"
-any_outside "$DOCS" "$WEBSRC" "$UNIT_TESTS" "$BAKEOFF" "$PUBLISH" && echo "images=true" || echo "images=false"
+any_outside "$DOCS" "$WEBSRC" "$UNIT_TESTS" "$BAKEOFF" "$PUBLISH" "$PARTITION" && echo "images=true" || echo "images=false"
 printf '%s\n' "$files" | grep -qP "$BAKEOFF" && echo "bakeoff=true" || echo "bakeoff=false"
