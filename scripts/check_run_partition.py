@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Check that a parallel test run executed exactly the serial set of tests (#296).
 
     check_run_partition.py EXPECTED LEDGER_DIR
