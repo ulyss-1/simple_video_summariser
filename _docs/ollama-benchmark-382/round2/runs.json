@@ -1,0 +1,364 @@
+[
+ {
+  "label": "r2-ctx16k-conc",
+  "video": "EfGtEDJyRvk",
+  "model": "gemma4:e4b",
+  "num_ctx": 16384,
+  "status": "watchdog_tripped",
+  "wall_s": 45.95353142899694,
+  "calls": 0,
+  "ok_calls": 0,
+  "by_kind": {
+   "roster": 0,
+   "chunk": 0,
+   "reduce": 0,
+   "repair": 0
+  },
+  "prefill_tps": null,
+  "gen_tps": null,
+  "load_s": null,
+  "prompt_tokens": [],
+  "out_tokens": [],
+  "chunk_out_tokens": [],
+  "length_calls": 0,
+  "chunk_over_2048": 0,
+  "cause": "MemAvailable 928192 kB at 17:06:47",
+  "last_call_error": null,
+  "peak_used_gb": 13.261085510253906,
+  "peak_swap_gb": 9.88247299194336,
+  "peak_runner_gb": 5.943576812744141,
+  "min_avail_gb": 0.88519287109375,
+  "sec_per_video_min": null,
+  "sidecar_samples": 10,
+  "max_psi_full10": 40.47,
+  "swapin_mb": 2915.667968,
+  "swapout_mb": 7885.49632,
+  "loadavg_before": "6.37 7.54 6.54 5/1795 122177",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "r2-ctx16k-conc",
+  "video": "EfGtEDJyRvk",
+  "model": "qwen3.5:4b",
+  "num_ctx": 16384,
+  "status": "watchdog_tripped",
+  "wall_s": 1199.8841451350017,
+  "calls": 2,
+  "ok_calls": 1,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 1,
+   "reduce": 0,
+   "repair": 0
+  },
+  "prefill_tps": 11.930981008190495,
+  "gen_tps": 2.5533416590189604,
+  "load_s": 13.288060958,
+  "prompt_tokens": [
+   3421
+  ],
+  "out_tokens": [
+   19
+  ],
+  "chunk_out_tokens": [],
+  "length_calls": 0,
+  "chunk_over_2048": 0,
+  "cause": "MemAvailable 925648 kB at 17:05:10",
+  "last_call_error": "TimeoutError",
+  "peak_used_gb": 13.392585754394531,
+  "peak_swap_gb": 7.570590972900391,
+  "peak_runner_gb": 3.9359054565429688,
+  "min_avail_gb": 0.8827667236328125,
+  "sec_per_video_min": null,
+  "sidecar_samples": 240,
+  "max_psi_full10": 4.17,
+  "swapin_mb": 2098.25792,
+  "swapout_mb": 5865.095168,
+  "loadavg_before": "1.94 1.97 2.80 6/1821 95730",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "r2-ctx16k-rep1",
+  "video": "bIvyxp-FAGU",
+  "model": "gemma4:e4b",
+  "num_ctx": 16384,
+  "status": "ok",
+  "wall_s": 820.6788453999907,
+  "calls": 3,
+  "ok_calls": 3,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 1,
+   "reduce": 1,
+   "repair": 0
+  },
+  "prefill_tps": 21.51929733233516,
+  "gen_tps": 6.911067746323822,
+  "load_s": 19.926371507,
+  "prompt_tokens": [
+   3940,
+   4820,
+   2215
+  ],
+  "out_tokens": [
+   20,
+   1826,
+   160
+  ],
+  "chunk_out_tokens": [
+   1826
+  ],
+  "length_calls": 0,
+  "chunk_over_2048": 0,
+  "cause": "analyzed (forced repeat)",
+  "last_call_error": null,
+  "peak_used_gb": 12.424118041992188,
+  "peak_swap_gb": 4.171245574951172,
+  "peak_runner_gb": 7.759464263916016,
+  "min_avail_gb": 2.093982696533203,
+  "sec_per_video_min": 74.72038046130416,
+  "sidecar_samples": 164,
+  "max_psi_full10": 0.48,
+  "swapin_mb": 332.169216,
+  "swapout_mb": 0.438272,
+  "loadavg_before": "4.50 4.52 4.62 6/1749 179091",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "r2-ctx16k-rep1",
+  "video": "bIvyxp-FAGU",
+  "model": "qwen3.5:4b",
+  "num_ctx": 16384,
+  "status": "ok",
+  "wall_s": 1151.1584184519888,
+  "calls": 3,
+  "ok_calls": 3,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 1,
+   "reduce": 1,
+   "repair": 0
+  },
+  "prefill_tps": 23.340191548988766,
+  "gen_tps": 4.26910083578099,
+  "load_s": 11.658571358,
+  "prompt_tokens": [
+   3862,
+   4766,
+   2950
+  ],
+  "out_tokens": [
+   21,
+   2531,
+   192
+  ],
+  "chunk_out_tokens": [
+   2531
+  ],
+  "length_calls": 0,
+  "chunk_over_2048": 1,
+  "cause": "analyzed (forced repeat)",
+  "last_call_error": null,
+  "peak_used_gb": 9.128070831298828,
+  "peak_swap_gb": 4.028293609619141,
+  "peak_runner_gb": 4.683441162109375,
+  "min_avail_gb": 5.305168151855469,
+  "sec_per_video_min": 104.8095676891037,
+  "sidecar_samples": 231,
+  "max_psi_full10": 2.02,
+  "swapin_mb": 178.323456,
+  "swapout_mb": 182.554624,
+  "loadavg_before": "4.31 4.47 4.51 3/1736 197445",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "r2-ctx16k-rep2",
+  "video": "bIvyxp-FAGU",
+  "model": "gemma4:e4b",
+  "num_ctx": 16384,
+  "status": "ok",
+  "wall_s": 912.0380149239791,
+  "calls": 3,
+  "ok_calls": 3,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 1,
+   "reduce": 1,
+   "repair": 0
+  },
+  "prefill_tps": 21.4334932625442,
+  "gen_tps": 6.940429549857789,
+  "load_s": 22.269922182,
+  "prompt_tokens": [
+   3940,
+   4820,
+   2687
+  ],
+  "out_tokens": [
+   20,
+   2282,
+   163
+  ],
+  "chunk_out_tokens": [
+   2282
+  ],
+  "length_calls": 0,
+  "chunk_over_2048": 1,
+  "cause": "analyzed (forced repeat)",
+  "last_call_error": null,
+  "peak_used_gb": 12.125091552734375,
+  "peak_swap_gb": 4.368743896484375,
+  "peak_runner_gb": 7.766613006591797,
+  "min_avail_gb": 2.3480491638183594,
+  "sec_per_video_min": 83.03836251204666,
+  "sidecar_samples": 183,
+  "max_psi_full10": 7.28,
+  "swapin_mb": 254.435328,
+  "swapout_mb": 690.76992,
+  "loadavg_before": "4.76 4.74 4.93 3/1779 159501",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "r2-ctx16k-rep2",
+  "video": "bIvyxp-FAGU",
+  "model": "qwen3.5:4b",
+  "num_ctx": 16384,
+  "status": "ok",
+  "wall_s": 1031.3596385359997,
+  "calls": 3,
+  "ok_calls": 3,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 1,
+   "reduce": 1,
+   "repair": 0
+  },
+  "prefill_tps": 23.24986766731923,
+  "gen_tps": 4.341705938266953,
+  "load_s": 11.6863749,
+  "prompt_tokens": [
+   3862,
+   4766,
+   2550
+  ],
+  "out_tokens": [
+   21,
+   2143,
+   173
+  ],
+  "chunk_out_tokens": [
+   2143
+  ],
+  "length_calls": 0,
+  "chunk_over_2048": 1,
+  "cause": "analyzed (forced repeat)",
+  "last_call_error": null,
+  "peak_used_gb": 9.3458251953125,
+  "peak_swap_gb": 3.969379425048828,
+  "peak_runner_gb": 4.6712646484375,
+  "min_avail_gb": 5.149253845214844,
+  "sec_per_video_min": 93.90224326579664,
+  "sidecar_samples": 207,
+  "max_psi_full10": 0.18,
+  "swapin_mb": 23.044096,
+  "swapout_mb": 0.0,
+  "loadavg_before": "3.93 4.34 4.42 4/1697 214008",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "r2-ctx16k-rep3",
+  "video": "bIvyxp-FAGU",
+  "model": "gemma4:e4b",
+  "num_ctx": 16384,
+  "status": "ok",
+  "wall_s": 874.8278387869941,
+  "calls": 3,
+  "ok_calls": 3,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 1,
+   "reduce": 1,
+   "repair": 0
+  },
+  "prefill_tps": 21.279601785983434,
+  "gen_tps": 6.830268958824286,
+  "load_s": 20.555270558,
+  "prompt_tokens": [
+   3940,
+   4820,
+   2441
+  ],
+  "out_tokens": [
+   20,
+   2044,
+   172
+  ],
+  "chunk_out_tokens": [
+   2044
+  ],
+  "length_calls": 0,
+  "chunk_over_2048": 0,
+  "cause": "analyzed (forced repeat)",
+  "last_call_error": null,
+  "peak_used_gb": 12.811603546142578,
+  "peak_swap_gb": 4.133136749267578,
+  "peak_runner_gb": 7.7630157470703125,
+  "min_avail_gb": 1.6486129760742188,
+  "sec_per_video_min": 79.6504860807582,
+  "sidecar_samples": 176,
+  "max_psi_full10": 0.29,
+  "swapin_mb": 379.138048,
+  "swapout_mb": 9.199616,
+  "loadavg_before": "4.35 4.68 5.25 3/1755 139744",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "r2-ctx16k-rep3",
+  "video": "bIvyxp-FAGU",
+  "model": "qwen3.5:4b",
+  "num_ctx": 16384,
+  "status": "failed",
+  "wall_s": 1088.8111159800028,
+  "calls": 2,
+  "ok_calls": 1,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 1,
+   "reduce": 0,
+   "repair": 0
+  },
+  "prefill_tps": 22.388439801572336,
+  "gen_tps": 5.132940720400897,
+  "load_s": 11.94128684,
+  "prompt_tokens": [
+   3862
+  ],
+  "out_tokens": [
+   21
+  ],
+  "chunk_out_tokens": [],
+  "length_calls": 0,
+  "chunk_over_2048": 0,
+  "cause": "failed: LLM_UNAVAILABLE: Ollama at http://172.17.0.1:11434/api/chat did not answer: TimeoutError: timed out",
+  "last_call_error": "TimeoutError",
+  "peak_used_gb": 9.230751037597656,
+  "peak_swap_gb": 4.6457366943359375,
+  "peak_runner_gb": 4.312263488769531,
+  "min_avail_gb": 5.292045593261719,
+  "sec_per_video_min": null,
+  "sidecar_samples": 218,
+  "max_psi_full10": 19.01,
+  "swapin_mb": 967.426048,
+  "swapout_mb": 0.987136,
+  "loadavg_before": "9.81 8.18 6.81 2/1749 123292",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ }
+]
