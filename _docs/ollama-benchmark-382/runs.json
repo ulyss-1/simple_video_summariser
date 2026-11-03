@@ -1,0 +1,758 @@
+[
+ {
+  "label": "ctx16k",
+  "video": "EfGtEDJyRvk",
+  "model": "gemma4:e4b",
+  "num_ctx": 16384,
+  "status": "ok",
+  "wall_s": 1454.2066574160126,
+  "calls": 4,
+  "ok_calls": 4,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 2,
+   "reduce": 1,
+   "repair": 0
+  },
+  "prefill_tps": 21.392177077149775,
+  "gen_tps": 6.740695257616951,
+  "load_s": 20.198614883,
+  "prompt_tokens": [
+   3495,
+   6644,
+   3970,
+   4144
+  ],
+  "out_tokens": [
+   18,
+   2329,
+   1375,
+   188
+  ],
+  "chunk_out_tokens": [
+   2329,
+   1375
+  ],
+  "length_calls": 0,
+  "chunk_over_2048": 1,
+  "cause": "analyzed (forced repeat)",
+  "last_call_error": null,
+  "peak_used_gb": 12.806316375732422,
+  "peak_swap_gb": 3.3021240234375,
+  "peak_runner_gb": 7.929100036621094,
+  "min_avail_gb": 1.7407722473144531,
+  "sec_per_video_min": 67.1172303422775,
+  "sidecar_samples": 292,
+  "max_psi_full10": 0.24,
+  "swapin_mb": 35.51232,
+  "swapout_mb": 63.176704,
+  "loadavg_before": "4.08 4.75 4.82 3/1677 3725209",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "ctx16k",
+  "video": "EfGtEDJyRvk",
+  "model": "qwen3.5:4b",
+  "num_ctx": 16384,
+  "status": "ok",
+  "wall_s": 1644.1269374209805,
+  "calls": 4,
+  "ok_calls": 4,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 2,
+   "reduce": 1,
+   "repair": 0
+  },
+  "prefill_tps": 23.229109677500325,
+  "gen_tps": 4.204334328605782,
+  "load_s": 11.976929977,
+  "prompt_tokens": [
+   3421,
+   6572,
+   3914,
+   3861
+  ],
+  "out_tokens": [
+   48,
+   1564,
+   1861,
+   169
+  ],
+  "chunk_out_tokens": [
+   1564,
+   1861
+  ],
+  "length_calls": 0,
+  "chunk_over_2048": 0,
+  "cause": "analyzed (forced repeat)",
+  "last_call_error": null,
+  "peak_used_gb": 9.757984161376953,
+  "peak_swap_gb": 3.3803482055664062,
+  "peak_runner_gb": 5.023155212402344,
+  "min_avail_gb": 4.789104461669922,
+  "sec_per_video_min": 75.88278172712218,
+  "sidecar_samples": 329,
+  "max_psi_full10": 2.32,
+  "swapin_mb": 33.169408,
+  "swapout_mb": 207.36,
+  "loadavg_before": "5.82 5.17 4.93 2/1713 3753860",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "ctx16k",
+  "video": "eEE3S-MvzEs",
+  "model": "gemma4:e4b",
+  "num_ctx": 16384,
+  "status": "ok",
+  "wall_s": 2931.598545879009,
+  "calls": 6,
+  "ok_calls": 6,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 4,
+   "reduce": 1,
+   "repair": 0
+  },
+  "prefill_tps": 20.69156317076004,
+  "gen_tps": 6.250140464952889,
+  "load_s": 20.253676663,
+  "prompt_tokens": [
+   3532,
+   6440,
+   7228,
+   7523,
+   1889,
+   8086
+  ],
+  "out_tokens": [
+   18,
+   2126,
+   2144,
+   2069,
+   1184,
+   166
+  ],
+  "chunk_out_tokens": [
+   2126,
+   2144,
+   2069,
+   1184
+  ],
+  "length_calls": 0,
+  "chunk_over_2048": 3,
+  "cause": "analyzed (forced repeat)",
+  "last_call_error": null,
+  "peak_used_gb": 13.096843719482422,
+  "peak_swap_gb": 3.3854637145996094,
+  "peak_runner_gb": 8.239055633544922,
+  "min_avail_gb": 1.4354019165039062,
+  "sec_per_video_min": 62.6409945700643,
+  "sidecar_samples": 586,
+  "max_psi_full10": 0.89,
+  "swapin_mb": 238.67392,
+  "swapout_mb": 124.14976,
+  "loadavg_before": "6.11 5.23 4.90 1/1720 3814702",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "ctx16k",
+  "video": "eEE3S-MvzEs",
+  "model": "qwen3.5:4b",
+  "num_ctx": 16384,
+  "status": "ok",
+  "wall_s": 2918.1215746389935,
+  "calls": 6,
+  "ok_calls": 6,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 4,
+   "reduce": 1,
+   "repair": 0
+  },
+  "prefill_tps": 22.69239395815004,
+  "gen_tps": 3.994510344029215,
+  "load_s": 8.411713493,
+  "prompt_tokens": [
+   3429,
+   6353,
+   7143,
+   7414,
+   1878,
+   6157
+  ],
+  "out_tokens": [
+   19,
+   1738,
+   2116,
+   824,
+   967,
+   254
+  ],
+  "chunk_out_tokens": [
+   1738,
+   2116,
+   824,
+   967
+  ],
+  "length_calls": 0,
+  "chunk_over_2048": 1,
+  "cause": "analyzed (forced repeat)",
+  "last_call_error": null,
+  "peak_used_gb": 10.542320251464844,
+  "peak_swap_gb": 3.3534469604492188,
+  "peak_runner_gb": 5.7643890380859375,
+  "min_avail_gb": 4.001926422119141,
+  "sec_per_video_min": 62.3530250991238,
+  "sidecar_samples": 584,
+  "max_psi_full10": 0.0,
+  "swapin_mb": 33.574912,
+  "swapout_mb": 5.05856,
+  "loadavg_before": "4.38 4.65 4.72 3/1710 3775196",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "main",
+  "video": "EfGtEDJyRvk",
+  "model": "gemma4:e4b",
+  "num_ctx": 8192,
+  "status": "ok",
+  "wall_s": 1590.137659095024,
+  "calls": 5,
+  "ok_calls": 5,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 3,
+   "reduce": 1,
+   "repair": 0
+  },
+  "prefill_tps": 21.098222289023322,
+  "gen_tps": 7.069917887486092,
+  "load_s": 19.527183598,
+  "prompt_tokens": [
+   3495,
+   5653,
+   1737,
+   4005,
+   4692
+  ],
+  "out_tokens": [
+   96,
+   1675,
+   989,
+   1597,
+   179
+  ],
+  "chunk_out_tokens": [
+   1675,
+   989,
+   1597
+  ],
+  "length_calls": 0,
+  "chunk_over_2048": 0,
+  "cause": "analyzed (2 chunks, 24118 tokens, 1589944 ms)",
+  "last_call_error": null,
+  "peak_used_gb": 12.446563720703125,
+  "peak_swap_gb": 7.0343170166015625,
+  "peak_runner_gb": 7.652778625488281,
+  "min_avail_gb": 2.10052490234375,
+  "sec_per_video_min": 73.3909688813088,
+  "sidecar_samples": 318,
+  "max_psi_full10": 8.85,
+  "swapin_mb": 64.868352,
+  "swapout_mb": 3939.622912,
+  "loadavg_before": "4.39 4.33 4.34 5/1693 3602628",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "main",
+  "video": "EfGtEDJyRvk",
+  "model": "qwen3.5:4b",
+  "num_ctx": 8192,
+  "status": "failed",
+  "wall_s": 1050.2652677019942,
+  "calls": 2,
+  "ok_calls": 2,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 1,
+   "reduce": 0,
+   "repair": 0
+  },
+  "prefill_tps": 23.34127153215791,
+  "gen_tps": 4.012203006633976,
+  "load_s": 11.167486389,
+  "prompt_tokens": [
+   3421,
+   5593
+  ],
+  "out_tokens": [
+   19,
+   2599
+  ],
+  "chunk_out_tokens": [
+   2599
+  ],
+  "length_calls": 1,
+  "chunk_over_2048": 1,
+  "cause": "failed: LLM_INVALID_OUTPUT: Ollama ran out of context (done_reason='length', 5593 prompt + 2599 output tokens); raise OLLAMA_NUM_CTX (now 81",
+  "last_call_error": null,
+  "peak_used_gb": 8.78509521484375,
+  "peak_swap_gb": 3.4204444885253906,
+  "peak_runner_gb": 4.0509185791015625,
+  "min_avail_gb": 5.761993408203125,
+  "sec_per_video_min": null,
+  "sidecar_samples": 210,
+  "max_psi_full10": 0.14,
+  "swapin_mb": 46.125056,
+  "swapout_mb": 0.0,
+  "loadavg_before": "4.53 4.43 4.44 2/1684 3589073",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "main",
+  "video": "M8_DnpYV2hY",
+  "model": "gemma4:e4b",
+  "num_ctx": 8192,
+  "status": "ok",
+  "wall_s": 829.9217477189959,
+  "calls": 3,
+  "ok_calls": 3,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 1,
+   "reduce": 1,
+   "repair": 0
+  },
+  "prefill_tps": 21.64446370938506,
+  "gen_tps": 7.203344771417983,
+  "load_s": 21.1926882,
+  "prompt_tokens": [
+   3530,
+   4361,
+   2517
+  ],
+  "out_tokens": [
+   75,
+   2127,
+   156
+  ],
+  "chunk_out_tokens": [
+   2127
+  ],
+  "length_calls": 0,
+  "chunk_over_2048": 1,
+  "cause": "analyzed (1 chunks, 12766 tokens, 829751 ms)",
+  "last_call_error": null,
+  "peak_used_gb": 12.265556335449219,
+  "peak_swap_gb": 3.442462921142578,
+  "peak_runner_gb": 7.620018005371094,
+  "min_avail_gb": 2.2815322875976562,
+  "sec_per_video_min": 66.74973842243935,
+  "sidecar_samples": 167,
+  "max_psi_full10": 0.88,
+  "swapin_mb": 35.49184,
+  "swapout_mb": 15.536128,
+  "loadavg_before": "4.28 4.41 4.47 3/1721 3572327",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "main",
+  "video": "M8_DnpYV2hY",
+  "model": "qwen3.5:4b",
+  "num_ctx": 8192,
+  "status": "ok",
+  "wall_s": 937.7434467989951,
+  "calls": 3,
+  "ok_calls": 3,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 1,
+   "reduce": 1,
+   "repair": 0
+  },
+  "prefill_tps": 23.458741598265803,
+  "gen_tps": 4.466832601090833,
+  "load_s": 10.933425027,
+  "prompt_tokens": [
+   3491,
+   4319,
+   2334
+  ],
+  "out_tokens": [
+   45,
+   1937,
+   223
+  ],
+  "chunk_out_tokens": [
+   1937
+  ],
+  "length_calls": 0,
+  "chunk_over_2048": 0,
+  "cause": "analyzed (1 chunks, 12349 tokens, 937565 ms)",
+  "last_call_error": null,
+  "peak_used_gb": 8.99697494506836,
+  "peak_swap_gb": 3.6773414611816406,
+  "peak_runner_gb": 4.351161956787109,
+  "min_avail_gb": 5.529827117919922,
+  "sec_per_video_min": 75.42172494361891,
+  "sidecar_samples": 188,
+  "max_psi_full10": 3.96,
+  "swapin_mb": 526.422016,
+  "swapout_mb": 531.693568,
+  "loadavg_before": "5.57 4.79 4.54 3/1726 3560478",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "main",
+  "video": "bIvyxp-FAGU",
+  "model": "gemma4:e4b",
+  "num_ctx": 8192,
+  "status": "ok",
+  "wall_s": 877.9623159570037,
+  "calls": 3,
+  "ok_calls": 3,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 1,
+   "reduce": 1,
+   "repair": 0
+  },
+  "prefill_tps": 20.404120865662932,
+  "gen_tps": 6.406753365985546,
+  "load_s": 20.718975123,
+  "prompt_tokens": [
+   3940,
+   4820,
+   2257
+  ],
+  "out_tokens": [
+   20,
+   1872,
+   137
+  ],
+  "chunk_out_tokens": [
+   1872
+  ],
+  "length_calls": 0,
+  "chunk_over_2048": 0,
+  "cause": "analyzed (1 chunks, 13046 tokens, 877788 ms)",
+  "last_call_error": null,
+  "peak_used_gb": 12.924217224121094,
+  "peak_swap_gb": 4.709716796875,
+  "peak_runner_gb": 0.0,
+  "min_avail_gb": 1.6228713989257812,
+  "sec_per_video_min": 79.93587095207926,
+  "sidecar_samples": 0,
+  "max_psi_full10": null,
+  "swapin_mb": null,
+  "swapout_mb": null,
+  "loadavg_before": "0.38 0.62 0.93 1/1659 3467656",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "main",
+  "video": "bIvyxp-FAGU",
+  "model": "qwen3.5:4b",
+  "num_ctx": 8192,
+  "status": "ok",
+  "wall_s": 903.8474053149985,
+  "calls": 3,
+  "ok_calls": 3,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 1,
+   "reduce": 1,
+   "repair": 0
+  },
+  "prefill_tps": 21.655550078781268,
+  "gen_tps": 4.239528926326731,
+  "load_s": 10.905151788,
+  "prompt_tokens": [
+   3862,
+   4766,
+   1873
+  ],
+  "out_tokens": [
+   21,
+   1488,
+   218
+  ],
+  "chunk_out_tokens": [
+   1488
+  ],
+  "length_calls": 0,
+  "chunk_over_2048": 0,
+  "cause": "analyzed (1 chunks, 12228 tokens, 903688 ms)",
+  "last_call_error": null,
+  "peak_used_gb": 9.25631332397461,
+  "peak_swap_gb": 3.4188385009765625,
+  "peak_runner_gb": 4.399955749511719,
+  "min_avail_gb": 5.2353057861328125,
+  "sec_per_video_min": 82.29263174339896,
+  "sidecar_samples": 0,
+  "max_psi_full10": null,
+  "swapin_mb": null,
+  "swapout_mb": null,
+  "loadavg_before": "4.36 4.46 3.27 1/1723 3499312",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "main",
+  "video": "eEE3S-MvzEs",
+  "model": "gemma4:e4b",
+  "num_ctx": 8192,
+  "status": "failed",
+  "wall_s": 1546.9406997979968,
+  "calls": 4,
+  "ok_calls": 4,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 3,
+   "reduce": 0,
+   "repair": 0
+  },
+  "prefill_tps": 21.552025369425603,
+  "gen_tps": 6.808289765647973,
+  "load_s": 19.95961336,
+  "prompt_tokens": [
+   3532,
+   5746,
+   1363,
+   6029
+  ],
+  "out_tokens": [
+   18,
+   2093,
+   851,
+   2163
+  ],
+  "chunk_out_tokens": [
+   2093,
+   851,
+   2163
+  ],
+  "length_calls": 1,
+  "chunk_over_2048": 2,
+  "cause": "failed: LLM_INVALID_OUTPUT: Ollama ran out of context (done_reason='length', 6029 prompt + 2163 output tokens); raise OLLAMA_NUM_CTX (now 81",
+  "last_call_error": null,
+  "peak_used_gb": 12.552650451660156,
+  "peak_swap_gb": 6.609447479248047,
+  "peak_runner_gb": 7.649127960205078,
+  "min_avail_gb": 1.9542922973632812,
+  "sec_per_video_min": null,
+  "sidecar_samples": 310,
+  "max_psi_full10": 7.35,
+  "swapin_mb": 359.784448,
+  "swapout_mb": 3670.151168,
+  "loadavg_before": "5.01 4.95 4.78 4/1699 3672319",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "main",
+  "video": "eEE3S-MvzEs",
+  "model": "qwen3.5:4b",
+  "num_ctx": 8192,
+  "status": "timeout",
+  "wall_s": 2697.7143195199897,
+  "calls": 6,
+  "ok_calls": 6,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 5,
+   "reduce": 0,
+   "repair": 0
+  },
+  "prefill_tps": 23.899764146950332,
+  "gen_tps": 4.43020421412456,
+  "load_s": 10.961318731,
+  "prompt_tokens": [
+   3429,
+   5665,
+   1356,
+   5958,
+   1855,
+   6010
+  ],
+  "out_tokens": [
+   19,
+   1767,
+   1051,
+   1396,
+   1261,
+   1172
+  ],
+  "chunk_out_tokens": [
+   1767,
+   1051,
+   1396,
+   1261,
+   1172
+  ],
+  "length_calls": 0,
+  "chunk_over_2048": 0,
+  "cause": "45 min run cap",
+  "last_call_error": null,
+  "peak_used_gb": 10.54556655883789,
+  "peak_swap_gb": 3.44622802734375,
+  "peak_runner_gb": 5.826072692871094,
+  "min_avail_gb": 3.9957809448242188,
+  "sec_per_video_min": null,
+  "sidecar_samples": 540,
+  "max_psi_full10": 0.36,
+  "swapin_mb": 119.5008,
+  "swapout_mb": 0.0,
+  "loadavg_before": "4.24 4.39 4.43 4/1711 3636941",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "main",
+  "video": "qovnfjVd8cs",
+  "model": "gemma4:e4b",
+  "num_ctx": 8192,
+  "status": "ok",
+  "wall_s": 951.1091793699889,
+  "calls": 3,
+  "ok_calls": 3,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 1,
+   "reduce": 1,
+   "repair": 0
+  },
+  "prefill_tps": 21.100738031906154,
+  "gen_tps": 6.467341684641355,
+  "load_s": 20.524363857,
+  "prompt_tokens": [
+   3740,
+   5109,
+   2677
+  ],
+  "out_tokens": [
+   22,
+   2289,
+   171
+  ],
+  "chunk_out_tokens": [
+   2289
+  ],
+  "length_calls": 0,
+  "chunk_over_2048": 1,
+  "cause": "analyzed (1 chunks, 14008 tokens, 950946 ms)",
+  "last_call_error": null,
+  "peak_used_gb": 12.378280639648438,
+  "peak_swap_gb": 3.6311302185058594,
+  "peak_runner_gb": 7.636241912841797,
+  "min_avail_gb": 2.1488304138183594,
+  "sec_per_video_min": 75.68508058647126,
+  "sidecar_samples": 178,
+  "max_psi_full10": 0.02,
+  "swapin_mb": 47.202304,
+  "swapout_mb": 0.004096,
+  "loadavg_before": "4.34 4.41 4.41 2/1674 3539248",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "main",
+  "video": "qovnfjVd8cs",
+  "model": "qwen3.5:4b",
+  "num_ctx": 8192,
+  "status": "failed",
+  "wall_s": 1083.5025559420174,
+  "calls": 2,
+  "ok_calls": 1,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 1,
+   "reduce": 0,
+   "repair": 0
+  },
+  "prefill_tps": 21.231483841015766,
+  "gen_tps": 4.49064918535347,
+  "load_s": 5.111083602,
+  "prompt_tokens": [
+   3682
+  ],
+  "out_tokens": [
+   21
+  ],
+  "chunk_out_tokens": [],
+  "length_calls": 0,
+  "chunk_over_2048": 0,
+  "cause": "failed: LLM_UNAVAILABLE: Ollama at http://172.17.0.1:11434/api/chat did not answer: TimeoutError: timed out",
+  "last_call_error": "TimeoutError",
+  "peak_used_gb": 8.860294342041016,
+  "peak_swap_gb": 3.379199981689453,
+  "peak_runner_gb": 4.057941436767578,
+  "min_avail_gb": 5.686794281005859,
+  "sec_per_video_min": null,
+  "sidecar_samples": 0,
+  "max_psi_full10": null,
+  "swapin_mb": null,
+  "swapout_mb": null,
+  "loadavg_before": "4.68 4.93 4.31 1/1709 3522027",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "rep1",
+  "video": "qovnfjVd8cs",
+  "model": "gemma4:e4b",
+  "num_ctx": 8192,
+  "status": "ok",
+  "wall_s": 884.1482910669874,
+  "calls": 3,
+  "ok_calls": 3,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 1,
+   "reduce": 1,
+   "repair": 0
+  },
+  "prefill_tps": 21.284081295204633,
+  "gen_tps": 6.75703079202989,
+  "load_s": 19.933846504,
+  "prompt_tokens": [
+   3740,
+   5109,
+   2456
+  ],
+  "out_tokens": [
+   22,
+   2070,
+   155
+  ],
+  "chunk_out_tokens": [
+   2070
+  ],
+  "length_calls": 0,
+  "chunk_over_2048": 1,
+  "cause": "analyzed (forced repeat)",
+  "last_call_error": null,
+  "peak_used_gb": 12.44625473022461,
+  "peak_swap_gb": 3.3213424682617188,
+  "peak_runner_gb": 7.632637023925781,
+  "min_avail_gb": 2.0831680297851562,
+  "sec_per_video_min": 70.35662793636504,
+  "sidecar_samples": 177,
+  "max_psi_full10": 0.18,
+  "swapin_mb": 74.752,
+  "swapout_mb": 0.004096,
+  "loadavg_before": "5.33 5.00 4.86 3/1698 3705833",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ }
+]
