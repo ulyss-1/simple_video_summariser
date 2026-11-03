@@ -271,8 +271,8 @@ Concrete errors the scorers found (derived text, no transcript quotes):
 
 | Output | TLDR sentences (rule 4 to 6) | Quotes verbatim in transcript | Speakers outside the roster (coerced) |
 |---|---|---|---|
-| gemma `bIvyxp-FAGU` | 6 | 60% | 0 |
-| qwen `bIvyxp-FAGU` | 7 | 37.5% | 0 |
+| gemma `bIvyxp-FAGU` | 5 (first count 6, see Correction) | 60% | 0 |
+| qwen `bIvyxp-FAGU` | 6 (first count 7, see Correction) | 37.5% | 0 |
 | gemma `qovnfjVd8cs` | 5 | 67% | 0 |
 | gemma `M8_DnpYV2hY` | 6 | 80% | 0 |
 | qwen `M8_DnpYV2hY` | 6 | 60% | 0 |
@@ -283,6 +283,12 @@ Concrete errors the scorers found (derived text, no transcript quotes):
 | qwen `eEE3S-MvzEs` (16384) | 5 | 54% | 3 |
 
 Gemma quotes the transcript verbatim more often than qwen in every comparable pair.
+
+#### Correction (added in round 2): the TLDR sentence counter treated "Dr." as a sentence end
+
+What was wrong: the mechanical counter (`tools/mech.py`) split a TLDR at every full stop followed by a capital, so "Dr. Eric Berg" counted as a sentence end. Every summary of `bIvyxp-FAGU` (a Dr. Eric Berg video) was over-counted by one or more. The round 1 table above said 6 (gemma) and 7 (qwen); the abbreviation-aware recount (`tools/sentences.py`, with a self-check on the "Dr. Eric Berg" sentence) gives 5 and 6. All other round 1 outputs are unchanged (recount for every run: `round2/sentence_recount.json`). The scorers saw the inflated number in the `FACTS (mechanical)` line of the pack.
+
+What it changes: qwen's `bIvyxp-FAGU` TLDR was within the 4 to 6 rule, not "7 sentences, one minor deviation". The statement that qwen exceeded the sentence limit there is withdrawn, and the same applies to the round 2 repeats (below). The instruction-following score of that unit for qwen (4.0 in both passes) was partly set by the wrong count (pass 1's note cites a "7-sentence TLDR"; the pass 2 score of 4 was given on the same FACTS line) and is under re-scoring from corrected packs; until then read the 8192 qwen instruction-following means of this section (2.75 and 2.4 over all five) as lower bounds: with a 5 there the 8192 qwen means would be 3.0 (scored-only) and 2.6 (all five). Faithfulness and coverage do not use the sentence count and are unaffected. The direction of every comparison in this section does not change: the qwen deficit is in faithfulness (2.75 against 4.5) and failures (3 of 5 videos against 1 of 5).
 
 ### What was not done
 
@@ -354,7 +360,7 @@ Order was randomised (seed `r2-rep`): qwen 3, gemma 3, gemma 2, gemma 1, qwen 1,
 - Wall time: gemma4:e4b 821, 875, 912 s (mean 869 s, spread 91 s or about 10%); qwen3.5:4b 1151 and 1031 s on its two successes (mean 1091 s), 1.25 times gemma's. Round 1's single runs (878 and 904 s) sit inside or near the gemma range; qwen's 16k runs were slower than its 8k run, because its chunk output was longer (2143 and 2531 tokens against 1488).
 - Failures: gemma 0 of 3, qwen 1 of 3 at 16384. Counting round 1's single 8192 runs too: gemma 4 of 4 and qwen 3 of 4 succeeded on this video.
 - Corrected analysis of the qwen failure: rep 3 died on the chunk call's 900 s `TimeoutError` (`LLM_UNAVAILABLE`), with a minimum `MemAvailable` of 5.5 GB, peak used 9.7 GB and the runner at 4.5 GB. It is not memory pressure. qwen3.5:4b generates at about 4.3 to 5.1 tokens/s and its chunk replies are long and uneven (1488, 2143 and 2531 tokens in the three successes, prefill about 4.8k tokens): the successful chunk calls took 583, 710 and 807 s, so the 900 s per-call limit is close to the model's normal range and a slightly longer reply times out. The same reading applies to round 1's qwen timeout on `qovnfjVd8cs` that round 1 left "undetermined": a long reply near the limit is a sufficient cause, so a memory attribution there was never needed. gemma4:e4b's chunk calls took 488 to 558 s with 1826 to 2282 output tokens, well inside the limit.
-- Mechanical output checks (the five 16k successes plus round 1): TLDR sentences (rule 4 to 6) gemma 6, 6, 5 (round 1: 6), qwen 8, 7 (round 1: 7), so qwen breaks the length rule in 3 of 3; quotes found verbatim in the transcript gemma 11 of 13, 13 of 16, 11 of 14 (round 1: 6 of 10), qwen 10 of 22, 7 of 13 (round 1: 3 of 8). No JSON repairs were needed in any run.
+- Mechanical output checks (the five 16k successes plus round 1; TLDR sentences use the corrected abbreviation-aware count, see the Correction above): TLDR sentences (rule 4 to 6) gemma 5, 6, 5 (round 1: 5), qwen 5, 5 (round 1: 6), so every TLDR is within the rule (the first draft of this section, with the old counter, wrongly said qwen broke it); quotes found verbatim in the transcript gemma 11 of 13, 13 of 16, 11 of 14 (round 1: 6 of 10), qwen 10 of 22, 7 of 13 (round 1: 3 of 8). No JSON repairs were needed in any run.
 - Quality variance across repeats is not scored here. A blind pack of the seven summaries (five round 2 successes, two round 1 runs) was made for the scorers; its scores will be added when they exist.
 
 #### Not done in round 2

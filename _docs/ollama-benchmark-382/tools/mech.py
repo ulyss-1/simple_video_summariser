@@ -12,7 +12,7 @@ RAW = B / "raw"
 MODELS = ["qwen3.5:4b", "gemma4:e4b"]
 
 _ws = re.compile(r"\s+")
-_sent = re.compile(r"(?<=[.!?])[\"')\]]*\s+(?=[A-Z0-9\"'(\[])")
+from sentences import count_sentences  # abbreviation-aware (the old regex counted 'Dr.' as a sentence end)
 _md = re.compile(r"(^\s*(#{1,6}\s|[-*+]\s|\d+[.)]\s|>\s))|\*\*|__|`", re.M)
 _pre = re.compile(r"^\s*(here(?:'s| is| are)|sure|certainly|of course|okay|ok[,.]|tl;?dr\s*[:\-]|summary\s*[:\-]|in summary)", re.I)
 
@@ -42,7 +42,7 @@ def mech(r: dict) -> dict:
         return out
     tldr = a["tldr"]
     out["tldr_chars"] = len(tldr)
-    out["tldr_sentences"] = len([s for s in _sent.split(tldr.strip()) if s.strip()])
+    out["tldr_sentences"] = count_sentences(tldr)
     out["tldr_paragraphs"] = len([p for p in re.split(r"\n\s*\n", tldr.strip()) if p.strip()])
     out["tldr_markdown"] = bool(_md.search(tldr))
     out["tldr_preamble"] = bool(_pre.search(tldr))
