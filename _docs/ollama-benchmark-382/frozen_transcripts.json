@@ -1,0 +1,77 @@
+[
+ {
+  "video_id": "qovnfjVd8cs",
+  "title": "Everything You Need to Know About Peptides",
+  "channel_id": "UC3w193M5tYPJqF0Hi-7U-2g",
+  "duration_sec": 754,
+  "transcript_source": "youtube_auto",
+  "lang": "en",
+  "segments": 311,
+  "chars": 11740,
+  "est_tokens": 3914,
+  "sha256": {
+   "meta": "45eff43565493a7605c5195b53dcfbb44e7e7955585652448821ade301d5b99f",
+   "segments": "44d6dc77587097a4474e6ed683c499e5a85e1f10d068b8fd3e21182632af3cfe"
+  }
+ },
+ {
+  "video_id": "bIvyxp-FAGU",
+  "title": "Most Men Will Get Prostate Cancer As They Age (Here\u2019s What To Do)",
+  "channel_id": "UC3w193M5tYPJqF0Hi-7U-2g",
+  "duration_sec": 659,
+  "transcript_source": "youtube_auto",
+  "lang": "en",
+  "segments": 285,
+  "chars": 10622,
+  "est_tokens": 3541,
+  "sha256": {
+   "meta": "5b83e4f5d6d9851bd11b88a2a9b5f4551b5d8357d088c02f3a9bcfb4360d2ac6",
+   "segments": "b4f9526efe8a7faafa1383f2a06d81eb03f2eda5048dff7be2c3dcaa13972b69"
+  }
+ },
+ {
+  "video_id": "M8_DnpYV2hY",
+  "title": "The Last EASY Trade Before It Explodes",
+  "channel_id": "UCyqlbzLoYtpqDXwRI9Yh5LA",
+  "duration_sec": 746,
+  "transcript_source": "youtube_manual",
+  "lang": "en-US",
+  "segments": 135,
+  "chars": 12774,
+  "est_tokens": 4258,
+  "sha256": {
+   "meta": "2e0da8af80086fdb729949b0b400db0700eb5994da7fd3a7bd1cab93defd37f9",
+   "segments": "1d77585e2111967da902b1b12ad2d1fbca78cae68cf8ad63187cc5ecd39b3f91"
+  }
+ },
+ {
+  "video_id": "EfGtEDJyRvk",
+  "title": "United Health Group Stock Drops 50% and Moody\u2019s Lowers US Credit Rating",
+  "channel_id": "UCbta0n8i6Rljh0obO7HzG9A",
+  "duration_sec": 1300,
+  "transcript_source": "youtube_auto",
+  "lang": "en",
+  "segments": 617,
+  "chars": 23366,
+  "est_tokens": 7789,
+  "sha256": {
+   "meta": "718a29c4bf2590f31cd19f0da25e641888ca31f5b679fc99143e1a671ab24a9f",
+   "segments": "2ea00fd737266e6a92d5ac6a7d854c95ef33267cb3044d1f9bdcf6aadd65193c"
+  }
+ },
+ {
+  "video_id": "eEE3S-MvzEs",
+  "title": "Google Stock Will Keep Going Higher, Here\u2019s Why",
+  "channel_id": "UCbta0n8i6Rljh0obO7HzG9A",
+  "duration_sec": 2808,
+  "transcript_source": "youtube_auto",
+  "lang": "en",
+  "segments": 1283,
+  "chars": 48558,
+  "est_tokens": 16186,
+  "sha256": {
+   "meta": "170dd9aef11480cc99df65ef909e8821ea39113ce6855fb4d82678151c70ba52",
+   "segments": "967981a7521b9a9ed50a63e0020bc12d2df170135707a19a243a819af7195798"
+  }
+ }
+]
