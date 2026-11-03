@@ -34,6 +34,19 @@ Per-layer approach is in architecture.md §13 — follow it. These rules apply o
 - Deterministic: no sleep, inject the clock, no test-order
   dependence. The suite runs shuffled; replay a failing order with
   `pytest --shuffle-seed=<N>` using the seed printed by the run.
+- CI runs the integration step in parallel (`-n 3 --dist loadfile`, #296); the
+  seed is the same on every worker, so `--shuffle-seed=<N>` replays it, serially
+  or with `-n`. Each worker has its own Postgres container, so never rely on
+  state shared between modules. `--run-ledger=<dir>` plus
+  `scripts/check_run_partition.py` proves each test ran exactly once and did not
+  error in setup. `tests/test_xdist_isolation_db.py` starts its own nested `-n 2`
+  run, so CI runs it in its own serial step and leaves it out of the parallel set
+  (`--ignore=tests/test_xdist_isolation_db.py`). Check a
+  parallel run yourself with
+  `pytest --collect-only -q --no-shuffle -m "integration and not image" > exp.txt`,
+  then `pytest -m "integration and not image" -n 3 --dist loadfile --run-ledger=led`,
+  then `python scripts/check_run_partition.py exp.txt led`. Locally the suite
+  stays serial: `-n` is not in `addopts`.
 - Test via public interfaces; prefer fakes over mocking internals.
 - `tests/` mirrors the package layout; name tests after the behaviour.
 

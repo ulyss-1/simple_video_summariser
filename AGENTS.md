@@ -60,6 +60,7 @@ Activate `.venv` first; all Python commands assume it.
   every code PR; engineers and QA run only the tests for the change they are
   working on (`_docs/process.md`)
 - `pytest tests/test_queue.py` - one test file
+- `-n` (pytest-xdist) is CI-only (#296); how to replay or check a parallel run: `_docs/testing-guidelines.md`
 - `ruff check .` and `mypy .` - lint and types
 - `pytest tests/test_pipeline_smoke_docker.py -m image` - the hermetic
   one-video smoke (#137): brings up the real compose stack in a throwaway

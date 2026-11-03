@@ -106,8 +106,31 @@ jobs:
         run: pytest -m "not integration"
       # testcontainers starts postgres:18-alpine on the runner's Docker. The
       # `image` tests are excluded here: they run in the `images` job.
+      # #296: the integration tests run on 3 xdist workers (`--dist loadfile`, so a
+      # module-scoped fixture is still set up once per module; each worker has its
+      # own Postgres container, see tests/conftest.py). The set is collected
+      # serially first, every worker records what it ran, and the checker fails
+      # the job when any test was missed, ran twice, or errored in setup.
+      # tests/test_xdist_isolation_db.py starts its own nested `-n 2` run with two
+      # more Postgres containers, so inside the busy outer run its marker-file
+      # rendezvous timed out. It is left out of the parallel set (--ignore, in the
+      # collect and the run alike) and runs on its own in the serial step below.
+      - name: Collect the serial integration test set
+        run: pytest --collect-only -q --no-shuffle -m "integration and not image" --ignore=tests/test_xdist_isolation_db.py > "$RUNNER_TEMP/expected-tests.txt"
       - name: pytest -m "integration and not image"
-        run: pytest -m "integration and not image"
+        run: pytest -m "integration and not image" -n 3 --dist loadfile --run-ledger="$RUNNER_TEMP/run-ledger" --ignore=tests/test_xdist_isolation_db.py
+      - name: Check every integration test ran exactly once
+        run: python scripts/check_run_partition.py "$RUNNER_TEMP/expected-tests.txt" "$RUNNER_TEMP/run-ledger"
+      - name: pytest tests/test_xdist_isolation_db.py (real parallel run, serial step)
+        run: pytest tests/test_xdist_isolation_db.py
+      - name: Upload the run ledger
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: run-ledger
+          path: |
+            ${{ runner.temp }}/run-ledger
+            ${{ runner.temp }}/expected-tests.txt
 
   frontend:
     needs: changes

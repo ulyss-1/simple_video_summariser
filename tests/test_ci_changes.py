@@ -68,6 +68,9 @@ def jobs(*files: str) -> dict[str, bool]:
         # tag script changes what `images` computes (and it has python tests).
         ((".github/workflows/publish-deps-images.yml",), True, False, False, False),
         (("scripts/deps_image_tag.py",), True, False, True, False),
+        # #296: the partition checker belongs to the python job alone.
+        (("scripts/check_run_partition.py",), True, False, False, False),
+        (("tests/run_ledger_plugin.py", "tests/test_xdist_partition.py"), True, False, False, False),
         (("tests/scripts/test_deps_image_tag.py",), True, False, True, False),  # "image" in the name
         (("tests/image_build.py",), True, False, True, False),
         ((), True, True, True, True),
