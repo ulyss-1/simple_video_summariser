@@ -230,6 +230,7 @@ def test_migrate_uses_the_anchor_and_workers_merge_it() -> None:
                 "OLLAMA_NUM_CTX": "8192",
                 "OLLAMA_OUTPUT_RESERVE_TOKENS": "2048",
                 "OLLAMA_TIMEOUT_SEC": "900",
+                "ANALYZE_MAX_RUNTIME_SEC": "3600",
             },
         ),
         (
@@ -270,7 +271,12 @@ def test_anthropic_api_key_is_on_the_analyzer_only() -> None:
         assert "ANTHROPIC_API_KEY" not in _block(name)
 
 
-OLLAMA_LLM_KEYS = ("OLLAMA_NUM_CTX", "OLLAMA_OUTPUT_RESERVE_TOKENS", "OLLAMA_TIMEOUT_SEC")
+OLLAMA_LLM_KEYS = (
+    "OLLAMA_NUM_CTX",
+    "OLLAMA_OUTPUT_RESERVE_TOKENS",
+    "OLLAMA_TIMEOUT_SEC",
+    "ANALYZE_MAX_RUNTIME_SEC",
+)
 
 
 def test_ollama_llm_settings_are_on_the_analyzer_only() -> None:

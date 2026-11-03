@@ -1491,7 +1491,7 @@ than reading `os.environ` directly.
 | `CANCELLED_JOB_RETENTION_DAYS` | `7` | planner: the `reap` task deletes a `dead` / `CANCELLED` job of a deleted video (tombstone, no `videos` row) this many days after it finished (#327); its returned count includes them |
 | `HEARTBEAT_SEC` / `REAP_AFTER_SEC` | `60` / `300` | workers, planner |
 | `MAX_ATTEMPTS_TRANSCRIBE` | `2` | transcriber |
-| `INGEST_MAX_RUNTIME_SEC` / `ANALYZE_MAX_RUNTIME_SEC` / `TRANSCRIBE_MAX_RTF` | `600` / `3600` / `3.0` | workers (§11.5) |
+| `INGEST_MAX_RUNTIME_SEC` / `ANALYZE_MAX_RUNTIME_SEC` / `TRANSCRIBE_MAX_RTF` | `600` / `3600` / `3.0` | workers (§11.5); compose passes `ANALYZE_MAX_RUNTIME_SEC` to the analyzer only |
 | `TRANSCRIBER_CPUS` | `3.0` | compose |
 | `ALERT_WEBHOOK_URL` | unset (no channel) | planner: secret; `TOOL_FAILURE` / `RESOURCE` dead-letters are POSTed here (#67) |
 | `ALERT_WEBHOOK_FORMAT` | `json` | planner: `json` (`{"text": ...}`, Slack-compatible) or `text` (plain body plus `Title` header, ntfy) |
@@ -2128,6 +2128,7 @@ services:
       OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-8192}
       OLLAMA_OUTPUT_RESERVE_TOKENS: ${OLLAMA_OUTPUT_RESERVE_TOKENS:-2048}
       OLLAMA_TIMEOUT_SEC: ${OLLAMA_TIMEOUT_SEC:-900}
+      ANALYZE_MAX_RUNTIME_SEC: ${ANALYZE_MAX_RUNTIME_SEC:-3600}
       # The only service that gets the key. From .env or the deploy shell's
       # environment; a Docker secret file is #136.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}

@@ -151,11 +151,12 @@ services:
       OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:4b}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-4-5}
-      # Ollama context and timeout: analyzer only. The reserve must stay below
+      # Ollama context and timeouts, and the analyze job cap: analyzer only. The reserve must stay below
       # the context, or the analyzer fails at startup (#85).
       OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-8192}
       OLLAMA_OUTPUT_RESERVE_TOKENS: ${OLLAMA_OUTPUT_RESERVE_TOKENS:-2048}
       OLLAMA_TIMEOUT_SEC: ${OLLAMA_TIMEOUT_SEC:-900}
+      ANALYZE_MAX_RUNTIME_SEC: ${ANALYZE_MAX_RUNTIME_SEC:-3600}
       # The only service that gets the key. From .env or the deploy shell's
       # environment; a Docker secret file is #136.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}

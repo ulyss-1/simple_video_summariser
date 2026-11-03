@@ -192,12 +192,18 @@ def test_anthropic_api_key_only_on_the_analyzer(
 def test_ollama_num_ctx_override_reaches_the_analyzer_only(
     compose_config: ConfigResolver,
 ) -> None:
-    keys = ("OLLAMA_NUM_CTX", "OLLAMA_OUTPUT_RESERVE_TOKENS", "OLLAMA_TIMEOUT_SEC")
+    keys = (
+        "OLLAMA_NUM_CTX",
+        "OLLAMA_OUTPUT_RESERVE_TOKENS",
+        "OLLAMA_TIMEOUT_SEC",
+        "ANALYZE_MAX_RUNTIME_SEC",
+    )
     services = _resolved(compose_config, OLLAMA_NUM_CTX="16384")
     analyzer = _env(services, "analyzer")
     assert analyzer["OLLAMA_NUM_CTX"] == "16384"
     assert analyzer["OLLAMA_OUTPUT_RESERVE_TOKENS"] == "2048"
     assert analyzer["OLLAMA_TIMEOUT_SEC"] == "900"
+    assert analyzer["ANALYZE_MAX_RUNTIME_SEC"] == "3600"
     for name in ("planner", "transcriber", "api", "migrate"):
         assert not set(keys) & set(_env(services, name)), name
 
