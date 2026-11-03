@@ -1462,6 +1462,8 @@ than reading `os.environ` directly.
 | `DATABASE_URL` | — | all |
 | `SUMMARIZER` | `ollama` | analyzer: `ollama`, `anthropic` or `free` (#364) |
 | `OLLAMA_MODEL` / `OLLAMA_HOST` | `qwen3.5:4b` | analyzer (see 16.7) |
+| `OLLAMA_NUM_CTX` | `8192` | analyzer: context window sent as `options.num_ctx` |
+| `OLLAMA_TIMEOUT_SEC` | `900` | analyzer: per-call HTTP timeout |
 | `OLLAMA_OUTPUT_RESERVE_TOKENS` | `2048` | analyzer: tokens of `OLLAMA_NUM_CTX` kept free for the reply; prompt budget is `OLLAMA_NUM_CTX - OLLAMA_OUTPUT_RESERVE_TOKENS`, and startup fails if it is `>= OLLAMA_NUM_CTX` (#85) |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY_FILE` / `ANTHROPIC_MODEL` | — / — / `claude-haiku-4-5` | analyzer (D6: API key only); the explicit file path is the opt-in Compose-secret source |
 | `FREE_LLM_PROVIDERS_FILE` | — (the shipped `adapters/summarize/free_providers.toml`) | analyzer, `SUMMARIZER=free` (#364): TOML list of OpenAI-compatible providers (`name`, `base_url`, `model`, `context_tokens`, `key_setting`), tried in file order |
@@ -1489,7 +1491,7 @@ than reading `os.environ` directly.
 | `CANCELLED_JOB_RETENTION_DAYS` | `7` | planner: the `reap` task deletes a `dead` / `CANCELLED` job of a deleted video (tombstone, no `videos` row) this many days after it finished (#327); its returned count includes them |
 | `HEARTBEAT_SEC` / `REAP_AFTER_SEC` | `60` / `300` | workers, planner |
 | `MAX_ATTEMPTS_TRANSCRIBE` | `2` | transcriber |
-| `INGEST_MAX_RUNTIME_SEC` / `ANALYZE_MAX_RUNTIME_SEC` / `TRANSCRIBE_MAX_RTF` | `600` / `3600` / `3.0` | workers (§11.5) |
+| `INGEST_MAX_RUNTIME_SEC` / `ANALYZE_MAX_RUNTIME_SEC` / `TRANSCRIBE_MAX_RTF` | `600` / `3600` / `3.0` | workers (§11.5); compose passes `ANALYZE_MAX_RUNTIME_SEC` to the analyzer only |
 | `TRANSCRIBER_CPUS` | `3.0` | compose |
 | `ALERT_WEBHOOK_URL` | unset (no channel) | planner: secret; `TOOL_FAILURE` / `RESOURCE` dead-letters are POSTed here (#67) |
 | `ALERT_WEBHOOK_FORMAT` | `json` | planner: `json` (`{"text": ...}`, Slack-compatible) or `text` (plain body plus `Title` header, ntfy) |
@@ -2123,6 +2125,10 @@ services:
       OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:4b}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-4-5}
+      OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-8192}
+      OLLAMA_OUTPUT_RESERVE_TOKENS: ${OLLAMA_OUTPUT_RESERVE_TOKENS:-2048}
+      OLLAMA_TIMEOUT_SEC: ${OLLAMA_TIMEOUT_SEC:-900}
+      ANALYZE_MAX_RUNTIME_SEC: ${ANALYZE_MAX_RUNTIME_SEC:-3600}
       # The only service that gets the key. From .env or the deploy shell's
       # environment; a Docker secret file is #136.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}

@@ -395,6 +395,9 @@ Settings finding, independent of the model choice: with `OLLAMA_NUM_CTX` 8192 an
 
 ## Status
 
+The analyzer can now be run at `OLLAMA_NUM_CTX=16384` through `.env` (#389);
+see "Labelled experiment" above.
+
 Not decided. `OLLAMA_MODEL` stays `qwen3.5:4b`. The #382 results and an
 evidence-based recommendation (pending the owner's decision) are in
 "Real-transcript benchmark (issue #382)" above. Changing the default

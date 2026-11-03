@@ -184,7 +184,12 @@ Then edit `.env`:
   a shell profile, shell history, or on a command line. Leave
   `ANTHROPIC_API_KEY_FILE` empty and deploy with the base command below.
 - **Ollama mode** — leave both Anthropic variables empty and use the base
-  command. No secret file is required.
+  command. No secret file is required. The deploy host sets
+  `OLLAMA_NUM_CTX=16384` in `.env` (owner decision after #382; the default
+  8192 ran out of context on some videos). The cost is the KV cache of the
+  model the host's Ollama keeps loaded, up to about 1 GB more with the
+  transcriber stopped; running beside the Whisper transcriber was not
+  measured.
 - **Anthropic, recommended file mode** — create the file outside the checkout
   as the deploy account, without putting the key in a command argument or shell
   history:
@@ -250,6 +255,7 @@ sudo systemctl restart ollama
 ```
 
 Model choice and measured speed on this host: `_docs/ollama-model-benchmark.md`.
+The analyzer context (`OLLAMA_NUM_CTX`, 16384 on this host) is set in `.env` (§6).
 
 Trade-off: Ollama is no longer on `127.0.0.1`, so host-local clients must point
 at the bridge address, and Ollama must start after `docker.service` (the
