@@ -19,6 +19,7 @@ from tests.xdist_support import (
     collected_ids,
     ledger_headers,
     ledger_outcomes,
+    nested_env,
     read_ledger_lines,
     run_pytest,
 )
@@ -293,6 +294,44 @@ def test_ledger_off_without_option(suite: Path) -> None:
         return out.strip().splitlines()[:-1]
 
     assert body(with_option.stdout) == body(without.stdout)
+
+
+def test_nested_run_environment_has_no_xdist_variables(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name, value in (
+        ("PYTEST_XDIST_WORKER", "gw9"),
+        ("PYTEST_XDIST_WORKER_COUNT", "9"),
+        ("PYTEST_XDIST_TESTRUNUID", "abc"),
+    ):
+        monkeypatch.setenv(name, value)
+    env = nested_env()
+    assert not [name for name in env if name.startswith("PYTEST_XDIST_")]
+
+
+def test_not_integration_selection_collects_same_set_serial_and_parallel(tmp_path: Path) -> None:
+    marker = ("-m", "not integration")
+    serial = run_pytest(REPO_ROOT, "--collect-only", "-q", "--no-shuffle", *marker)
+    assert serial.returncode == 0, serial.stdout[-2000:] + serial.stderr[-2000:]
+    ledger = tmp_path / "ledger"
+    run = run_pytest(
+        REPO_ROOT, "-n", "2", "--dist", "loadfile", f"--run-ledger={ledger}", "-q",
+        "-p", "tests.xdist_support", *marker,
+    )
+    assert run.returncode == 0, run.stdout[-2000:] + run.stderr[-2000:]
+    ran = {nodeid for rows in read_ledger_lines(ledger).values() for nodeid, _ in rows}
+    assert ran == set(collected_ids(serial.stdout))
+    assert len(ran) > 1000
+
+
+def test_a_ledger_from_the_other_step_is_rejected(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    expected = tmp_path / "expected-fast-tests.txt"
+    expected.write_text("t.py::fast_a\nt.py::fast_b\n\n2 tests collected in 0.01s\n", encoding="utf-8")
+    ledger = tmp_path / "run-ledger"
+    ledger.mkdir()
+    (ledger / "gw0.tsv").write_text("t.py::integ_a\tgw0\tpassed\nt.py::integ_b\tgw0\tpassed\n", encoding="utf-8")
+    assert _load_checker().main([str(expected), str(ledger)]) == 1
+    out = capsys.readouterr().out
+    assert "missing (never ran): t.py::fast_a" in out and "t.py::fast_b" in out
+    assert "extra (not in the serial set): t.py::integ_a" in out and "t.py::integ_b" in out
 
 
 def test_real_suite_collects_same_set_serial_and_parallel(tmp_path: Path) -> None:

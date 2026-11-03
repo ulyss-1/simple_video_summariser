@@ -102,8 +102,14 @@ jobs:
         run: ruff check .
       - name: mypy .
         run: mypy .
+      # #384: the fast step runs on 3 xdist workers too (`--dist loadfile`), with its
+      # own expected file and ledger directory, separate from the integration step's.
+      - name: Collect the serial fast test set
+        run: pytest --collect-only -q --no-shuffle -m "not integration" > "$RUNNER_TEMP/expected-fast-tests.txt"
       - name: pytest -m "not integration"
-        run: pytest -m "not integration"
+        run: pytest -m "not integration" -n 3 --dist loadfile --run-ledger="$RUNNER_TEMP/run-ledger-fast"
+      - name: Check every fast test ran exactly once
+        run: python scripts/check_run_partition.py "$RUNNER_TEMP/expected-fast-tests.txt" "$RUNNER_TEMP/run-ledger-fast"
       # testcontainers starts postgres:18-alpine on the runner's Docker. The
       # `image` tests are excluded here: they run in the `images` job.
       # #296: the integration tests run on 3 xdist workers (`--dist loadfile`, so a
@@ -131,6 +137,8 @@ jobs:
           path: |
             ${{ runner.temp }}/run-ledger
             ${{ runner.temp }}/expected-tests.txt
+            ${{ runner.temp }}/run-ledger-fast
+            ${{ runner.temp }}/expected-fast-tests.txt
 
   frontend:
     needs: changes

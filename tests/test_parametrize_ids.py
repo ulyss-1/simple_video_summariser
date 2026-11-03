@@ -14,11 +14,8 @@ with legitimate hex-string inputs (``0x1``, ``0x10``) and URL-encoded test data
 """
 
 import re
-import subprocess
-import sys
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+from tests.xdist_support import REPO_ROOT, run_pytest
 
 # `object.__repr__` renders ``<... object at 0x<hex>>``; functions, lambdas and
 # other default reprs share the `` at 0x<hex>`` tail. That tail is the address.
@@ -27,13 +24,8 @@ _ADDRESS_IN_ID = re.compile(r" at 0x[0-9A-Fa-f]+")
 
 def test_no_collected_node_id_embeds_a_memory_address() -> None:
     """Keeps the real wait: only a real pytest collection of the whole suite shows the node ids."""
-    result = subprocess.run(
-        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"],
-        capture_output=True,
-        text=True,
-        cwd=REPO_ROOT,
-        check=False,
-    )
+    # run_pytest drops the outer worker's PYTEST_XDIST_* variables (#384).
+    result = run_pytest(REPO_ROOT, "--collect-only", "-q")
     # 0 = tests collected, 5 = none collected; anything else is a real error.
     assert result.returncode in (0, 5), result.stdout + result.stderr
 

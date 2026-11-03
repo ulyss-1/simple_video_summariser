@@ -138,14 +138,19 @@ def _python_job() -> str:
     return _job("python")
 
 
-def test_only_the_python_job_integration_step_uses_xdist() -> None:
-    step = re.findall(r'run: (pytest -m "integration and not image"[^\n]*)', _python_job())
-    assert len(step) == 1
-    assert re.search(r" -n 3 --dist loadfile ", step[0] + " ")
+def test_exactly_the_two_pytest_steps_of_the_python_job_use_xdist() -> None:
+    """#384: the fast step and the integration step; no other step or job."""
+    fast = re.findall(r'run: (pytest -m "not integration"[^\n]*)', _python_job())
+    integ = re.findall(r'run: (pytest -m "integration and not image"[^\n]*)', _python_job())
+    assert len(fast) == 1 and len(integ) == 1
+    assert re.search(r" -n \d+ --dist loadfile ", fast[0] + " ")
+    assert re.search(r" -n 3 --dist loadfile ", integ[0] + " ")
     assert "-n auto" not in _text()  # one reviewable number
-    assert len(re.findall(r"(?:^|\s)-n \d+", _text())) == 1
-    for job in ("images", "bakeoff"):
-        assert " -n " not in _job(job)
+    assert len(re.findall(r"(?:^|\s)-n \d+ --dist loadfile", _text())) == 2
+    assert len(re.findall(r"(?:^|\s)-n \d+", _python_job())) == 2
+    for job in ("images", "bakeoff", "frontend", "e2e"):
+        if re.search(rf"^  {job}:", _text(), re.MULTILINE):
+            assert " -n " not in _job(job)
 
 
 def test_xdist_is_never_in_addopts() -> None:
@@ -156,17 +161,34 @@ def test_xdist_is_never_in_addopts() -> None:
 
 def test_partition_steps_run_in_order_and_the_ledger_is_kept_on_failure() -> None:
     job = _python_job()
+    checks = [m.start() for m in re.finditer(r"run: python scripts/check_run_partition\.py", job)]
+    assert len(checks) == 2
     order = [
-        job.index("--collect-only -q --no-shuffle -m \"integration and not image\""),
+        job.index("ruff check ."),
+        job.index("mypy ."),
+        job.index('--collect-only -q --no-shuffle -m "not integration"'),
+        job.index('run: pytest -m "not integration" -n '),
+        checks[0],
+        job.index('--collect-only -q --no-shuffle -m "integration and not image"'),
         job.index('run: pytest -m "integration and not image" -n 3'),
-        job.index("scripts/check_run_partition.py"),
+        checks[1],
         job.index("actions/upload-artifact@"),
     ]
     assert order == sorted(order)
+    # Nothing is shared between the two checks.
+    fast_check = re.search(r"check_run_partition\.py (\S+) (\S+)", job[checks[0] :])
+    integ_check = re.search(r"check_run_partition\.py (\S+) (\S+)", job[checks[1] :])
+    assert fast_check and integ_check
+    assert fast_check.group(1) == '"$RUNNER_TEMP/expected-fast-tests.txt"'
+    assert fast_check.group(2) == '"$RUNNER_TEMP/run-ledger-fast"'
+    assert fast_check.groups() != integ_check.groups()
+    assert fast_check.group(1) != integ_check.group(1) and fast_check.group(2) != integ_check.group(2)
+    fast_run = re.search(r'run: (pytest -m "not integration"[^\n]*)', job)
+    assert fast_run and '--run-ledger="$RUNNER_TEMP/run-ledger-fast"' in fast_run.group(1)
     # The nested-parallel isolation proof runs alone, after the parallel step, and is
     # left out of the collected and the parallel set (same flag on both).
     ignore = "--ignore=tests/test_xdist_isolation_db.py"
-    collect = re.search(r"run: (pytest --collect-only[^\n]*)", job)
+    collect = re.search(r'run: (pytest --collect-only[^\n]*"integration and not image"[^\n]*)', job)
     parallel = re.search(r'run: (pytest -m "integration and not image" -n 3[^\n]*)', job)
     assert collect and ignore in collect.group(1)
     assert parallel and ignore in parallel.group(1)
@@ -174,6 +196,7 @@ def test_partition_steps_run_in_order_and_the_ledger_is_kept_on_failure() -> Non
     assert serial and " -n " not in serial.group(1)
     assert job.index(serial.group(1)) > job.index("scripts/check_run_partition.py")
     assert "--run-ledger=" in job
-    upload = job[order[3] - 200 :]
+    upload = job[order[-1] - 200 :]
     assert re.search(r"if: failure\(\)\n\s+uses: actions/upload-artifact@[0-9a-f]{40}", upload)
-    assert "run-ledger" in upload
+    uploaded = re.findall(r"\$\{\{ runner\.temp \}\}/(\S+)", upload)
+    assert sorted(uploaded) == ["expected-fast-tests.txt", "expected-tests.txt", "run-ledger", "run-ledger-fast"]

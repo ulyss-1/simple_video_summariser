@@ -47,6 +47,13 @@ Per-layer approach is in architecture.md §13 — follow it. These rules apply o
   then `pytest -m "integration and not image" -n 3 --dist loadfile --run-ledger=led`,
   then `python scripts/check_run_partition.py exp.txt led`. Locally the suite
   stays serial: `-n` is not in `addopts`.
+- CI runs the fast step `pytest -m "not integration"` with `-n 3 --dist loadfile`
+  too (#384); local runs stay serial and `--shuffle-seed=<N>` replays a parallel
+  failure. Check it with `pytest --collect-only -q --no-shuffle -m "not integration" > exp-fast.txt`,
+  then `pytest -m "not integration" -n 3 --dist loadfile --run-ledger=led-fast`,
+  then `python scripts/check_run_partition.py exp-fast.txt led-fast`. A test that
+  starts a nested pytest uses `tests.xdist_support.run_pytest`, which drops the
+  outer worker's `PYTEST_XDIST_*` variables.
 - Test via public interfaces; prefer fakes over mocking internals.
 - `tests/` mirrors the package layout; name tests after the behaviour.
 

@@ -37,6 +37,12 @@ def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> 
     return True
 
 
+def nested_env(env_extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Environment for a pytest run started by a test."""
+    inherited = {k: v for k, v in os.environ.items() if not k.startswith("PYTEST_XDIST_")}  # noqa: TID251
+    return {**inherited, "PYTHONPATH": str(REPO_ROOT), "PYTHONDONTWRITEBYTECODE": "1", **(env_extra or {})}
+
+
 def run_pytest(
     cwd: Path,
     *args: str,
@@ -44,7 +50,7 @@ def run_pytest(
     timeout: float = 300,
 ) -> subprocess.CompletedProcess[str]:
     """``python -m pytest`` in a fresh interpreter, with the repo importable."""
-    env = {**os.environ, "PYTHONPATH": str(REPO_ROOT), "PYTHONDONTWRITEBYTECODE": "1", **(env_extra or {})}  # noqa: TID251
+    env = nested_env(env_extra)
     return subprocess.run(
         [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", *args],
         cwd=cwd,

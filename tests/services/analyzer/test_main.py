@@ -11,6 +11,7 @@ configuration, and SIGTERM during a database outage.
 from __future__ import annotations
 
 import ast
+import errno
 import json
 import logging
 import os
@@ -731,15 +732,26 @@ def _wait_for_events(lines: queue.Queue[str | None], event: str, count: int, see
             found += 1
 
 
-def _closed_loopback_port() -> int:
+@pytest.fixture
+def closed_loopback_port() -> Iterator[int]:
+    """A port nothing listens on. The bound, never-listening socket is held to the end
+    of the test, so no other process (another xdist worker) can be given the number."""
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+        yield int(sock.getsockname()[1])
 
 
-def test_sigterm_during_a_database_outage_exits_0_within_the_grace_period() -> None:
+def test_closed_loopback_port_stays_reserved_and_refuses(closed_loopback_port: int) -> None:
+    with socket.socket() as probe, pytest.raises(ConnectionRefusedError):
+        probe.connect(("127.0.0.1", closed_loopback_port))
+    with socket.socket() as second, pytest.raises(OSError) as raised:
+        second.bind(("127.0.0.1", closed_loopback_port))
+    assert raised.value.errno == errno.EADDRINUSE
+
+
+def test_sigterm_during_a_database_outage_exits_0_within_the_grace_period(closed_loopback_port: int) -> None:
     """Keeps the real wait: a real process must survive its real 1 s backoff, then honour SIGTERM."""
-    port = _closed_loopback_port()
+    port = closed_loopback_port
     grace = 5
     env = _clean_env(
         DATABASE_URL=f"postgresql://user:{DB_PASSWORD}@127.0.0.1:{port}/db?connect_timeout=3",
