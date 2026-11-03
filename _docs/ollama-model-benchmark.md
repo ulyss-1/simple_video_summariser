@@ -217,7 +217,7 @@ All four `ctx16k` runs succeeded, including the two that failed at 8192 (qwen on
 
 ### Host load before each run, and cleanup
 
-`per_run_extra.md` lists, for every run, the load average read just before the run (it includes the previous run's tail, so it sits around 4.3 to 5.8 for most runs and 0.38 for the first), the highest CPU use among the other running containers at that moment (at most 0.8%: `db`, `api`, `planner`, `web`; the live transcriber and analyzer were stopped), prompt and output tokens summed, items dropped and `start_sec` clamped. The full `docker stats` snapshots are in each run's checkpoint (not committed).
+`per_run_extra.md` lists, for every run, the load average read just before the run (it includes the previous run's tail, so it sits around 4.3 to 5.8 for most runs and 0.38 for the first), the highest CPU use among the other running containers at that moment (at most 5.0%: `db`, `api`, `planner`, `web`; the live transcriber and analyzer were stopped), prompt and output tokens summed, items dropped and `start_sec` clamped. The full `docker stats` snapshots are in each run's checkpoint (not committed).
 
 Cleanup: at the end the throwaway Postgres container `ytdigest-t382-db` and network `ytdigest-t382-net` were removed (it had no volume); no `ytdigest-t382-*` object is left. The `ytdigest-*` image ids are the same before and after (`host_facts_before.txt`, `host_facts_after.txt`): `ytdigest-whisper:latest` b87bc3fb5329, `ytdigest-backend:latest` 6b10d5f28369, `ytdigest-web:latest` 08f098a80af9, `ytdigest-deps:latest` 81c55c4ea3b0. The volume `ytdigest_whisper-models` was never mounted, the live database `ytdigest` was never connected to, and `/api/ps` was empty at the end.
 
