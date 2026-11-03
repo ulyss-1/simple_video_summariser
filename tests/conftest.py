@@ -219,6 +219,14 @@ def migrated_template(postgres_container: PostgresContainer) -> Iterator[str]:
                 command.upgrade(_alembic_config(), "head")
             finally:
                 get_settings.cache_clear()
+        # #386: migration 0026 seeds the owner's followed channels. Tests that
+        # use head_dsn expect an empty channels table, so remove them here
+        # (nothing references them yet). Migration tests use postgres_dsn.
+        with psycopg.connect(template_dsn, autocommit=True) as conn:
+            conn.execute(
+                "DELETE FROM channels WHERE channel_id = ANY(%s)",
+                ([cid for cid, _ in _seeded_channels()],),
+            )
 
     def seal() -> None:
         with psycopg.connect(admin_dsn, autocommit=True) as conn:
@@ -280,6 +288,15 @@ def head_dsn(
             conn.execute(
                 sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(db_name))
             )
+
+
+def _seeded_channels() -> tuple[tuple[str, str], ...]:
+    """The (channel_id, title) pairs migration 0026 seeds (#386)."""
+    from alembic.script import ScriptDirectory
+
+    revision = ScriptDirectory.from_config(_alembic_config()).get_revision("0026")
+    assert revision is not None
+    return revision.module.FOLLOWED_CHANNELS  # type: ignore[no-any-return]
 
 
 def _with_dbname(dsn: str, db_name: str) -> str:
