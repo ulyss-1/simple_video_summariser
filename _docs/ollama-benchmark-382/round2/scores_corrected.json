@@ -1,0 +1,130 @@
+{
+ "units_corrected": {
+  "gemma4:e4b|main|faithfulness": 4.5,
+  "gemma4:e4b|main|instruction_following": 4.5,
+  "gemma4:e4b|main|coverage": 4.0,
+  "qwen3.5:4b|main|faithfulness": 2.75,
+  "qwen3.5:4b|main|instruction_following": 3.0,
+  "qwen3.5:4b|main|coverage": 3.5,
+  "gemma4:e4b|ctx16k|faithfulness": 3.75,
+  "gemma4:e4b|ctx16k|instruction_following": 3.5,
+  "gemma4:e4b|ctx16k|coverage": 4.0,
+  "qwen3.5:4b|ctx16k|faithfulness": 2.5,
+  "qwen3.5:4b|ctx16k|instruction_following": 2.25,
+  "qwen3.5:4b|ctx16k|coverage": 4.25
+ },
+ "repeats": {
+  "S1": {
+   "model": "gemma4:e4b",
+   "label": "main",
+   "faithfulness": [
+    5,
+    5
+   ],
+   "instruction_following": [
+    5,
+    5
+   ],
+   "coverage": [
+    4,
+    4
+   ]
+  },
+  "S2": {
+   "model": "gemma4:e4b",
+   "label": "r2-ctx16k-rep3",
+   "faithfulness": [
+    5,
+    5
+   ],
+   "instruction_following": [
+    5,
+    5
+   ],
+   "coverage": [
+    5,
+    5
+   ]
+  },
+  "S3": {
+   "model": "gemma4:e4b",
+   "label": "r2-ctx16k-rep2",
+   "faithfulness": [
+    5,
+    5
+   ],
+   "instruction_following": [
+    5,
+    5
+   ],
+   "coverage": [
+    4,
+    5
+   ]
+  },
+  "S4": {
+   "model": "qwen3.5:4b",
+   "label": "r2-ctx16k-rep2",
+   "faithfulness": [
+    3,
+    4
+   ],
+   "instruction_following": [
+    5,
+    5
+   ],
+   "coverage": [
+    5,
+    5
+   ]
+  },
+  "S5": {
+   "model": "qwen3.5:4b",
+   "label": "r2-ctx16k-rep1",
+   "faithfulness": [
+    4,
+    4
+   ],
+   "instruction_following": [
+    4,
+    5
+   ],
+   "coverage": [
+    5,
+    5
+   ]
+  },
+  "S6": {
+   "model": "gemma4:e4b",
+   "label": "r2-ctx16k-rep1",
+   "faithfulness": [
+    4,
+    4
+   ],
+   "instruction_following": [
+    5,
+    5
+   ],
+   "coverage": [
+    3,
+    3
+   ]
+  },
+  "S7": {
+   "model": "qwen3.5:4b",
+   "label": "main",
+   "faithfulness": [
+    2,
+    2
+   ],
+   "instruction_following": [
+    5,
+    5
+   ],
+   "coverage": [
+    3,
+    3
+   ]
+  }
+ }
+}

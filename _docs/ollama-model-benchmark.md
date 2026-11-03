@@ -242,26 +242,26 @@ Method: two independent scorer passes, each by a fresh LLM agent of the same mod
 
 | Unit | Video         | Setting | gemma4:e4b F/I/C | qwen3.5:4b F/I/C  |
 | ---- | ------------- | ------- | ---------------- | ----------------- |
-| U01  | `bIvyxp-FAGU` | main    | 5.0/5.0/4.0      | 2.0/4.0/3.0       |
+| U01  | `bIvyxp-FAGU` | main    | 5.0/5.0/4.0      | 2.0/5.0/3.0 (I was 4.0 before the re-score, see Correction) |
 | U02  | `qovnfjVd8cs` | main    | 4.0/5.0/4.0      | no output (I = 1) |
 | U03  | `M8_DnpYV2hY` | main    | 5.0/5.0/4.0      | 3.5/5.0/4.0       |
 | U04  | `EfGtEDJyRvk` | main    | 4.0/3.0/4.0      | no output (I = 1) |
 | U05  | `EfGtEDJyRvk` | ctx16k  | 4.5/3.5/4.0      | 2.0/2.0/3.5       |
 | U06  | `eEE3S-MvzEs` | ctx16k  | 3.0/3.5/4.0      | 3.0/2.5/5.0       |
 
-Means at 8192 (main), scored summaries only: faithfulness gemma 4.5 over its four outputs against qwen 2.75 over its two (the only two qwen produced; on the same two videos, `bIvyxp-FAGU` and `M8_DnpYV2hY`, gemma scores 5.0 and qwen 2.75). Instruction following: gemma 4.5, qwen 2.75 (the table counts the two qwen no-output runs with a score row as 1). Coverage: gemma 4.0, qwen 3.5.
+Means at 8192 (main), scored summaries only: faithfulness gemma 4.5 over its four outputs against qwen 2.75 over its two (the only two qwen produced; on the same two videos, `bIvyxp-FAGU` and `M8_DnpYV2hY`, gemma scores 5.0 and qwen 2.75). Instruction following (after the re-score of the Correction below): gemma 4.5, qwen 5.0 on its two outputs; counting the two qwen no-output runs that have a score row as 1, qwen 3.0 (mean over both passes and four units, n = 8). Coverage: gemma 4.0, qwen 3.5.
 
 Over all five videos, applying the rubric's rule for failed runs (a job with no output scores instruction following 1; faithfulness and coverage are not scorable and are left out of those means), the 8192 instruction-following means include the two failed runs that had no score row, gemma on `eEE3S-MvzEs` and qwen on `eEE3S-MvzEs` (both 1):
 
 | 8192, all 5 videos | gemma4:e4b | qwen3.5:4b |
 |---|---|---|
-| Instruction following, scored summaries only | 4.5 (4 outputs) | 4.5 (2 outputs) |
-| Instruction following, no output = 1 | 3.8 (19 / 5) | 2.4 (12 / 5) |
+| Instruction following, scored summaries only | 4.5 (4 outputs) | 5.0 (2 outputs) |
+| Instruction following, no output = 1 | 3.8 (19 / 5) | 2.6 (13 / 5) |
 | Faithfulness, scored summaries only | 4.5 (4 outputs) | 2.75 (2 outputs) |
 | Coverage, scored summaries only | 4.0 (4 outputs) | 3.5 (2 outputs) |
 | Videos with no summary | 1 of 5 | 3 of 5 |
 
-The direction is unchanged under every way of counting. The scored-only means compare different sets of videos (gemma 4, qwen 2), which is why the failure counts are shown beside them. At 16384: faithfulness gemma 3.75 against qwen 2.5; instruction following 3.5 against 2.25; coverage 4.0 against 4.25. The sample is 6 units, two scorers; treat the differences as indicative.
+On the corrected data the two models are close on instruction following when both produce a summary; the stable difference is faithfulness (and failures), not format. The scored-only means compare different sets of videos (gemma 4, qwen 2), which is why the failure counts are shown beside them. At 16384: faithfulness gemma 3.75 against qwen 2.5; instruction following 3.5 against 2.25; coverage 4.0 against 4.25. The sample is 6 units, two scorers; treat the differences as indicative.
 
 Concrete errors the scorers found (derived text, no transcript quotes):
 
@@ -288,7 +288,16 @@ Gemma quotes the transcript verbatim more often than qwen in every comparable pa
 
 What was wrong: the mechanical counter (`tools/mech.py`) split a TLDR at every full stop followed by a capital, so "Dr. Eric Berg" counted as a sentence end. Every summary of `bIvyxp-FAGU` (a Dr. Eric Berg video) was over-counted by one or more. The round 1 table above said 6 (gemma) and 7 (qwen); the abbreviation-aware recount (`tools/sentences.py`, with a self-check on the "Dr. Eric Berg" sentence) gives 5 and 6. All other round 1 outputs are unchanged (recount for every run: `round2/sentence_recount.json`). The scorers saw the inflated number in the `FACTS (mechanical)` line of the pack.
 
-What it changes: qwen's `bIvyxp-FAGU` TLDR was within the 4 to 6 rule, not "7 sentences, one minor deviation". The statement that qwen exceeded the sentence limit there is withdrawn, and the same applies to the round 2 repeats (below). The instruction-following score of that unit for qwen (4.0 in both passes) was partly set by the wrong count (pass 1's note cites a "7-sentence TLDR"; the pass 2 score of 4 was given on the same FACTS line) and is under re-scoring from corrected packs; until then read the 8192 qwen instruction-following means of this section (2.75 and 2.4 over all five) as lower bounds: with a 5 there the 8192 qwen means would be 3.0 (scored-only) and 2.6 (all five). Faithfulness and coverage do not use the sentence count and are unaffected. The direction of every comparison in this section does not change: the qwen deficit is in faithfulness (2.75 against 4.5) and failures (3 of 5 videos against 1 of 5).
+What it changes: qwen's `bIvyxp-FAGU` TLDR was within the 4 to 6 rule, not "7 sentences, one minor deviation", and the same holds for the round 2 repeats (their first-draft count of 7 to 8 is withdrawn). The qwen summaries whose score could have been set by the wrong count (round 1 `bIvyxp-FAGU` in both passes, and repeat-pack S4, S5 and S7) got a measured re-score of instruction following only: two fresh blind scorers, working from corrected packs (same X/Y and S labels, only the sentence count in the FACTS line changed). Result: every re-scored summary got instruction following 5 from both scorers, except repeat summary S5 (qwen rep 1), which got 4 and 5 (scorer A: 22 quotes of which only 10 are verbatim, list padding). Faithfulness and coverage do not use the sentence count and were not re-scored. Gemma's scores are unchanged (its counts stayed inside the rule).
+
+Corrected figures, means over both passes (no output counts 1 on instruction following only):
+
+| Setting | gemma4:e4b F / I / C | qwen3.5:4b F / I / C |
+|---|---|---|
+| 8192, main (5 videos; qwen I counts its two no-output runs, n = 8) | 4.5 / 4.5 / 4.0 | 2.75 / 3.0 / 3.5 |
+| 16384, ctx16k (U05, U06) | 3.75 / 3.5 / 4.0 | 2.5 / 2.25 / 4.25 |
+
+Before the correction the 8192 qwen instruction-following mean was 2.75 and the all-five mean 2.4 (now 3.0 and, in the table above, 2.6). On the corrected data, **the two models are close on instruction following; the stable difference is faithfulness, where gemma is ahead in every comparison; coverage slightly favours qwen where both ran at 16384** (4.25 against 4.0 here, 4.33 against 4.12 in the repeats; at 8192 it is 3.5 against 4.0 in gemma's favour, on only two qwen outputs). Failures remain a second difference (qwen 3 of 5 videos at 8192 against gemma 1 of 5).
 
 ### What was not done
 
@@ -361,7 +370,7 @@ Order was randomised (seed `r2-rep`): qwen 3, gemma 3, gemma 2, gemma 1, qwen 1,
 - Failures: gemma 0 of 3, qwen 1 of 3 at 16384. Counting round 1's single 8192 runs too: gemma 4 of 4 and qwen 3 of 4 succeeded on this video.
 - Corrected analysis of the qwen failure: rep 3 died on the chunk call's 900 s `TimeoutError` (`LLM_UNAVAILABLE`), with a minimum `MemAvailable` of 5.5 GB, peak used 9.7 GB and the runner at 4.5 GB. It is not memory pressure. qwen3.5:4b generates at about 4.3 to 5.1 tokens/s and its chunk replies are long and uneven (1488, 2143 and 2531 tokens in the three successes, prefill about 4.8k tokens): the successful chunk calls took 583, 710 and 807 s, so the 900 s per-call limit is close to the model's normal range and a slightly longer reply times out. The same reading applies to round 1's qwen timeout on `qovnfjVd8cs` that round 1 left "undetermined": a long reply near the limit is a sufficient cause, so a memory attribution there was never needed. gemma4:e4b's chunk calls took 488 to 558 s with 1826 to 2282 output tokens, well inside the limit.
 - Mechanical output checks (the five 16k successes plus round 1; TLDR sentences use the corrected abbreviation-aware count, see the Correction above): TLDR sentences (rule 4 to 6) gemma 5, 6, 5 (round 1: 5), qwen 5, 5 (round 1: 6), so every TLDR is within the rule (the first draft of this section, with the old counter, wrongly said qwen broke it); quotes found verbatim in the transcript gemma 11 of 13, 13 of 16, 11 of 14 (round 1: 6 of 10), qwen 10 of 22, 7 of 13 (round 1: 3 of 8). No JSON repairs were needed in any run.
-- Quality variance across repeats is not scored here. A blind pack of the seven summaries (five round 2 successes, two round 1 runs) was made for the scorers; its scores will be added when they exist.
+- Quality across the repeats (blind, two scorers, seven summaries of `bIvyxp-FAGU`: five round 2 successes plus the two round 1 runs; instruction following after the sentence-count re-score). Means of the two passes, F / I / C: gemma4:e4b (n = 4) 4.75 / 5.0 / 4.12; qwen3.5:4b (n = 3) 3.17 / 4.83 / 4.33. Scorer agreement on the pack: mean absolute difference 0.14, maximum 1, n = 21 scores. Run-to-run spread is about one point for both models: gemma's overall per-summary score (mean of the three criteria) runs from 4.0 to 5.0, qwen's from 3.3 to 4.5; faithfulness spans 4 to 5 for gemma and 2 to 4 for qwen. So gemma is ahead on faithfulness in every comparison, the two are close on instruction following, and coverage slightly favours qwen (4.33 against 4.12). Gemma's repeat wall times were 821, 875 and 912 s against qwen's 1031 and 1151 s plus one 900 s chunk-call timeout.
 
 #### Not done in round 2
 
@@ -374,7 +383,7 @@ This is advice from measured data, not a change: `OLLAMA_MODEL`, `.env.example`,
 
 The issue's proposed decision rule was: stay on `qwen3.5:4b` unless `gemma4:e4b` has at least 0.5 higher mean faithfulness or coverage, no more failed videos, and a concurrent-run minimum `MemAvailable` of at least 1 GB without the watchdog tripping.
 
-- Faithfulness: met. Gemma scores 4.5 against 2.75 at 8192 and 3.75 against 2.5 at 16384 (coverage is level, 4.0 against 3.5 and 4.25). Qwen's errors are the kind a summarizer must not make: invented and swapped names and a wrong order of magnitude on a financial figure.
+- Faithfulness: met, and it is the stable difference after the sentence-count correction (instruction following is close). Gemma scores 4.5 against 2.75 at 8192 and 3.75 against 2.5 at 16384 (coverage is level, 4.0 against 3.5 and 4.25). Qwen's errors are the kind a summarizer must not make: invented and swapped names and a wrong order of magnitude on a financial figure.
 - Failures: met at the production setting. Gemma failed 1 of 5 videos at 8192 (a context overflow), qwen 3 of 5 (a timeout of undetermined cause, a context overflow and the 45 minute cap).
 - Memory with a transcription running: not measured, so this condition cannot be confirmed. It is the main open item. Alone, gemma4:e4b used 12.3 to 13.1 GB of this 14 GB host (runner 7.6 to 8.2 GB), left 1.4 to 2.3 GB free and wrote up to 3.9 GB to swap in one run. The live transcriber (Whisper large-v3, limited to 6 GB) would run beside it. A trip of the 1 GB watchdog is likely, though this was not tested. Qwen3.5:4b left 4.0 to 5.8 GB free alone.
 
