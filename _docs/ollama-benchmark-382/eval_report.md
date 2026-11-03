@@ -1,5 +1,7 @@
 # Summarizer comparison
 
+Committed copy: the per-chunk `Quotes` sections are removed because quotes are verbatim transcript sentences (no transcript text is committed). The full report is only in the scratch directory of the run.
+
 - **A**: qwen3.5:4b / v1
 - **B**: gemma4:e4b / v1
 - Videos in the golden set: 5
@@ -94,26 +96,7 @@ Topics
 
 ### Quotes
 
-#### 0:00-5:00
-
-- **B** · [0:00](https://www.youtube.com/watch?v=qovnfjVd8cs&t=0s) · Dr. Eric Berg, DC · I'm going to tell you everything you ever need to know about peptides. What they are, what they're not, do they work, and especially are they safe?
-- **B** · [0:30](https://www.youtube.com/watch?v=qovnfjVd8cs&t=30s) · Dr. Eric Berg, DC · Is a peptide a powder an injectable? Does it just help you with weight loss? There's just a lot of confusion around it.
-- **B** · [0:39](https://www.youtube.com/watch?v=qovnfjVd8cs&t=39s) · Dr. Eric Berg, DC · A peptide is made from amino acids. A peptide is a very short chain, okay, versus like if you were to eat a steak, piece of protein, that's a very long chain.
-- **B** · [0:59](https://www.youtube.com/watch?v=qovnfjVd8cs&t=59s) · Dr. Eric Berg, DC · So, look at them like a blueprint.
-- **B** · [2:19](https://www.youtube.com/watch?v=qovnfjVd8cs&t=139s) · Dr. Eric Berg, DC · You have a dimmer switch type peptide, or getting the entire new lamp type peptide.
-- **B** · [2:40](https://www.youtube.com/watch?v=qovnfjVd8cs&t=160s) · Dr. Eric Berg, DC · When we're young, we produce more than when we get older. This peptide turns the dimmer switch up.
-- **B** · [3:23](https://www.youtube.com/watch?v=qovnfjVd8cs&t=203s) · Dr. Eric Berg, DC · It's turned on 24/7 for a week. The signal never shuts off.
-- **B** · [4:12](https://www.youtube.com/watch?v=qovnfjVd8cs&t=252s) · Dr. Eric Berg, DC · And the big problem with tendons and ligaments, they have almost no blood supply.
-- **B** · [4:41](https://www.youtube.com/watch?v=qovnfjVd8cs&t=281s) · Dr. Eric Berg, DC · For ulcers in the stomach area, sometimes they'll take it for irritable bowel syndrome or leaky gut.
-
-#### 5:00-10:00
-
-- **B** · [5:40](https://www.youtube.com/watch?v=qovnfjVd8cs&t=340s) · Dr. Eric Berg, DC · If you were to get this done, you wouldn't be doing this yourself. You would need a doctor to inject you.
-- **B** · [9:26](https://www.youtube.com/watch?v=qovnfjVd8cs&t=566s) · Dr. Eric Berg, DC · Also, if the lab on the COA has no independent website, no phone number, no physical address, you want to be suspect.
-
-#### 10:00-15:00
-
-- **B** · [10:36](https://www.youtube.com/watch?v=qovnfjVd8cs&t=636s) · Dr. Eric Berg, DC · The biggest thing is the type of exercise called sprinting or high-intensity interval training.
+(removed from the committed copy: quote fields are transcript text)
 
 ## Most Men Will Get Prostate Cancer As They Age \(Here’s What To Do\) (bIvyxp-FAGU)
 
@@ -205,29 +188,7 @@ Topics
 
 ### Quotes
 
-#### 0:00-5:00
-
-- **A** · [0:40](https://www.youtube.com/watch?v=bIvyxp-FAGU&t=40s) · Dr. Eric Berg · Almost none of the men that were diagnosed or have cancer will die because of it.
-- **A** · [0:54](https://www.youtube.com/watch?v=bIvyxp-FAGU&t=54s) · Dr. Eric Berg · If prostate cancer was as dangerous as the diagnosis rate suggests, most men over 60 would already have been dead by now, but they're not.
-- **A** · [2:46](https://www.youtube.com/watch?v=bIvyxp-FAGU&t=166s) · Dr. Eric Berg · Prostate-specific antigen is not a cancer marker.
-- **A** · [4:58](https://www.youtube.com/watch?v=bIvyxp-FAGU&t=298s) · Dr. Eric Berg · This is the routine that I use every day to feel like I'm 18 years old, even though I'm 60 years old.
-- **B** · [0:00](https://www.youtube.com/watch?v=bIvyxp-FAGU&t=0s) · Dr. Eric Berg · Prostate cancer is the number one new cancer diagnosis in America right now.
-- **B** · [0:16](https://www.youtube.com/watch?v=bIvyxp-FAGU&t=16s) · Dr. Eric Berg · Men in their 40s, up to 35% of them have cancer. When they hit 50, up to 40% of them have cancer. 60s, it's over 55% of them have cancer. In their 70s, it drops down to 50, but in their 80s, it goes up to 60%.
-- **B** · [1:09](https://www.youtube.com/watch?v=bIvyxp-FAGU&t=69s) · Dr. Eric Berg · The prostate actually wraps around this little tube that's connected to your bladder called the urethra.
-- **B** · [1:27](https://www.youtube.com/watch?v=bIvyxp-FAGU&t=87s) · Dr. Eric Berg · Where basically it's benign, it's not going to be a problem, it just gets bigger over time.
-- **B** · [2:23](https://www.youtube.com/watch?v=bIvyxp-FAGU&t=143s) · Dr. Eric Berg · The enzyme responsible for changing into a liquid is called prostate-specific antigen.
-- **B** · [2:46](https://www.youtube.com/watch?v=bIvyxp-FAGU&t=166s) · Dr. Eric Berg · PSA is not a cancer marker.
-- **B** · [3:07](https://www.youtube.com/watch?v=bIvyxp-FAGU&t=187s) · Dr. Eric Berg · Testosterone turns into DHT with a certain enzyme and there's certain medications and also natural things to inhibit that enzyme, so a person would not get as much DHT and that's supposed to actually help reduce the prostate size.
-- **B** · [3:31](https://www.youtube.com/watch?v=bIvyxp-FAGU&t=211s) · Dr. Eric Berg · It can do all of those steps within the prostate cells, so it's not dependent on these other organs because vitamin D is intimately involved in helping regulate the size of the prostate, believe it or not.
-
-#### 5:00-10:00
-
-- **A** · [5:29](https://www.youtube.com/watch?v=bIvyxp-FAGU&t=329s) · Dr. Eric Berg · I'm going to go through the nine reasons why that could be high.
-- **A** · [5:43](https://www.youtube.com/watch?v=bIvyxp-FAGU&t=343s) · Unattributed · The scientist said PSA was never a cancer marker at all.
-- **A** · [5:59](https://www.youtube.com/watch?v=bIvyxp-FAGU&t=359s) · Dr. Eric Berg · It's just been a nightmare for men, all revolving around this darn PSA test.
-- **A** · [7:44](https://www.youtube.com/watch?v=bIvyxp-FAGU&t=464s) · Dr. Eric Berg · Number one is called the turtle. It's a cancer that will never turn into a malignancy, it will never be a problem.
-- **B** · [8:36](https://www.youtube.com/watch?v=bIvyxp-FAGU&t=516s) · Dr. Eric Berg · Now, number one, they would want to monitor the velocity or the change of what happens to the PSA number, okay. So over a course of a year, if it goes from two to seven, that's a little bit of a red flag. The velocity of greater than 0.75 ng/mL per year would be kind of a red flag.
-- **B** · [9:52](https://www.youtube.com/watch?v=bIvyxp-FAGU&t=592s) · Dr. Eric Berg · I highly recommend you go get a blood test, fasting insulin test. You want that under five.
+(removed from the committed copy: quote fields are transcript text)
 
 ## The Last EASY Trade Before It Explodes (M8\_DnpYV2hY)
 
@@ -332,39 +293,7 @@ Topics
 
 ### Quotes
 
-#### 0:00-5:00
-
-- **A** · [0:09](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=9s) · Unattributed · The winner of the edge is going to be the winner of the AI race.
-- **A** · [0:13](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=13s) · Jensen · AI is about to run everywhere and on everything that you own.
-- **A** · [1:38](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=98s) · Unattributed · It is faster, it is more private, and it does not need the cloud to think.
-- **A** · [2:44](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=164s) · Unattributed · Calix never even turned a profit. It lost money every single year.
-- **A** · [3:27](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=207s) · Brian · The AI investment is obviously in yourself. Because workers with AI skills are now demanding a 62% wage premium over those who don't.
-- **B** · [0:00](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=0s) · Unattributed · Agriculture equipment, manufacturing equipment, heavy industry equipment will all be agentic.
-- **B** · [0:26](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=26s) · Unattributed · Whoever wins edge wins the entire AI race.
-- **B** · [0:55](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=55s) · Unattributed · But the next chapter, that's going to be the chips that run AI out here in the real world on your devices.
-- **B** · [1:28](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=88s) · Unattributed · Instead of shipping everything up to a data center and waiting for an answer, the intelligence runs right there on the device, the chip that's inside your phone, inside your car, the camera on the wall, and of course, the robot that's on the factory floor.
-- **B** · [2:44](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=164s) · Unattributed · For its entire first decade as a public company, Calix never even turned a profit.
-- **B** · [2:55](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=175s) · Unattributed · It stopped being a box seller, and it became a recurring revenue software platform.
-- **B** · [3:26](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=206s) · Unattributed · I think it's pretty obvious that edge AI is the next wave for investments, but an easier AI investment is obviously in yourself.
-
-#### 5:00-10:00
-
-- **A** · [5:35](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=335s) · Brian · The annual profit has multiplied more than 40 times in six years.
-- **A** · [5:37](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=337s) · Unattributed · Nvidia's annual profit has multiplied more than 40 times in six years.
-- **A** · [5:59](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=359s) · Brian · Amborella is the purest bet there is on edge AI vision.
-- **A** · [9:41](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=581s) · Brian · Mobileye builds the IQ chip that is the eyes and reflexes of the car, running every camera frame inside the car itself.
-- **B** · [5:06](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=306s) · Unattributed · It's called Jetson-Thor, the on-robot brain, small enough to ride inside a humanoid, carrying about seven times the compute of the chip that it replaced.
-- **B** · [6:04](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=364s) · Unattributed · Amborella is the purest bet there is on edge AI vision.
-- **B** · [6:10](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=370s) · Unattributed · The chip that lets a camera, a drone, or a robot actually see the world and decide on the device itself with absolutely no trip to the cloud.
-- **B** · [7:30](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=450s) · Unattributed · Renassus just built the first automotive chip ever made on a 3nm process, the R-CAR X5H, and it delivers up to 400 trillion AI operations per second, while pulling roughly 35% less power than the chip before it.
-- **B** · [8:38](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=518s) · Unattributed · Broadcom designs them for the biggest cloud names on earth.
-- **B** · [9:19](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=559s) · Unattributed · The inference happens right inside the box in your house, with a 5G platform built alongside Samsung.
-- **B** · [9:54](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=594s) · Unattributed · IQ is already built into more than 230 million vehicles on the road, which quietly makes Mobileye one of the most widely deployed pieces of AI hardware on the planet.
-
-#### 10:00-15:00
-
-- **A** · [10:47](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=647s) · Unattributed · This is cyclical. And right now you're catching it as the cycle turns.
-- **B** · [11:43](https://www.youtube.com/watch?v=M8_DnpYV2hY&t=703s) · Unattributed · The most edge true tester out there, and right now we're starting to catch it on the turn.
+(removed from the committed copy: quote fields are transcript text)
 
 ## United Health Group Stock Drops 50% and Moody’s Lowers US Credit Rating (EfGtEDJyRvk)
 
@@ -469,37 +398,6 @@ Topics
 
 ### Quotes
 
-#### 0:00-5:00
-
-- **B** · [0:06](https://www.youtube.com/watch?v=EfGtEDJyRvk&t=6s) · Unattributed · Quality compounding machines that have sold off because of irrational fair.
-- **B** · [0:23](https://www.youtube.com/watch?v=EfGtEDJyRvk&t=23s) · Unattributed · The stock is up 5.6% today, but it still trades at a price of $38. that is down a staggering 40% year-to- date.
-- **B** · [1:21](https://www.youtube.com/watch?v=EfGtEDJyRvk&t=81s) · Unattributed · Moody's downgraded the US government debt from its AAA credit rating.
-- **B** · [1:30](https://www.youtube.com/watch?v=EfGtEDJyRvk&t=90s) · Scott Bessent · Moody's is a quote lacking indicator for US financial health and doesn't fully reflect the changes being made.
-- **B** · [4:41](https://www.youtube.com/watch?v=EfGtEDJyRvk&t=281s) · Unattributed · To be more specific, this entire event revolves around what's called the Medicare Advantage plan.
-
-#### 5:00-10:00
-
-- **B** · [7:00](https://www.youtube.com/watch?v=EfGtEDJyRvk&t=420s) · Unattributed · Now at the same time, the insurers believed that this was partially permanent.
-
-#### 10:00-15:00
-
-- **B** · [10:01](https://www.youtube.com/watch?v=EfGtEDJyRvk&t=601s) · Unattributed · I believe that this sell-off is overdone.
-- **B** · [11:24](https://www.youtube.com/watch?v=EfGtEDJyRvk&t=684s) · Unattributed · Moody's is a lagging indicator. That's what everyone thinks of credit agencies.
-- **B** · [12:39](https://www.youtube.com/watch?v=EfGtEDJyRvk&t=759s) · Unattributed · There's actually a number of studies that look at the empirical data of Moody's and S&amp;P Global's credit rating business to see if they are simply lagging indicators or if they're predictive.
-- **B** · [13:55](https://www.youtube.com/watch?v=EfGtEDJyRvk&t=835s) · Unattributed · The accuracy ratio assesses the discriminatory power of the credit ratings by comparing the communive accuracy of the ratings to a random model.
-- **B** · [14:03](https://www.youtube.com/watch?v=EfGtEDJyRvk&t=843s) · Unattributed · Part of what Moody's incorporated in their credit downgrade was this new bill being passed.
-- **B** · [14:13](https://www.youtube.com/watch?v=EfGtEDJyRvk&t=853s) · Unattributed · And this data was not created by Moody's or S&amp;P Global. This is from Piper Sandler and other thirdparty analysis firms.
-- **B** · [14:15](https://www.youtube.com/watch?v=EfGtEDJyRvk&t=855s) · Unattributed · This is from Piper Sandler and other thirdparty analysis firms. They're looking at this saying that we're simply not cutting enough.
-- **B** · [14:33](https://www.youtube.com/watch?v=EfGtEDJyRvk&t=873s) · Unattributed · if debt to GDP decreased, if the US government was paying 3% on its debt obligations and not seven.
-- **B** · [14:44](https://www.youtube.com/watch?v=EfGtEDJyRvk&t=884s) · Unattributed · It's not again new information. This is something that we've seen deteriorate over a long period of time.
-- **B** · [14:57](https://www.youtube.com/watch?v=EfGtEDJyRvk&t=897s) · Unattributed · After all, there's just not as many alternatives to the
-
-#### 15:00-20:00
-
-- **B** · [15:05](https://www.youtube.com/watch?v=EfGtEDJyRvk&t=905s) · Unattributed · And in terms of this downgrade, we have people like Tom Lee being asked what investors should do.
-- **B** · [15:33](https://www.youtube.com/watch?v=EfGtEDJyRvk&t=933s) · Unattributed · What Moody's has also changed that's not being highlighted here is they had a negative trend over the past couple of years, meaning things were getting worse for the United States and now they have a neutral trend.
-- **B** · [17:49](https://www.youtube.com/watch?v=EfGtEDJyRvk&t=1069s) · Unattributed · The last trailer has been viewed almost half a billion times in 24 hours.
-- **B** · [18:13](https://www.youtube.com/watch?v=EfGtEDJyRvk&t=1093s) · Unattributed · This company is literally doing something that no other company has ever done before.
-- **B** · [18:57](https://www.youtube.com/watch?v=EfGtEDJyRvk&t=1137s) · Unattributed · They have a philosophy of not looking at just next quarter's numbers.
+(removed from the committed copy: quote fields are transcript text)
 
 ## Google Stock Will Keep Going Higher, Here’s Why (eEE3S-MvzEs): no analysis for either run

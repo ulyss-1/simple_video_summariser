@@ -139,7 +139,19 @@ YouTube refused the subtitle fetch (HTTP 429) for five of the ten confirmed vide
 | `EfGtEDJyRvk` | Joseph Carlson            | 21:40    | auto `en`      | 23366 | 7789                         | 2      |
 | `eEE3S-MvzEs` | Joseph Carlson            | 46:48    | auto `en`      | 48558 | 16186                        | 4      |
 
-The model tokenizers count about the same as each other (3940 against 3862 prompt tokens for the roster call of `bIvyxp-FAGU`). Per-call prompt tokens are in the tables below.
+Titles: `bIvyxp-FAGU` "Most Men Will Get Prostate Cancer As They Age (Here's What To Do)"; `qovnfjVd8cs` "Everything You Need to Know About Peptides"; `M8_DnpYV2hY` "The Last EASY Trade Before It Explodes"; `EfGtEDJyRvk` "United Health Group Stock Drops 50% and Moody's Lowers US Credit Rating"; `eEE3S-MvzEs` "Google Stock Will Keep Going Higher, Here's Why".
+
+The model tokenizers count about the same as each other (3940 against 3862 prompt tokens for the roster call of `bIvyxp-FAGU`). Prompt tokens summed over all calls of a run (the model tokenizer's view; chunk calls plus the roster and reduce overhead; a failed run sums only the calls that completed):
+
+| Video | Est. tokens | gemma4:e4b, 8192 | qwen3.5:4b, 8192 | gemma4:e4b, 16384 | qwen3.5:4b, 16384 |
+|---|---|---|---|---|---|
+| `bIvyxp-FAGU` | 3541 | 11017 | 10501 | - | - |
+| `qovnfjVd8cs` | 3914 | 11526 (repeat 11305) | 3682 (failed) | - | - |
+| `M8_DnpYV2hY` | 4258 | 10408 | 10144 | - | - |
+| `EfGtEDJyRvk` | 7789 | 19582 | 9014 (failed) | 18253 | 17768 |
+| `eEE3S-MvzEs` | 16186 | 16670 (failed) | 24273 (cap) | 34698 | 32374 |
+
+The sums include about 3.4k to 3.9k tokens of roster call per run, so they are not a transcript size; the ratio of the repo estimator to the model count for the transcript alone is not separable from these records.
 
 ### Main protocol (`OLLAMA_NUM_CTX` 8192)
 
@@ -170,7 +182,7 @@ Rates and cost, over the two videos both models completed (`bIvyxp-FAGU`, `M8_Dn
 
 On the long videos the compute cost was 62 to 75 seconds per minute of video for both models when a run succeeded. One repeat of `qovnfjVd8cs` with gemma4:e4b took 884 s against 951 s the first time (7% apart), which is the only run-to-run noise measured. Prefill matches the short-prompt numbers above (about 20 to 24 tok/s). Gemma generates about 1.5 times faster than qwen here, which differs from the short-prompt result (5.76 against 5.63 tok/s); with one run per cell this is indicative only.
 
-Cache check: Ollama 0.40.13 returns no cached-token field in `/api/chat`. No call fell below the "suspected cache hit" threshold (50% of the estimated request tokens divided by 1.5), and the first call of every run is cold by construction.
+Cache check: the responses of Ollama 0.40.13 do list a `prompt_eval_cached_count` key (56 of the 57 recorded calls; the 57th is a call that timed out without a response). The driver stored the key names but not the value of that field, so "cached count = 0 for the first call" could not be verified per call from the records. What was verified instead: the first call of every run follows an unload with an empty `/api/ps`, and no call fell below the "suspected cache hit" threshold (prompt tokens below 50% of the estimated request tokens divided by 1.5), and the measured prefill rate of every first call (roster, 20 to 24 tok/s) matches the cold rate of the short-prompt measurement above, whereas a cached prefix would show an impossible rate. Treat the cold-prefill check as indirect.
 
 ### Failures and their causes
 
@@ -203,6 +215,12 @@ Everything else identical. Run on the two long videos only.
 
 All four `ctx16k` runs succeeded, including the two that failed at 8192 (qwen on `EfGtEDJyRvk`; gemma on `eEE3S-MvzEs`) and the one that hit the cap (qwen on `eEE3S-MvzEs`, which finished in 2918 s here). Note that at 16384 the adapter's chunk budget also grows (about 14 000 tokens), so the chunk calls ran with larger prompts: the number of calls differs from the 8192 runs (two chunk calls for `EfGtEDJyRvk` instead of three, four for `eEE3S-MvzEs`). Results at the two settings are therefore not run-for-run comparable. The cost is memory: the model's KV cache for the larger window is part of the figures above (gemma runner 7.9 to 8.2 GB, qwen 5.0 to 5.8 GB, against 7.6 and 4.1 to 4.4 GB at 8192 for the shorter videos).
 
+### Host load before each run, and cleanup
+
+`per_run_extra.md` lists, for every run, the load average read just before the run (it includes the previous run's tail, so it sits around 4.3 to 5.8 for most runs and 0.38 for the first), the highest CPU use among the other running containers at that moment (at most 0.8%: `db`, `api`, `planner`, `web`; the live transcriber and analyzer were stopped), prompt and output tokens summed, items dropped and `start_sec` clamped. The full `docker stats` snapshots are in each run's checkpoint (not committed).
+
+Cleanup: at the end the throwaway Postgres container `ytdigest-t382-db` and network `ytdigest-t382-net` were removed (it had no volume); no `ytdigest-t382-*` object is left. The `ytdigest-*` image ids are the same before and after (`host_facts_before.txt`, `host_facts_after.txt`): `ytdigest-whisper:latest` b87bc3fb5329, `ytdigest-backend:latest` 6b10d5f28369, `ytdigest-web:latest` 08f098a80af9, `ytdigest-deps:latest` 81c55c4ea3b0. The volume `ytdigest_whisper-models` was never mounted, the live database `ytdigest` was never connected to, and `/api/ps` was empty at the end.
+
 ### Memory without a concurrent transcription
 
 Measured with the live transcriber stopped but the owner's desktop apps and the rest of the stack running. The concurrent step with Whisper was not done (see "Not done").
@@ -231,13 +249,25 @@ Method: two independent scorer passes, each by a fresh LLM agent of the same mod
 | U05  | `EfGtEDJyRvk` | ctx16k  | 4.5/3.5/4.0      | 2.0/2.0/3.5       |
 | U06  | `eEE3S-MvzEs` | ctx16k  | 3.0/3.5/4.0      | 3.0/2.5/5.0       |
 
-Means at 8192 (main): faithfulness gemma 4.5 over its four outputs against qwen 2.75 over its two (the only two qwen produced; on the same two videos, `bIvyxp-FAGU` and `M8_DnpYV2hY`, gemma scores 5.0 and qwen 2.75). Instruction following: gemma 4.5, qwen 2.75 counting failures as 1 (4.5 on the two it produced). Coverage: gemma 4.0, qwen 3.5. At 16384: faithfulness gemma 3.75 against qwen 2.5; instruction following 3.5 against 2.25; coverage 4.0 against 4.25. The sample is 6 units, two scorers; treat the differences as indicative.
+Means at 8192 (main), scored summaries only: faithfulness gemma 4.5 over its four outputs against qwen 2.75 over its two (the only two qwen produced; on the same two videos, `bIvyxp-FAGU` and `M8_DnpYV2hY`, gemma scores 5.0 and qwen 2.75). Instruction following: gemma 4.5, qwen 2.75 (the table counts the two qwen no-output runs with a score row as 1). Coverage: gemma 4.0, qwen 3.5.
+
+Over all five videos, applying the rubric's rule for failed runs (a job with no output scores instruction following 1; faithfulness and coverage are not scorable and are left out of those means), the 8192 instruction-following means include the two failed runs that had no score row, gemma on `eEE3S-MvzEs` and qwen on `eEE3S-MvzEs` (both 1):
+
+| 8192, all 5 videos | gemma4:e4b | qwen3.5:4b |
+|---|---|---|
+| Instruction following, scored summaries only | 4.5 (4 outputs) | 4.5 (2 outputs) |
+| Instruction following, no output = 1 | 3.8 (19 / 5) | 2.4 (12 / 5) |
+| Faithfulness, scored summaries only | 4.5 (4 outputs) | 2.75 (2 outputs) |
+| Coverage, scored summaries only | 4.0 (4 outputs) | 3.5 (2 outputs) |
+| Videos with no summary | 1 of 5 | 3 of 5 |
+
+The direction is unchanged under every way of counting. The scored-only means compare different sets of videos (gemma 4, qwen 2), which is why the failure counts are shown beside them. At 16384: faithfulness gemma 3.75 against qwen 2.5; instruction following 3.5 against 2.25; coverage 4.0 against 4.25. The sample is 6 units, two scorers; treat the differences as indicative.
 
 Concrete errors the scorers found (derived text, no transcript quotes):
 
 - qwen3.5:4b: on `bIvyxp-FAGU` it garbles the central claim (says most prostate cancers are "not diagnosed because they never die from it"), attributes PSA levels to vitamin D and insulin (which affect prostate size), and invents descriptions of the three PSA types; on `M8_DnpYV2hY` it garbles a "cyclical market" conclusion that applies to one company, distorts an 80%-of-revenue figure, and labels a quote with the wrong speaker; on `EfGtEDJyRvk` (16k) it invents a name for the Take-Two CEO, says the UnitedHealth chairman interviews the CEO, and attributes the host's points to the former UNH CEO; on `eEE3S-MvzEs` (16k) it misreads Tesla revenue as $224.9 billion (the transcript says 22.49 billion, a 12% decline), says Tesla's stock fell "rather than" for fundamental reasons although the host stresses fundamentals, and misstates a Google Cloud growth rate.
 - gemma4:e4b: smaller errors: an advice sentence in the TLDR of `qovnfjVd8cs` that is not in the video and a loosely worded figure; a host opinion attributed to "some analysts" in `EfGtEDJyRvk`; in `eEE3S-MvzEs` (16k) it says retail investors "misjudge Google's stability" (the host says retail was right and analysts were wrong), reverses whose investment explains a list omission, and pads with a duplicate topic. Its instruction-following scores are lower on the longer videos (3.0 to 3.5); the scorers' notes cite duplicated topics, and every gemma TLDR had 5 or 6 sentences.
-- Mechanical checks, from the driver (no LLM), for the outputs that were produced. No successful run needed a JSON repair, none had markdown or a preamble, and every TLDR was one paragraph:
+- Mechanical checks, from the driver (no LLM), for the outputs that were produced. `start_sec` values clamped into the chunk span: 0 in most runs (gemma 1 on `EfGtEDJyRvk` at 8192 and 1 at 16384, 3 on `eEE3S-MvzEs` at 16384; qwen 2 on `EfGtEDJyRvk` and 5 on `eEE3S-MvzEs` at 16384, 2 in the failed-then-capped 8192 run of `eEE3S-MvzEs`); items dropped by the parser: 0 in every run (per run in `per_run_extra.md`). No successful run needed a JSON repair, none had markdown or a preamble, and every TLDR was one paragraph:
 
 | Output | TLDR sentences (rule 4 to 6) | Quotes verbatim in transcript | Speakers outside the roster (coerced) |
 |---|---|---|---|
@@ -260,8 +290,16 @@ Gemma quotes the transcript verbatim more often than qwen in every comparable pa
 - Repeats: one repeat only (gemma4:e4b on `qovnfjVd8cs`). The qwen repeats were skipped by the 3-failure rule and the rest were cancelled to make room for the `ctx16k` experiment. Each cell is a single run, so sampling noise is not measured beyond that one repeat (7% on wall time).
 - The concurrent-memory step (a Whisper large-v3 container transcribing while a summary runs, with the 1 GB watchdog) was not done. The acceptance criteria asking for peak memory with a transcription running are therefore not met.
 - The qwen3.5:4b re-run of `qovnfjVd8cs` was started at 08:03 and cancelled one minute later to run `ctx16k` on the long video with gemma instead; it has no result. The cause of qwen's first failure therefore stays undetermined.
-- No cached-token field is reported by this Ollama version; the third scorer pass was not needed.
-- The driver and acquisition scripts are not committed (scratch tooling kept outside the repository). `ytdigest eval report` covers the 8192 main runs only, because the `ctx16k` and repeat rows were removed from the throwaway database after each run (their outputs are in the run checkpoints, which are not committed).
+- The cached-token value was not stored per call (see the cache check above); the third scorer pass was not needed.
+- `ytdigest eval report` covers the 8192 main runs only, because the `ctx16k` and repeat rows were removed from the throwaway database after each run (their outputs are in the run checkpoints, which are not committed). The committed copy of the report has the per-chunk `Quotes` sections removed (verbatim transcript sentences); the full report exists only in the scratch directory of the run.
+- The three repeats of video 1 per model (only one gemma repeat exists) and the concurrent-memory step were not done and are not faked: see "How to run the remaining steps" below.
+
+### How to run the remaining steps
+
+The scripts are in `_docs/ollama-benchmark-382/tools/` (stdlib plus the repo's own modules; excluded from ruff and mypy by `extend-exclude` and mypy `exclude` of `_docs`). They were written for a scratch directory `B` outside the repo: copy `env.sh.example` to `B/env.sh`, set the paths at the top of `run.sh`, `run_pairs.py` and the other scripts, start a throwaway Postgres on a private docker network without a volume, run `alembic upgrade head` against it, freeze transcripts with `acquire_all.sh <ids>` (one at a time, 30 s apart; YouTube may answer 429) and load them with `run.sh python load.py B <ids>`. A single run is `run.sh python run_one.py --model <m> --video <id> --label <label> --raw B/raw [--force] [--cap-sec S]`; `run_pairs.py` does the paired main protocol (shortest video first, order seeded 382); `mech.py`, `stats.py` and `make_packs.py` produce the checks, tables and blind packs; `fake_ollama.py` lets the whole chain be dry-run without a model.
+
+- Three repeats of video 1 per model (not done; one gemma repeat exists): with the live transcriber and analyzer stopped, for each model and `n` in 1 to 3 run `OLLAMA_HOST=172.17.0.1:11434 ollama stop <model>` and then `run.sh python run_one.py --model <model> --video qovnfjVd8cs --label rep<n> --force --raw B/raw`, alternating the model order. Run them directly: `run_pairs.py` skips a model that already has 3 failures (qwen has), and the repeats are reported separately, never averaged into the tables. About 15 minutes each, 90 minutes in all.
+- Concurrent-memory step (not done): normalise the audio of `eEE3S-MvzEs` with the `YouTubeAudio` adapter in a throwaway `ytdigest-backend` container (read-only mount of the repo, scratch directory mounted for the output), then run the Whisper container `docker run --rm --name ytdigest-t382-whisper --cpus 3 --memory 6g -v ytdigest_whisper-models:/models:ro -e HF_HUB_OFFLINE=1 -e WHISPER_MODEL=large-v3 -e WHISPER_COMPUTE=int8 -e WHISPER_THREADS=3 <audio mount> --entrypoint python ytdigest-whisper:latest <loop>` where `<loop>` transcribes that file repeatedly with `FasterWhisperTranscriber` so Whisper stays busy for the whole summary run (that loop script is not provided and was not tested here). In parallel start `python3 tools/mem_watch.py --out B/logs/mem_concurrent.jsonl --whisper ytdigest-t382-whisper --pid <driver pid> --stop-file B/STOP` (it samples every 2 s and stops the container, the driver and the models if `MemAvailable` falls below 1 GB), then run the longest video once per model: `run.sh python run_one.py --model <model> --video eEE3S-MvzEs --label concurrent --force --cap-sec 4500 --raw B/raw` with `OLLAMA_NUM_CTX=16384` (8192 fails on this video). Compare the wall time with the clean `ctx16k` run above (2918 s qwen, 2932 s gemma). A watchdog trip is a result. Do this only with the live transcriber stopped, since it reproduces the transcriber's load.
 
 ### Recommendation (evidence-based advice pending the owner's decision)
 
