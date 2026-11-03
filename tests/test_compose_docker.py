@@ -189,6 +189,19 @@ def test_anthropic_api_key_only_on_the_analyzer(
         assert "ANTHROPIC_API_KEY" not in _env(services, name)
 
 
+def test_ollama_num_ctx_override_reaches_the_analyzer_only(
+    compose_config: ConfigResolver,
+) -> None:
+    keys = ("OLLAMA_NUM_CTX", "OLLAMA_OUTPUT_RESERVE_TOKENS", "OLLAMA_TIMEOUT_SEC")
+    services = _resolved(compose_config, OLLAMA_NUM_CTX="16384")
+    analyzer = _env(services, "analyzer")
+    assert analyzer["OLLAMA_NUM_CTX"] == "16384"
+    assert analyzer["OLLAMA_OUTPUT_RESERVE_TOKENS"] == "2048"
+    assert analyzer["OLLAMA_TIMEOUT_SEC"] == "900"
+    for name in ("planner", "transcriber", "api", "migrate"):
+        assert not set(keys) & set(_env(services, name)), name
+
+
 def test_web_is_the_only_published_port_and_on_loopback(
     compose_config: ConfigResolver,
 ) -> None:

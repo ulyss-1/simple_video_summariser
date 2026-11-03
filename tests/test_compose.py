@@ -227,6 +227,9 @@ def test_migrate_uses_the_anchor_and_workers_merge_it() -> None:
                 "OLLAMA_HOST": "http://host.docker.internal:11434",
                 "OLLAMA_MODEL": "qwen3.5:4b",
                 "ANTHROPIC_MODEL": "claude-haiku-4-5",
+                "OLLAMA_NUM_CTX": "8192",
+                "OLLAMA_OUTPUT_RESERVE_TOKENS": "2048",
+                "OLLAMA_TIMEOUT_SEC": "900",
             },
         ),
         (
@@ -265,6 +268,32 @@ def test_anthropic_api_key_is_on_the_analyzer_only() -> None:
     assert "ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}" in _block("analyzer")
     for name in ("db", "migrate", "api", "planner", "transcriber", "web"):
         assert "ANTHROPIC_API_KEY" not in _block(name)
+
+
+OLLAMA_LLM_KEYS = ("OLLAMA_NUM_CTX", "OLLAMA_OUTPUT_RESERVE_TOKENS", "OLLAMA_TIMEOUT_SEC")
+
+
+def test_ollama_llm_settings_are_on_the_analyzer_only() -> None:
+    anchor = _anchor_block("x-backend-env: &backend-env")
+    for key in OLLAMA_LLM_KEYS:
+        assert key in _block("analyzer")
+        assert key not in anchor
+        for name in ("db", "migrate", "api", "planner", "transcriber", "web"):
+            assert key not in _block(name)
+
+
+def test_ollama_llm_defaults_equal_settings_in_compose_and_env_example() -> None:
+    from common.config import Settings
+
+    block = _block("analyzer")
+    env_text = (REPO_ROOT / ".env.example").read_text()
+    defaults = {}
+    for key in OLLAMA_LLM_KEYS:
+        default = Settings.model_fields[key].default
+        defaults[key] = default
+        assert f"      {key}: ${{{key}:-{default}}}\n" in block + "\n"
+        assert f"\n{key}={default}\n" in env_text
+    assert defaults["OLLAMA_OUTPUT_RESERVE_TOKENS"] < defaults["OLLAMA_NUM_CTX"]
 
 
 def test_anthropic_overlay_is_explicit_and_analyzer_only() -> None:
