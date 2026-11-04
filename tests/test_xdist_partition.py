@@ -308,7 +308,10 @@ def test_nested_run_environment_has_no_xdist_variables(monkeypatch: pytest.Monke
 
 
 def test_not_integration_selection_collects_same_set_serial_and_parallel(tmp_path: Path) -> None:
-    marker = ("-m", "not integration")
+    # tests/common only: the whole-suite version cost ~7 s per test and, under -n on a
+    # small runner, ~40% of the fast step's wall time (#384); the CI steps check the
+    # whole suite on every run.
+    marker = ("-m", "not integration", "tests/common")
     serial = run_pytest(REPO_ROOT, "--collect-only", "-q", "--no-shuffle", *marker)
     assert serial.returncode == 0, serial.stdout[-2000:] + serial.stderr[-2000:]
     ledger = tmp_path / "ledger"
@@ -335,13 +338,14 @@ def test_a_ledger_from_the_other_step_is_rejected(tmp_path: Path, capsys: pytest
 
 
 def test_real_suite_collects_same_set_serial_and_parallel(tmp_path: Path) -> None:
-    """The real suite, dry-run under ``-n 2`` (no test body runs), equals the serial collection.
+    """Real ``tests/common``, dry-run under ``-n 2`` (no test body runs), equals the serial collection.
 
     ``--collect-only`` disables xdist, so a parallel *collection* is only reached by
     running; ``tests.xdist_support`` replaces each test's body with nothing. The real
     conftests, the ``image``/``whisper`` deselect hooks and the checker script all take part.
+    Scoped to ``tests/common`` to keep the nested runs cheap (#384).
     """
-    marker = ("-m", "integration and not image")
+    marker = ("-m", "integration and not image", "tests/common")
     serial = run_pytest(REPO_ROOT, "--collect-only", "-q", "--no-shuffle", *marker)
     assert serial.returncode == 0, serial.stdout[-2000:] + serial.stderr[-2000:]
     expected = tmp_path / "expected.txt"

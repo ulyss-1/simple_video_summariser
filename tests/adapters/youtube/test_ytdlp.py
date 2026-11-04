@@ -9,6 +9,7 @@ import pathlib
 import subprocess
 import sys
 import textwrap
+import time
 from collections.abc import Sequence
 from typing import Any
 
@@ -165,14 +166,34 @@ def test_is_running_is_false_when_the_proc_entry_vanishes_mid_read(
 def test_a_timeout_raises_transient_network_and_leaves_no_process_running(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Keeps the real wait: 1.5 s must outlast the real child's startup, then really expire."""
+    """The real child starts, then the deadline really expires and kills its group.
+
+    The deadline clock is held at zero until the child has written both pids
+    (observable condition, 30 s bound), so a loaded machine cannot expire the
+    timeout before the child's startup (seen at ``-n 4`` on 4 CPUs).
+    """
     pids_file = tmp_path / "pids"
+    started = time.monotonic()
+
+    def child_is_up() -> bool:
+        try:
+            return len(pids_file.read_text().split()) == 2
+        except (FileNotFoundError, ValueError):
+            return False
+
+    def clock() -> float:
+        up = child_is_up() or time.monotonic() - started > 30
+        return 1000.0 if up else 0.0
 
     def hanging(
         argv: Sequence[str], *, timeout: float, **_kw: Any
     ) -> subprocess.CompletedProcess[str]:
         return run_process(
-            [sys.executable, "-c", _HANGING_CHILD, str(pids_file)], timeout=timeout
+            [sys.executable, "-c", _HANGING_CHILD, str(pids_file)],
+            timeout=timeout,
+            cancelled=lambda: False,
+            poll_interval=0.05,
+            clock=clock,
         )
 
     with pytest.raises(TransientNetworkError):
