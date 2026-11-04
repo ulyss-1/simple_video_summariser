@@ -167,6 +167,12 @@ chmod 600 .env
 
 Then edit `.env`:
 
+- **Free providers with the local fallback (#392, after #393 is deployed)** — set
+  `SUMMARIZER=free`, `FREE_LLM_LOCAL_FALLBACK=1` and `OLLAMA_NUM_CTX=16384`, and
+  raise `ANALYZE_MAX_RUNTIME_SEC`: `gemma4:e4b` needs 62 to 75 s of model time per
+  minute of video, so a video of about 50 minutes or more that runs mostly on the
+  local model exceeds the default 3600. Section 8 covers `ollama pull`.
+
 - **`COMPOSE_FILE=compose.yml`** — add this line. It stops a bare
   `docker compose` on the host from merging the dev overlay
   `compose.override.yml` (which carries source bind mounts and
@@ -323,6 +329,13 @@ transcription backlog the analyses start between transcriptions; with a long
 analysis backlog the transcriptions start when it drains. A remote provider
 (`SUMMARIZER=anthropic`, or a free-tier answer) takes no part. The lock is per
 database, so it covers one deployment, not an Ollama shared with another host.
+
+**Free-tier local fallback (#392).** With `FREE_LLM_LOCAL_FALLBACK=1` run
+`ollama pull gemma4:e4b`. The analyzer reaches the same `OLLAMA_HOST` through the
+same ufw rule as `SUMMARIZER=ollama`; `ops/host/preflight.sh`'s
+`ollama-from-container` check verifies it. Memory: the gemma runner takes 7.6 to
+8.2 GB, so the transcriber is paused (#393 lock) while an analyze job uses it,
+and the model is unloaded before the lock is released.
 
 ---
 

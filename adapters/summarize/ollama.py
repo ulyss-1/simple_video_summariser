@@ -369,6 +369,88 @@ def _strip_think(content: str) -> str:
     return _THINK_BLOCK.sub("", content, count=1)
 
 
+def build_ollama_payload(
+    model: str, messages: list[Message], format: dict[str, Any] | None, num_ctx: int
+) -> dict[str, Any]:
+    """The ``/api/chat`` body: no streaming, no thinking, the context window, the native schema."""
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "think": False,
+        "options": {"num_ctx": num_ctx},
+    }
+    if format is not None:
+        payload["format"] = format
+    return payload
+
+
+@dataclass(frozen=True, slots=True)
+class OllamaReply:
+    content: str
+    input_tokens: int
+    output_tokens: int
+    done_reason: str | None
+
+
+def parse_ollama_reply(response: HttpResponse, *, model: str) -> OllamaReply:
+    """The reply of ``/api/chat``, raw. Raises ``LLMUnavailableError`` or ``BugError`` (a 4xx)."""
+    status = response.status
+    if not 200 <= status < 300:
+        snippet = response.body[:MAX_BODY_IN_MESSAGE_BYTES].decode("utf-8", "replace")
+        if status == 404:
+            raise LLMUnavailableError(
+                f"Ollama has no model {model!r} (HTTP 404); run: ollama pull {model}"
+            )
+        if 400 <= status < 500:
+            raise BugError(f"Ollama rejected the request with HTTP {status}: {snippet}")
+        raise LLMUnavailableError(
+            f"Ollama returned HTTP {status}: {snippet[:_MAX_UNAVAILABLE_BODY_CHARS]}"
+        )
+    if len(response.body) > MAX_RESPONSE_BYTES:
+        raise LLMUnavailableError(f"Ollama response is larger than {MAX_RESPONSE_BYTES} bytes")
+    try:
+        doc = json.loads(response.body.decode("utf-8"))
+    except (ValueError, RecursionError):
+        raise LLMUnavailableError("Ollama response is not JSON") from None
+    if not isinstance(doc, dict):
+        raise LLMUnavailableError("Ollama response is not a JSON object")
+    if doc.get("error") is not None:
+        raise LLMUnavailableError(
+            f"Ollama reported an error: {str(doc['error'])[:_MAX_UNAVAILABLE_BODY_CHARS]}"
+        )
+    message = doc.get("message")
+    text = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(text, str):
+        raise LLMUnavailableError("Ollama response has no message.content text")
+    reason = doc.get("done_reason")
+    return OllamaReply(
+        text,
+        _count(doc.get("prompt_eval_count"), "prompt_eval_count"),
+        _count(doc.get("eval_count"), "eval_count"),
+        reason if isinstance(reason, str) else None,
+    )
+
+
+def check_ollama_room(reply: OllamaReply, num_ctx: int) -> None:
+    """Raise ``LLMInvalidOutputError`` when the reply was cut off or the window is full."""
+    if reply.done_reason == "length" or reply.input_tokens + reply.output_tokens >= num_ctx:
+        raise LLMInvalidOutputError(
+            f"Ollama ran out of context (done_reason={reply.done_reason!r}, "
+            f"{reply.input_tokens} prompt + {reply.output_tokens} output tokens); "
+            f"raise OLLAMA_NUM_CTX (now {num_ctx}) or send less text"
+        )
+
+
+def read_ollama_reply(response: HttpResponse, *, model: str, num_ctx: int) -> OllamaReply:
+    """``parse_ollama_reply`` plus ``check_ollama_room``, with the think block removed."""
+    reply = parse_ollama_reply(response, model=model)
+    check_ollama_room(reply, num_ctx)
+    return OllamaReply(
+        _strip_think(reply.content), reply.input_tokens, reply.output_tokens, reply.done_reason
+    )
+
+
 def _count(value: object, field: str) -> int:
     """A usable token count, or 0 (Ollama omits the prompt count when cached)."""
     if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
@@ -792,15 +874,7 @@ class OllamaSummarizer:
         format: dict[str, Any] | None,
         is_repair: bool,
     ) -> str:
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "stream": False,
-            "think": False,
-            "options": {"num_ctx": self._num_ctx},
-        }
-        if format is not None:
-            payload["format"] = format
+        payload = build_ollama_payload(self.model, messages, format, self._num_ctx)
         request = json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
         # Outside the try below: ``LocalLlmBusy`` (a ``Defer``, #393) must reach the queue
@@ -830,68 +904,25 @@ class OllamaSummarizer:
             ) from err
         self._calls += 1
 
-        counts = (0, 0)
-        done_reason: str | None = None
-        content = ""
+        reply = OllamaReply("", 0, 0, None)
         try:
-            self._check_status(response)
-            if len(response.body) > MAX_RESPONSE_BYTES:
-                raise LLMUnavailableError(
-                    f"Ollama response is larger than {MAX_RESPONSE_BYTES} bytes"
-                )
-            doc = self._decode(response.body)
-            message = doc.get("message")
-            text = message.get("content") if isinstance(message, dict) else None
-            if not isinstance(text, str):
-                raise LLMUnavailableError("Ollama response has no message.content text")
-            content = text
-            counts = (
-                _count(doc.get("prompt_eval_count"), "prompt_eval_count"),
-                _count(doc.get("eval_count"), "eval_count"),
-            )
-            reason = doc.get("done_reason")
-            done_reason = reason if isinstance(reason, str) else None
-            self._input_tokens += counts[0]
-            self._output_tokens += counts[1]
+            reply = parse_ollama_reply(response, model=self.model)
+            self._input_tokens += reply.input_tokens
+            self._output_tokens += reply.output_tokens
         finally:
             self._log(
-                method, started, *counts, done_reason, is_repair, len(request), len(content)
+                method,
+                started,
+                reply.input_tokens,
+                reply.output_tokens,
+                reply.done_reason,
+                is_repair,
+                len(request),
+                len(reply.content),
             )
 
-        if done_reason == "length" or sum(counts) >= self._num_ctx:
-            raise LLMInvalidOutputError(
-                f"Ollama ran out of context (done_reason={done_reason!r}, "
-                f"{counts[0]} prompt + {counts[1]} output tokens); "
-                f"raise OLLAMA_NUM_CTX (now {self._num_ctx}) or send less text"
-            )
-        return _strip_think(content)
-
-    def _check_status(self, response: HttpResponse) -> None:
-        status = response.status
-        if 200 <= status < 300:
-            return
-        snippet = response.body[:MAX_BODY_IN_MESSAGE_BYTES].decode("utf-8", "replace")
-        if status == 404:
-            raise LLMUnavailableError(
-                f"Ollama has no model {self.model!r} (HTTP 404); run: ollama pull {self.model}"
-            )
-        if 400 <= status < 500:
-            raise BugError(f"Ollama rejected the request with HTTP {status}: {snippet}")
-        raise LLMUnavailableError(
-            f"Ollama returned HTTP {status}: {snippet[:_MAX_UNAVAILABLE_BODY_CHARS]}"
-        )
-
-    @staticmethod
-    def _decode(body: bytes) -> dict[str, Any]:
-        try:
-            doc = json.loads(body.decode("utf-8"))
-        except (ValueError, RecursionError):
-            raise LLMUnavailableError("Ollama response is not JSON") from None
-        if not isinstance(doc, dict):
-            raise LLMUnavailableError("Ollama response is not a JSON object")
-        if doc.get("error") is not None:
-            raise LLMUnavailableError(f"Ollama reported an error: {str(doc['error'])[:_MAX_UNAVAILABLE_BODY_CHARS]}")
-        return doc
+        check_ollama_room(reply, self._num_ctx)
+        return _strip_think(reply.content)
 
     def _log(
         self,

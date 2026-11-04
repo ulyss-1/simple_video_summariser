@@ -53,3 +53,15 @@ model = "gemma-4-26b-a4b-it"
 context_tokens = 32768
 key_setting = "PUTER_AUTH_TOKEN"
 protocol = "puter"
+
+# Local last resort (#392), tried for a call only when every provider above was
+# skipped or failed. protocol = "ollama" takes only name and model: the host is
+# OLLAMA_HOST, the context OLLAMA_NUM_CTX, the timeout OLLAMA_TIMEOUT_SEC, there
+# is no key (base_url, key_setting and context_tokens are refused). At most one,
+# and it must be the last table. It is validated always and dropped unless
+# FREE_LLM_LOCAL_FALLBACK=1. While a job uses it, the Whisper transcriber is held
+# off through the local-LLM lock (#393). Needs: ollama pull gemma4:e4b
+[[provider]]
+name = "local-ollama"
+protocol = "ollama"
+model = "gemma4:e4b"
