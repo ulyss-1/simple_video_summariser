@@ -27,6 +27,16 @@ from common.safe_url import redact
 #: ``last_error`` of a cancelled job (#237): fixed, so it carries no user input.
 CANCELLED_LAST_ERROR = "cancelled on request"
 
+#: The reasons a ``Defer`` carries for the local-LLM / Whisper exclusion (#393). Here, not in
+#: ``common.llm_lock``, so the pure ``common.metrics`` can name them without a cycle.
+#: A transcribe job could not start: an analysis holds the lock.
+LOCAL_LLM_BUSY = "local_llm_busy"
+#: An analyze job could not make its local call: a transcription holds the lock.
+WHISPER_BUSY = "whisper_busy"
+#: A transcribe job stepped aside for an analysis that is waiting (fairness).
+ANALYSIS_WAITING = "analysis_waiting"
+DEFER_REASONS: tuple[str, ...] = (LOCAL_LLM_BUSY, WHISPER_BUSY, ANALYSIS_WAITING)
+
 #: ``format_error`` output never exceeds this many UTF-8 bytes.
 MAX_ERROR_BYTES = 8 * 1024
 
@@ -168,11 +178,29 @@ class ControlFlow(Exception):
 
 
 class Defer(ControlFlow):
-    """Put the job back to run again at ``until``, without spending an attempt."""
+    """Put the job back to run again at ``until``, without spending an attempt.
 
-    def __init__(self, until: datetime) -> None:
+    ``reason`` (#393) is one of ``common.llm_lock.DEFER_REASONS``; the queue
+    stores ``deferred: <reason>`` in ``jobs.last_error`` so the Ops view says why
+    the job waits. Without one the row's ``last_error`` and ``error_class`` stay.
+    """
+
+    def __init__(self, until: datetime, reason: str | None = None) -> None:
         super().__init__(until)
         self.until = until
+        self.reason = reason
+
+
+class LocalLlmBusy(Defer):
+    """The local-LLM / Whisper exclusion (#393) is held by the other side.
+
+    A ``Defer``, so the queue resolves it without spending an attempt and
+    ``classify`` refuses it like any ``ControlFlow``. Adapters must let it
+    propagate, never wrap it into ``LLMUnavailableError``.
+    """
+
+    def __init__(self, until: datetime, reason: str) -> None:
+        super().__init__(until, reason)
 
 
 class Cancelled(ControlFlow):

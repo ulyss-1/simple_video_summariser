@@ -43,6 +43,7 @@ EMPTY = MetricsSnapshot(
 
 FAMILIES = [
     "queue_depth",
+    "jobs_deferred",
     "feed_gap_channels",
     "job_duration_seconds",
     "whisper_rtf",
@@ -103,6 +104,7 @@ def test_metric_types_follow_the_spec() -> None:
     types = dict(ln.split()[2:4] for ln in lines(EMPTY) if ln.startswith("# TYPE "))
     assert types == {
         "queue_depth": "gauge",
+        "jobs_deferred": "gauge",
         "feed_gap_channels": "gauge",
         "job_duration_seconds": "histogram",
         "whisper_rtf": "gauge",
@@ -299,6 +301,28 @@ def test_inf_appears_only_as_the_le_label() -> None:
         'le="+Inf"' in ln for ln in body.splitlines() if "Inf" in ln and not ln.startswith("#")
     )
     assert "nan" not in body.lower()
+
+
+# -- jobs_deferred (#393) ---------------------------------------------------------------
+
+
+def test_jobs_deferred_is_zero_filled_for_all_three_reasons() -> None:
+    assert samples(EMPTY, "jobs_deferred") == [
+        'jobs_deferred{reason="analysis_waiting"} 0',
+        'jobs_deferred{reason="local_llm_busy"} 0',
+        'jobs_deferred{reason="whisper_busy"} 0',
+    ]
+
+
+def test_jobs_deferred_reports_the_counts_and_drops_unknown_reasons() -> None:
+    snap = replace(
+        EMPTY, jobs_deferred={"local_llm_busy": 2, "whisper_busy": 1, "surprise": 9}
+    )
+    assert samples(snap, "jobs_deferred") == [
+        'jobs_deferred{reason="analysis_waiting"} 0',
+        'jobs_deferred{reason="local_llm_busy"} 2',
+        'jobs_deferred{reason="whisper_busy"} 1',
+    ]
 
 
 # -- queue_depth ------------------------------------------------------------------------

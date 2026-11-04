@@ -87,6 +87,7 @@ from common.chunking import chunk_segments
 from common.config import Settings, get_settings
 from common.db import connect as default_connect
 from common.errors import BugError
+from common.llm_lock import WhisperGate
 from common.logging import configure_logging
 from common.models import (
     AudioRef,
@@ -314,6 +315,8 @@ def build_handlers(
                 transcriber=transcriber,
                 chunker=split,
                 settings=settings,
+                # The local-LLM / Whisper exclusion (#393); a gate per job, its own connection.
+                whisper_gate=WhisperGate(open_connection),
             )(job, ctx)
 
     return {"ingest": ingest, "transcribe": transcribe}

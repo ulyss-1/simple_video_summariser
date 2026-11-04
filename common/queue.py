@@ -142,6 +142,22 @@ _DEFER_SQL = _outcome_sql(
         "progress": "NULL",
     }
 )
+#: A ``Defer`` with a reason (#393) also says why in ``last_error``, a fixed text
+#: (``deferred: <reason>``), and clears ``error_class`` so the row reads as a wait,
+#: not as the failure an earlier attempt left. Typed: a bare parameter in a ``CASE``
+#: branch next to a typed column would not resolve.
+_DEFER_REASON_SQL = _outcome_sql(
+    {
+        "state": "'pending'",
+        "run_after": "%(until)s",
+        "attempts": "attempts-1",
+        "locked_by": "NULL",
+        "locked_at": "NULL",
+        "progress": "NULL",
+        "last_error": "%(deferred_error)s::text",
+        "error_class": "NULL::text",
+    }
+)
 _HAND_BACK_SQL = _outcome_sql(
     {
         "state": "'pending'",
@@ -653,7 +669,15 @@ class PostgresQueue:
         try:
             yield job
         except Defer as defer:
-            outcome = self._resolve(job, worker, _DEFER_SQL, {"until": defer.until})
+            if defer.reason is None:
+                outcome = self._resolve(job, worker, _DEFER_SQL, {"until": defer.until})
+            else:
+                outcome = self._resolve(
+                    job,
+                    worker,
+                    _DEFER_REASON_SQL,
+                    {"until": defer.until, "deferred_error": f"deferred: {defer.reason}"},
+                )
             self._log_cancelled(job, outcome)
         except (Cancelled, KeyboardInterrupt, SystemExit) as stop:
             outcome = self._resolve(job, worker, _HAND_BACK_SQL, {})

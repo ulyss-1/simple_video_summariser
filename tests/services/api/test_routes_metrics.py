@@ -54,6 +54,8 @@ class FakeConn:
         q = self._current
         if "GROUP BY kind, state" in q:
             return [("ingest", "pending", 2), ("notify", "pending", 3)]
+        if "starts_with(last_error" in q:
+            return [("local_llm_busy", 3)]
         if "extract(epoch" in q:
             return [("analyze", *(1,) * len(DURATION_BUCKETS), 1, 12.5)]
         if "GROUP BY model" in q:
@@ -108,6 +110,9 @@ def test_metrics_answers_200_with_the_text_format_content_type(app: FastAPI) -> 
     assert 'job_duration_seconds_count{kind="analyze"} 1' in body
     assert "whisper_rtf 0.25\n" in body
     assert 'llm_tokens_total{model="evil\\"model\\nx",direction="output"} 20' in body
+    assert 'jobs_deferred{reason="local_llm_busy"} 3\n' in body
+    assert 'jobs_deferred{reason="whisper_busy"} 0\n' in body
+    assert 'jobs_deferred{reason="analysis_waiting"} 0\n' in body
     assert "llm_cost_usd_total 0\n" in body
     assert "speaker_coercions_total 4\n" in body
     assert "audio_bytes_used 1234\n" in body
@@ -116,6 +121,7 @@ def test_metrics_answers_200_with_the_text_format_content_type(app: FastAPI) -> 
 
 _FAMILIES = (
     "queue_depth",
+    "jobs_deferred",
     "feed_gap_channels",
     "job_duration_seconds",
     "whisper_rtf",
@@ -171,7 +177,7 @@ def test_one_statement_per_family_in_one_read_only_repeatable_read_transaction(
 
     _get(app)
 
-    assert len(conn.queries) == 10
+    assert len(conn.queries) == 11
     assert conn.read_only is True
     assert conn.isolation_level == psycopg.IsolationLevel.REPEATABLE_READ
     assert conn.rollbacks == 1

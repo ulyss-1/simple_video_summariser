@@ -302,6 +302,26 @@ container-to-host traffic unless those Docker bridge ranges are allowed. Never
 use a broad `ufw allow 11434/tcp`; the bridge-gateway default above avoids this
 firewall maintenance.
 
+**Analysis with a local model pauses transcription (#393).** On this host a local
+model cannot run beside a Whisper `large-v3` transcription (both thrash: see
+`_docs/ollama-model-benchmark.md`), so the analyzer and the transcriber never
+overlap while the model is local. A database advisory lock decides it: an analysis
+takes it before its first request to Ollama, a transcription holds it while it
+runs. A running transcription is never killed and a running analysis is never
+interrupted; the side that arrives second waits.
+
+What you see: the waiting job is `pending` with a future `run_after` and its
+`last_error` reads `deferred: local_llm_busy` (a transcribe job waiting for an
+analysis), `deferred: whisper_busy` (an analysis waiting for a transcription) or
+`deferred: analysis_waiting` (a transcription stepping aside for a waiting
+analysis). It retries about every 30 s and spends no attempt, so nothing dead-letters.
+The Ops page shows the text in the error column, and `/metrics` has
+`jobs_deferred{reason}`, the number of jobs deferred right now. With a long
+transcription backlog the analyses start between transcriptions; with a long
+analysis backlog the transcriptions start when it drains. A remote provider
+(`SUMMARIZER=anthropic`, or a free-tier answer) takes no part. The lock is per
+database, so it covers one deployment, not an Ollama shared with another host.
+
 ---
 
 ## 9. UID/GID for host-mounted output

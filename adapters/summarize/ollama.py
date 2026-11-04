@@ -803,6 +803,11 @@ class OllamaSummarizer:
             payload["format"] = format
         request = json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
+        # Outside the try below: ``LocalLlmBusy`` (a ``Defer``, #393) must reach the queue
+        # unchanged, not as ``LLMUnavailableError``, and no request goes out while it is busy.
+        if self._scope is not None:
+            self._scope.local_llm.ensure_held()
+
         started = self._clock()
         try:
             scope = self._scope

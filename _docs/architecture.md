@@ -148,7 +148,9 @@ different cost profiles, different priorities.
 **Singleton constraint:** `planner` must run at exactly one replica. Its
 operations (RSS polling, reaping, audio purge, sweep enqueue) are not safe to
 run concurrently without advisory locking. If replicas ever become necessary,
-wrap each periodic task in `pg_try_advisory_lock`.
+wrap each periodic task in `pg_try_advisory_lock`. (The planner's tasks already
+take advisory locks, keys `(LOCK_NAMESPACE, n)`; the local-LLM / Whisper exclusion
+(#393, 11.5) uses its own key `(LOCK_NAMESPACE_LLM, 1)`, so the two cannot collide.)
 
 All other services are stateless and horizontally scalable; `SKIP LOCKED`
 makes worker concurrency safe by construction.
@@ -2323,7 +2325,45 @@ the first provider of the list that answers. A provider with no key, a rejected 
 `llm_unavailable` and the queue retries it. `analyses.model` is the fixed label
 `free-tier`; the provider and model that served each call are logged
 (`free_tier_call`). A provider with `protocol = "puter"` uses the call route behind Puter's `puter.ai.chat()` (undocumented by Puter, so best effort; Gemma 4 models cost nothing). The transcript text is sent to those third parties, so the mode
-is opt-in, and no cost is recorded.
+is opt-in, and no cost is recorded. A provider that talks to the local Ollama
+(`protocol = "ollama"`, #392) is subject to the exclusion below: when it was
+skipped only because `LocalLlmBusy` was raised and nothing else answered, the chain
+re-raises `LocalLlmBusy` (a `Defer`) and never `LLMUnavailableError`, which would
+retry with backoff and burn an attempt.
+
+**Local LLM and Whisper never overlap (#393).** On a 14 GB host a local model
+next to a Whisper `large-v3` run thrashes (`_docs/ollama-model-benchmark.md`), so
+one Postgres session advisory lock, per database, keeps them apart. The key is
+`pg_try_advisory_lock(LOCK_NAMESPACE_LLM, 1)` with `LOCK_NAMESPACE_LLM = 0x4C4C4D31`
+(`common/llm_lock.py`), a different namespace from the planner's
+`LOCK_NAMESPACE = 0x59545044` and its task ids. It has two modes: an analyze job
+takes it **exclusive** right before its first local HTTP call
+(`OllamaSummarizer._chat` calls `JobScope.local_llm.ensure_held()`, outside its
+error wrapper), a transcribe job takes it **shared** for the rest of its handler,
+after the low-disk guard and before the audio fetch. Two transcribers may overlap,
+a second local analysis may not. Both are non-blocking `pg_try_*`, because the
+#66 watchdog and heartbeat are armed at claim. The guard owns the connection the
+lock lives on (never the claim, heartbeat or data connection), so no commit or
+rollback releases it, and closing it, in a `finally` of the handler, or the
+process dying, does. A remote provider, `SUMMARIZER=anthropic` and a free-tier
+chain answered remotely never touch it; the CLI and the in-process queue use
+`NullLocalLlmGuard`. The side that cannot take its mode raises `LocalLlmBusy`, a
+`Defer`: the job returns to `pending` at `now + 30 s` (+-20 % jitter,
+`LOCK_BUSY_DEFER`), its attempt refunded, no analysis written. A running
+transcription is never killed and a running analysis is never interrupted.
+Fairness: a transcribe job also defers (`analysis_waiting`) while a pending
+analyze job deferred as `whisper_busy` is due within `2 x LOCK_BUSY_DEFER`, so a
+transcription backlog cannot starve a waiting analysis; with continuous work on
+one side the other side waits until its queue drains.
+
+*Defer reasons.* `Defer` takes an optional `reason`; the queue then writes
+`last_error = 'deferred: <reason>'` and `error_class = NULL` on the row (a
+`done` clears it; callers without a reason, such as the low-disk guard, the config
+mismatch and premieres, leave both columns alone). The reasons are
+`local_llm_busy` (a transcribe job found an analysis running), `whisper_busy` (an
+analyze job found a transcription running) and `analysis_waiting`. `GET /ops/jobs`
+already returns `last_error`, so the Ops page shows why a job waits. Each deferral
+logs one INFO line, `job.deferred_for_lock`, with `reason` and `until`.
 
 **Secrets.** `.env` is gitignored; `.env.example` is committed with placeholder
 values. `POSTGRES_PASSWORD` uses `:?required` so the stack refuses to start
@@ -2459,7 +2499,10 @@ gauges, no tracing stack.
 - **Structured JSON logs** with `job_id`, `video_id`, `kind`, `attempt` on
   every line. One correlation id per job, propagated through adapter calls.
 - **Key metrics** (exposed at `/metrics`, scraped or just curl'd):
-  `queue_depth{kind,state}`, `job_duration_seconds{kind}`,
+  `queue_depth{kind,state}`, `jobs_deferred{reason}` (#393: a gauge of pending
+  jobs deferred now by the local-LLM / Whisper exclusion, zero-filled for
+  `local_llm_busy`, `whisper_busy` and `analysis_waiting`, derived from
+  `jobs.last_error`; not a lifetime counter), `job_duration_seconds{kind}`,
   `whisper_rtf`, `llm_tokens_total{model,direction}` (directions `input`,
   `output`, `cache_read`, `cache_write`), `llm_calls_total{model}` (#139),
   `llm_cost_usd_total`; the three LLM families sum `analyses` and

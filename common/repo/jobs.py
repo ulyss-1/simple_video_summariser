@@ -162,6 +162,44 @@ def queue_depth(conn: psycopg.Connection[Any]) -> dict[tuple[str, str], int]:
     return {(str(kind), str(state)): int(count) for kind, state, count in rows}
 
 
+#: What a ``Defer`` with a reason writes to ``jobs.last_error`` before the reason (#393).
+DEFERRED_PREFIX = "deferred: "
+
+
+def deferred_job_counts(conn: psycopg.Connection[Any]) -> dict[str, int]:
+    """Pending jobs waiting on a deferral reason (#393), by reason; reasons with none are absent.
+
+    A job is counted from its ``last_error`` (``deferred: <reason>``); a later
+    ``done`` or a failure overwrites it, so the number is the jobs deferred now.
+    """
+    rows = conn.execute(
+        """
+        SELECT substr(last_error, %(cut)s), count(*) FROM jobs
+        WHERE state = 'pending' AND starts_with(last_error, %(prefix)s)
+        GROUP BY 1
+        """,
+        {"prefix": DEFERRED_PREFIX, "cut": len(DEFERRED_PREFIX) + 1},
+    ).fetchall()
+    return {str(reason): int(count) for reason, count in rows}
+
+
+def pending_job_waits(
+    conn: psycopg.Connection[Any], *, kind: str, last_error: str, due_within: timedelta
+) -> bool:
+    """Whether a ``pending`` job of ``kind`` with this ``last_error`` is due within ``due_within`` (#393)."""
+    row = conn.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM jobs
+            WHERE kind = %(kind)s AND state = 'pending' AND last_error = %(last_error)s
+              AND run_after <= now() + %(within)s
+        )
+        """,
+        {"kind": kind, "last_error": last_error, "within": due_within},
+    ).fetchone()
+    return bool(row and row[0])
+
+
 @dataclass(frozen=True, slots=True)
 class JobRow:
     """One ``jobs`` row for the Ops view (#44). ``payload`` is never exposed."""

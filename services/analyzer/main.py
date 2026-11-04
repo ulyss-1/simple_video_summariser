@@ -78,6 +78,7 @@ from adapters.summarize.ollama import GetTransport, probe_ollama, urllib_get_tra
 from common.config import Settings, get_settings, summarizer_model
 from common.db import connect as default_connect
 from common.errors import BugError, Defer
+from common.llm_lock import PostgresLocalLlmGuard
 from common.logging import configure_logging
 from common.models import OrphanBatchCanceller
 from common.queue import (
@@ -112,6 +113,22 @@ Handler = Callable[[Job, JobContext], None]
 HandlerFactory = Callable[..., Handler]
 
 
+def make_locked_analyze_handler(
+    *, connect: Connect, summarizer: Any, settings: Settings
+) -> Handler:
+    """``make_analyze_handler`` with the host-wide local-LLM / Whisper lock (#393).
+
+    Only this entrypoint runs beside the transcriber, so only it takes the lock; the CLI
+    builds the plain handler. Each job's guard opens its own connection through ``connect``.
+    """
+    return make_analyze_handler(
+        connect=connect,
+        summarizer=summarizer,
+        settings=settings,
+        local_llm_guard=lambda: PostgresLocalLlmGuard(connect),
+    )
+
+
 def worker_name() -> str:
     """``analyzer-<hostname>-<pid>``: tells replicas apart in ``jobs.locked_by``."""
     return f"analyzer-{socket.gethostname()}-{os.getpid()}"
@@ -122,7 +139,7 @@ def build_job_handler(
     summarizer: Any,
     connect: Connect,
     *,
-    handler_factory: HandlerFactory = make_analyze_handler,
+    handler_factory: HandlerFactory = make_locked_analyze_handler,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> Handler:
     """The analyze handler behind the job / configuration guard.
@@ -257,7 +274,7 @@ def main(
     settings: Settings | None = None,
     connect: Connect | None = None,
     summarizer_factory: Callable[[Settings], Any] = build_summarizer,
-    handler_factory: HandlerFactory = make_analyze_handler,
+    handler_factory: HandlerFactory = make_locked_analyze_handler,
     worker_options: Mapping[str, Any] | None = None,
     orphan_options: Mapping[str, Any] | None = None,
     max_iterations: int | None = None,

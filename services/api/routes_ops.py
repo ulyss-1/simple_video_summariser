@@ -41,7 +41,14 @@ from common.repo.analyses import (
     total_speaker_coercions,
 )
 from common.repo.channels import feed_gap_counts, list_ops_channels
-from common.repo.jobs import UNSET, duration_histograms, get_job, list_jobs, queue_depth
+from common.repo.jobs import (
+    UNSET,
+    deferred_job_counts,
+    duration_histograms,
+    get_job,
+    list_jobs,
+    queue_depth,
+)
 from common.repo.media import total_bytes
 from common.repo.planner_runs import list_task_runs
 from common.repo.transcripts import latest_whisper_rtf
@@ -106,6 +113,7 @@ def _read_snapshot(conn: psycopg.Connection[Any]) -> metrics.MetricsSnapshot:
     try:
         return metrics.MetricsSnapshot(
             queue_depth=queue_depth(conn),
+            jobs_deferred=deferred_job_counts(conn),
             feed_gap_channels=feed_gap_counts(conn),
             job_durations=duration_histograms(conn),
             whisper_rtf=latest_whisper_rtf(conn),

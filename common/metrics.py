@@ -26,8 +26,9 @@ from __future__ import annotations
 import math
 import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from common.errors import DEFER_REASONS
 from common.repo.planner_runs import PlannerTaskRun
 
 CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
@@ -89,6 +90,8 @@ class MetricsSnapshot:
     audio_bytes: int
     reanalysis_backlog: int
     planner_task_runs: Sequence[PlannerTaskRun] = ()
+    #: Pending jobs by deferral reason (#393); reasons outside ``DEFER_REASONS`` are dropped.
+    jobs_deferred: Mapping[str, int] = field(default_factory=dict)
 
 
 def sanitize_label_value(value: str) -> str:
@@ -261,6 +264,16 @@ def render(snapshot: MetricsSnapshot) -> str:
         "gauge",
         "Jobs per kind and state. Kinds and states outside the known sets are summed into other.",
         _queue_depth_samples(snapshot.queue_depth),
+    )
+    lines += _family(
+        "jobs_deferred",
+        "gauge",
+        "Pending jobs waiting on the local-LLM / Whisper exclusion, by reason. A gauge of "
+        "jobs deferred now, not a lifetime count.",
+        [
+            _sample("jobs_deferred", (("reason", reason),), snapshot.jobs_deferred.get(reason, 0))
+            for reason in sorted(DEFER_REASONS)
+        ],
     )
     lines += _family(
         "feed_gap_channels",

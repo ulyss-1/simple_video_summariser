@@ -180,6 +180,7 @@ class Rig:
         clock: Callable[[], float] = time.monotonic,
         disk_usage: Callable[[Path], Any] | None = None,
         now: Callable[[], datetime] | None = None,
+        whisper_gate: Any = None,
         **settings: Any,
     ) -> None:
         self.conn = conn
@@ -200,6 +201,8 @@ class Rig:
         }
         if now is not None:
             seams["now"] = now
+        if whisper_gate is not None:
+            seams["whisper_gate"] = whisper_gate
         self.handler = make_transcribe_handler(
             connect=self._connect,
             queue=self.queue,
