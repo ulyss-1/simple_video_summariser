@@ -9,6 +9,7 @@ import pathlib
 import subprocess
 import sys
 import textwrap
+import time
 from collections.abc import Sequence
 from typing import Any
 
@@ -165,20 +166,49 @@ def test_is_running_is_false_when_the_proc_entry_vanishes_mid_read(
 def test_a_timeout_raises_transient_network_and_leaves_no_process_running(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Keeps the real wait: 1.5 s must outlast the real child's startup, then really expire."""
+    """The deadline clock starts only once both processes are up, then really expires.
+
+    The injected clock stays at zero until the child has written both pids
+    (observable condition, bounded at 30 s; past that the test fails naming
+    what never happened). After that it is the real monotonic clock, so the
+    1.5 s timeout is real and the kill is real. Without the gate, a loaded
+    machine could spend the whole timeout starting two Python processes.
+    """
     pids_file = tmp_path / "pids"
+    began = time.monotonic()
+    up_at: list[float] = []
+
+    def clock() -> float:
+        if not up_at:
+            try:
+                up = len(pids_file.read_text().split()) == 2
+            except FileNotFoundError:
+                up = False
+            if up:
+                up_at.append(time.monotonic())
+            elif time.monotonic() - began > 30:
+                raise AssertionError(
+                    "the child and grandchild never wrote their pids within 30 s"
+                )
+            else:
+                return 0.0
+        return time.monotonic() - up_at[0]
 
     def hanging(
         argv: Sequence[str], *, timeout: float, **_kw: Any
     ) -> subprocess.CompletedProcess[str]:
         return run_process(
-            [sys.executable, "-c", _HANGING_CHILD, str(pids_file)], timeout=timeout
+            [sys.executable, "-c", _HANGING_CHILD, str(pids_file)],
+            timeout=timeout,
+            cancelled=lambda: False,
+            poll_interval=0.05,
+            clock=clock,
         )
 
     with pytest.raises(TransientNetworkError):
         run_ytdlp(["--dump-json"], timeout=1.5, runner=hanging)
 
-    assert pids_file.exists(), "the child never started; the timeout is too short"
+    assert up_at, "the timeout fired before the child wrote its pids"
     child, grandchild = (int(p) for p in pids_file.read_text().split())
     assert not _is_running(child)
     assert not _is_running(grandchild)

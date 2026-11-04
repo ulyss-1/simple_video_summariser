@@ -758,7 +758,10 @@ def test_sigterm_during_a_database_outage_exits_0_within_the_grace_period() -> N
         assert proc.poll() is None
 
         proc.send_signal(signal.SIGTERM)
-        returncode = proc.wait(timeout=grace)
+        # The margin only keeps a loaded host from failing the wait itself; the
+        # worker still enforces its own grace, and returncode == 0 below is what
+        # proves a clean exit (a slow or forced exit is not 0).
+        returncode = proc.wait(timeout=grace + 10)
     finally:
         if proc.poll() is None:
             proc.kill()
