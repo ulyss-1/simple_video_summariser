@@ -5,10 +5,14 @@ not-installed tests start a plain Python child instead, through the real
 ``run_process``, so process-group cleanup is exercised for real.
 """
 
+import contextlib
+import os
 import pathlib
+import signal
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 from collections.abc import Sequence
 from typing import Any
@@ -205,8 +209,31 @@ def test_a_timeout_raises_transient_network_and_leaves_no_process_running(
             clock=clock,
         )
 
-    with pytest.raises(TransientNetworkError):
-        run_ytdlp(["--dump-json"], timeout=1.5, runner=hanging)
+    # Run in a worker so a missing kill fails here, bounded, instead of hanging
+    # inside communicate()/wait() until the CI job timeout.
+    outcome: list[BaseException | None] = []
+
+    def call() -> None:
+        try:
+            run_ytdlp(["--dump-json"], timeout=1.5, runner=hanging)
+            outcome.append(None)
+        except BaseException as exc:  # noqa: BLE001 - handed to the test thread
+            outcome.append(exc)
+
+    worker = threading.Thread(target=call, daemon=True)
+    worker.start()
+    worker.join(timeout=30)
+    if worker.is_alive():
+        # Release the stuck worker and leave nothing behind before failing.
+        for pid in pids_file.read_text().split() if pids_file.exists() else []:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(int(pid), signal.SIGKILL)
+        worker.join(timeout=10)
+        pytest.fail(
+            "the child process group was not killed after the timeout: "
+            "run_process was still waiting 30 s after the 1.5 s deadline"
+        )
+    assert len(outcome) == 1 and isinstance(outcome[0], TransientNetworkError), outcome
 
     assert up_at, "the timeout fired before the child wrote its pids"
     child, grandchild = (int(p) for p in pids_file.read_text().split())
