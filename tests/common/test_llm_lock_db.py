@@ -251,6 +251,37 @@ def test_a_lost_lock_is_busy_when_a_transcriber_took_it_meanwhile(
     guard.release()
 
 
+@pytest.mark.parametrize("take", [exclusive, shared], ids=["exclusive", "shared"])
+def test_release_frees_the_lock_before_the_connection_is_closed(
+    opened: Callable[[], psycopg.Connection[Any]],
+    observer: psycopg.Connection[Any],
+    take: Callable[[Callable[[], psycopg.Connection[Any]]], PostgresLocalLlmGuard],
+) -> None:
+    """``close()`` returns before the server drops the session, so release must not rely on it.
+
+    The connection's ``close`` is made a no-op here, which is the worst case of that
+    server-side lag: the lock must already be gone when ``release`` returns.
+    """
+    conns: list[psycopg.Connection[Any]] = []
+
+    def connect() -> psycopg.Connection[Any]:
+        made = opened()
+        setattr(made, "close", lambda: None)  # noqa: B010 - mypy rejects assigning a method
+        conns.append(made)
+        return made
+
+    guard = take(connect)
+    guard.ensure_held()
+    assert len(held(observer)) == 1
+    guard.release()
+    try:
+        assert held(observer) == [], "release left the advisory lock held until the disconnect"
+    finally:
+        for made in conns:
+            del made.close  # back to the real close
+            made.close()
+
+
 def _wait_until(check: Callable[[], bool]) -> bool:
     done = threading.Event()
     deadline = threading.Timer(DEADLINE, done.set)

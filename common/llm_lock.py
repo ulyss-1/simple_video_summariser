@@ -136,7 +136,13 @@ class PostgresLocalLlmGuard:
     def _drop(self) -> None:
         conn, self._conn = self._conn, None
         if conn is not None:
-            # Closing the connection releases the lock, even if an unlock would fail.
+            # Unlock first: close() only sends Terminate and returns, and the server frees the
+            # lock when its backend gets to the disconnect, so a reader could still see it.
+            # The unlock is a round trip, so the lock is gone when release returns. If it
+            # fails, closing the connection still releases the lock.
+            with contextlib.suppress(psycopg.Error):
+                function = "pg_advisory_unlock_shared" if self._shared else "pg_advisory_unlock"
+                conn.execute(f"SELECT {function}(%s, %s)", (LOCK_NAMESPACE_LLM, LOCK_ID))
             with contextlib.suppress(psycopg.Error):
                 conn.close()
 
