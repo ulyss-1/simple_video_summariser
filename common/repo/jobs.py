@@ -184,18 +184,29 @@ def deferred_job_counts(conn: psycopg.Connection[Any]) -> dict[str, int]:
 
 
 def pending_job_waits(
-    conn: psycopg.Connection[Any], *, kind: str, last_error: str, due_within: timedelta
+    conn: psycopg.Connection[Any],
+    *,
+    kind: str,
+    last_error: str,
+    due_within: timedelta,
+    stale_after: timedelta,
 ) -> bool:
-    """Whether a ``pending`` job of ``kind`` with this ``last_error`` is due within ``due_within`` (#393)."""
+    """Whether a ``pending`` job of ``kind`` with this ``last_error`` is about to run (#393).
+
+    "About to run" is ``run_after`` between ``now() - stale_after`` and ``now() + due_within``.
+    A row more than ``stale_after`` past due is not counted: its worker is down or wedged,
+    and it must not hold up the caller forever.
+    """
     row = conn.execute(
         """
         SELECT EXISTS (
             SELECT 1 FROM jobs
             WHERE kind = %(kind)s AND state = 'pending' AND last_error = %(last_error)s
               AND run_after <= now() + %(within)s
+              AND run_after >= now() - %(stale)s
         )
         """,
-        {"kind": kind, "last_error": last_error, "within": due_within},
+        {"kind": kind, "last_error": last_error, "within": due_within, "stale": stale_after},
     ).fetchone()
     return bool(row and row[0])
 

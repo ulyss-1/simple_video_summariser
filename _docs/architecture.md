@@ -2352,8 +2352,10 @@ chain answered remotely never touch it; the CLI and the in-process queue use
 `LOCK_BUSY_DEFER`), its attempt refunded, no analysis written. A running
 transcription is never killed and a running analysis is never interrupted.
 Fairness: a transcribe job also defers (`analysis_waiting`) while a pending
-analyze job deferred as `whisper_busy` is due within `2 x LOCK_BUSY_DEFER`, so a
-transcription backlog cannot starve a waiting analysis; with continuous work on
+analyze job deferred as `whisper_busy` is due within `2 x LOCK_BUSY_DEFER` and not
+more than `STALE_WAIT_FACTOR x LOCK_BUSY_DEFER` (4 x, 2 min) past due, so a
+transcription backlog cannot starve a waiting analysis, while a dead or wedged
+analyzer cannot block transcription indefinitely; with continuous work on
 one side the other side waits until its queue drains.
 
 *Defer reasons.* `Defer` takes an optional `reason`; the queue then writes

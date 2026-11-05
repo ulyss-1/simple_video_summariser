@@ -328,6 +328,25 @@ def test_a_transcribe_yields_to_an_analysis_deferred_as_whisper_busy(
     assert held(observer) == []
 
 
+def test_a_whisper_busy_analysis_past_due_inside_the_staleness_window_still_makes_a_transcribe_yield(
+    opened: Callable[[], psycopg.Connection[Any]], observer: psycopg.Connection[Any]
+) -> None:
+    # SMALL = 2 s, so the window is 4 x 2 s = 8 s; 7 s past due is inside it.
+    _enqueue_waiting_analyze(observer, last_error=deferred_text(WHISPER_BUSY), run_after_sec=-7)
+    with pytest.raises(LocalLlmBusy) as busy, _gate(opened).hold(opened()):
+        pytest.fail("the body must not run")
+    assert busy.value.reason == ANALYSIS_WAITING
+
+
+def test_a_stale_whisper_busy_analysis_does_not_block_a_transcribe(
+    opened: Callable[[], psycopg.Connection[Any]], observer: psycopg.Connection[Any]
+) -> None:
+    # 9 s past due is just outside the 8 s window: the analyzer is down or wedged.
+    _enqueue_waiting_analyze(observer, last_error=deferred_text(WHISPER_BUSY), run_after_sec=-9)
+    with _gate(opened).hold(opened()):
+        assert [mode for _, mode in held(observer)] == ["ShareLock"]
+
+
 def test_a_transcribe_starts_when_no_analysis_waits(
     opened: Callable[[], psycopg.Connection[Any]], observer: psycopg.Connection[Any]
 ) -> None:
@@ -413,6 +432,24 @@ def test_a_deferral_clears_an_earlier_failure_text_but_a_plain_defer_leaves_it(
         raise Defer(until)  # existing callers: low disk, config mismatch, premiere
     row = _row(observer, job_id)
     assert (row["last_error"], row["error_class"]) == ("old failure", "TRANSIENT_NETWORK")
+
+
+def test_an_analysis_completes_while_a_transcribe_claim_is_deferred(
+    queue: PostgresQueue, observer: psycopg.Connection[Any]
+) -> None:
+    transcribe_id = queue.enqueue("transcribe", VIDEO)
+    analyze_id = queue.enqueue("analyze", VIDEO)
+    assert transcribe_id is not None and analyze_id is not None
+    with queue.claim(["transcribe"], worker="w1") as tjob:
+        assert tjob is not None
+        raise Defer(datetime.now(UTC) + timedelta(hours=1), reason=LOCAL_LLM_BUSY)
+    # the transcribe is deferred and not due; the analysis still claims and finishes
+    with queue.claim(["analyze"], worker="w2") as ajob:
+        assert ajob is not None
+        assert ajob.id == analyze_id
+    assert _row(observer, analyze_id)["state"] == "done"
+    deferred = _row(observer, transcribe_id)
+    assert (deferred["state"], deferred["last_error"]) == ("pending", "deferred: local_llm_busy")
 
 
 def test_a_deferred_job_runs_once_its_run_after_has_passed(

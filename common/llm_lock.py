@@ -48,6 +48,12 @@ LOCK_ID = 1
 LOCK_BUSY_DEFER = timedelta(seconds=30)
 _JITTER = 0.2
 
+#: A waiting analysis counts for the transcribe yield rule only while its ``run_after`` is
+#: no more than ``STALE_WAIT_FACTOR x`` the defer delay in the past. A live analyzer re-polls
+#: about every delay, so a row this far past due means the analyzer is down, scaled to 0 or
+#: wedged; yielding to it forever would block transcription for good.
+STALE_WAIT_FACTOR = 4
+
 type Connect = Callable[[], psycopg.Connection[Any]]
 type Clock = Callable[[], datetime]
 
@@ -170,7 +176,8 @@ class WhisperGate:
         """Raise ``LocalLlmBusy`` instead of starting, else hold the shared lock until exit.
 
         ``conn`` is the handler's data connection, used for one read: is an analysis
-        waiting (deferred as ``whisper_busy``, due within twice the delay)? Without
+        waiting (deferred as ``whisper_busy``, due within twice the delay and not more
+        than ``STALE_WAIT_FACTOR`` delays past due)? Without
         that rule a transcription backlog would starve it, because the transcriber
         re-claims at once and the analyzer only polls after its deferral.
         """
@@ -179,6 +186,7 @@ class WhisperGate:
             kind="analyze",
             last_error=deferred_text(WHISPER_BUSY),
             due_within=2 * self._busy_defer,
+            stale_after=STALE_WAIT_FACTOR * self._busy_defer,
         )
         conn.commit()
         if waiting:

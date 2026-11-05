@@ -315,6 +315,8 @@ What you see: the waiting job is `pending` with a future `run_after` and its
 analysis), `deferred: whisper_busy` (an analysis waiting for a transcription) or
 `deferred: analysis_waiting` (a transcription stepping aside for a waiting
 analysis). It retries about every 30 s and spends no attempt, so nothing dead-letters.
+A transcription steps aside only for an analysis that is due or at most 2 min past
+due; if the analyzer is down or stuck longer than that, transcription goes on.
 The Ops page shows the text in the error column, and `/metrics` has
 `jobs_deferred{reason}`, the number of jobs deferred right now. With a long
 transcription backlog the analyses start between transcriptions; with a long
