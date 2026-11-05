@@ -27,6 +27,7 @@ import math
 import shutil
 import time
 from collections.abc import Callable
+from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -36,7 +37,8 @@ import psycopg
 from adapters.youtube.metadata import watch_url
 from common.chunking import chunk_strategy
 from common.config import Settings
-from common.errors import BugError, Defer, PermanentSourceError
+from common.errors import BugError, Defer, LocalLlmBusy, PermanentSourceError
+from common.llm_lock import NullWhisperGate, WhisperGateLike, log_deferral
 from common.models import AudioRef, AudioSource, Transcriber
 from common.progress import HISTORY_SIZE, estimate_effort
 from common.queue import Job, JobQueue
@@ -160,9 +162,15 @@ def make_transcribe_handler(
     clock: Callable[[], float] = time.monotonic,
     disk_usage: Callable[[Path], Any] = shutil.disk_usage,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    whisper_gate: WhisperGateLike | None = None,
 ) -> Callable[[Job, JobContext], None]:
-    """Build the handler. ``connect`` opens one connection per job, closed when it ends."""
+    """Build the handler. ``connect`` opens one connection per job, closed when it ends.
+
+    ``whisper_gate`` (#393) is the shared half of the local-LLM exclusion: the transcriber
+    entrypoint passes a Postgres-backed one, the CLI runs without a lock.
+    """
     strategy = chunk_strategy(settings.CHUNK_SEC, settings.OVERLAP_SEC)
+    gate: WhisperGateLike = whisper_gate if whisper_gate is not None else NullWhisperGate()
 
     def defer_if_audio_dir_below_floor(ctx: JobContext) -> None:
         """Defer (no attempt spent) when AUDIO_DIR free space is below the floor.
@@ -294,22 +302,33 @@ def make_transcribe_handler(
 
             defer_if_audio_dir_below_floor(ctx)
 
-            history = rtf_history(conn, settings.WHISPER_MODEL, settings.WHISPER_COMPUTE, HISTORY_SIZE)
-            conn.commit()
-            expected = _payload_duration(job)
-            ticker_writer = JobProgressWriter(connect, job)
-            ticker = ProgressTicker(
-                ticker_writer,
-                duration_sec=expected,
-                estimate=estimate_effort(expected, history),
-                clock=clock,
-            )
-            ticker.tick()  # the estimate is stored before any work starts
-            try:
-                with ticking(ticker):
-                    transcribe_audio(conn, job, ctx, ticker, history)
-            finally:
-                ticker_writer.close()
+            # Before the audio fetch, so a deferral wastes no download (#393). Held for the
+            # rest of the handler and released on every way out, shutdown included.
+            with ExitStack() as held:
+                try:
+                    held.enter_context(gate.hold(conn))
+                except LocalLlmBusy as busy:
+                    log_deferral(ctx.logger, busy)
+                    raise
+                transcribe_holding_lock(conn, job, ctx)
+
+    def transcribe_holding_lock(conn: psycopg.Connection[Any], job: Job, ctx: JobContext) -> None:
+        history = rtf_history(conn, settings.WHISPER_MODEL, settings.WHISPER_COMPUTE, HISTORY_SIZE)
+        conn.commit()
+        expected = _payload_duration(job)
+        ticker_writer = JobProgressWriter(connect, job)
+        ticker = ProgressTicker(
+            ticker_writer,
+            duration_sec=expected,
+            estimate=estimate_effort(expected, history),
+            clock=clock,
+        )
+        ticker.tick()  # the estimate is stored before any work starts
+        try:
+            with ticking(ticker):
+                transcribe_audio(conn, job, ctx, ticker, history)
+        finally:
+            ticker_writer.close()
 
     def transcribe_audio(
         conn: psycopg.Connection[Any],

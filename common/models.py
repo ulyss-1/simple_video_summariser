@@ -462,6 +462,23 @@ class BatchCheckpoint:
     submitted_at: datetime
 
 
+@runtime_checkable
+class LocalLlmGuard(Protocol):
+    """Host-wide exclusion between a local-Ollama analysis and a Whisper run (#393)."""
+
+    def ensure_held(self) -> None:
+        """Take the lock on first call, check it is still held on later ones.
+
+        Never blocks. Raises ``LocalLlmBusy`` if a transcription holds it, or if
+        it was lost and cannot be retaken.
+        """
+        ...
+
+    def release(self) -> None:
+        """Idempotent, never raises. Only the analyze handler calls it."""
+        ...
+
+
 class JobScope(Protocol):
     """What a checkpointing summarizer needs from one analyze job (#89).
 
@@ -470,6 +487,11 @@ class JobScope(Protocol):
     """
 
     job_id: int
+
+    @property
+    def local_llm(self) -> LocalLlmGuard:
+        """Called by a local provider right before each local request (#393)."""
+        ...
 
     def cancelled(self) -> bool: ...
 

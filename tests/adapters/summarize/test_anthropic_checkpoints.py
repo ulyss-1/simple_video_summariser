@@ -15,6 +15,7 @@ import pytest
 
 from adapters.summarize.anthropic import AnthropicSummarizer
 from common.errors import Cancelled, LLMUnavailableError
+from common.llm_lock import NullLocalLlmGuard
 from common.models import BatchCheckpoint, Usage
 from tests.adapters.summarize.test_anthropic import (
     API,
@@ -43,6 +44,7 @@ class FakeScope:
 
     def __init__(self, time: FakeTime) -> None:
         self.job_id = 1
+        self.local_llm = NullLocalLlmGuard()
         self.time = time
         self.rows: dict[str, BatchCheckpoint] = {}
         self.usage: dict[str, Usage] = {}

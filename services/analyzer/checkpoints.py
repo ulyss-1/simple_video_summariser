@@ -12,7 +12,8 @@ from typing import Any
 import psycopg
 
 from common.errors import BugError
-from common.models import BatchCheckpoint, Usage
+from common.llm_lock import NullLocalLlmGuard
+from common.models import BatchCheckpoint, LocalLlmGuard, Usage
 from common.repo.llm_batches import (
     delete_checkpoint,
     delete_job_checkpoints,
@@ -31,7 +32,10 @@ class JobCheckpoints:
         *,
         video_id: str,
         model: str,
+        local_llm: LocalLlmGuard | None = None,
     ) -> None:
+        #: The job's lock guard (#393); the adapter only asks it, the handler releases it.
+        self.local_llm: LocalLlmGuard = local_llm if local_llm is not None else NullLocalLlmGuard()
         self._conn = conn
         self.job_id = job_id
         self._cancelled = cancelled

@@ -27,7 +27,8 @@ import psycopg
 from adapters.summarize.prompt_loader import format_timestamped
 from common.chunking import chunk_segments, chunk_strategy
 from common.config import Settings
-from common.errors import BugError, Cancelled, LLMInvalidOutputError
+from common.errors import BugError, Cancelled, LLMInvalidOutputError, LocalLlmBusy
+from common.llm_lock import NullLocalLlmGuard, log_deferral
 from common.models import (
     Analysis,
     Chunk,
@@ -35,6 +36,7 @@ from common.models import (
     ChunkBatchSummarizer,
     Claim,
     JobScopedSummarizer,
+    LocalLlmGuard,
     Quote,
     Roster,
     Segment,
@@ -258,8 +260,13 @@ def make_analyze_handler(
     summarizer: Summarizer,
     settings: Settings,
     clock: Callable[[], float] = time.monotonic,
+    local_llm_guard: Callable[[], LocalLlmGuard] = NullLocalLlmGuard,
 ) -> Callable[[Job, JobContext], None]:
-    """Build the ``analyze`` handler. ``connect`` opens one connection per job."""
+    """Build the ``analyze`` handler. ``connect`` opens one connection per job.
+
+    ``local_llm_guard`` builds one guard per job (#393): the analyzer entrypoint passes a
+    Postgres-backed one, everything else (the CLI) runs without a lock.
+    """
     strategy = chunk_strategy(settings.CHUNK_SEC, settings.OVERLAP_SEC)
     expected_key = analyze_dedupe_key(settings.PROMPT_VERSION, summarizer.name)
 
@@ -275,6 +282,7 @@ def make_analyze_handler(
         conn = connect()
         tally = _Tally()
         checkpoints: JobCheckpoints | None = None
+        local_llm = local_llm_guard()
         try:
             try:
                 if isinstance(summarizer, JobScopedSummarizer):
@@ -284,6 +292,7 @@ def make_analyze_handler(
                         lambda: ctx.cancelled,
                         video_id=job.video_id,
                         model=summarizer.model,
+                        local_llm=local_llm,
                     )
                     summarizer.begin_job(checkpoints)
                     try:
@@ -293,9 +302,15 @@ def make_analyze_handler(
                 else:
                     _analyze(conn, job, ctx, started, None, tally)
             except Exception as exc:
+                if isinstance(exc, LocalLlmBusy):
+                    log_deferral(ctx.logger, exc)
                 _record_failed_attempt(conn, job, ctx, tally, checkpoints, exc)
                 raise
         finally:
+            # After ``end_job`` and the failed-attempt write, on every way out (#393). The
+            # guard's own connection holds the lock, so the data connection's commits and
+            # rollbacks above could not have released it; closing it here does.
+            local_llm.release()
             conn.close()
 
     def _record_failed_attempt(

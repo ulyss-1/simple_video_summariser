@@ -22,6 +22,7 @@ from adapters.summarize.anthropic import Response as AnthropicResponse
 from adapters.summarize.ollama import HttpResponse, OllamaSummarizer
 from adapters.summarize.prompt_loader import load_prompt_set
 from common.errors import Cancelled, LLMUnavailableError
+from common.llm_lock import NullLocalLlmGuard
 from common.models import BatchCheckpoint, JobScopedSummarizer, Usage
 from tests.adapters.summarize.test_anthropic import META, ROSTER_JSON, ok, settings
 
@@ -35,6 +36,7 @@ class Scope:
     job_id = 1
 
     def __init__(self, cancelled: Callable[[], bool] = lambda: False) -> None:
+        self.local_llm = NullLocalLlmGuard()
         self._cancelled = cancelled
         self.checkpoint_calls = 0
 
