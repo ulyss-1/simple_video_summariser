@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -22,10 +22,18 @@ from adapters.summarize.free_tier import (
 )
 from adapters.summarize.ollama import MAX_RESPONSE_BYTES, HttpResponse
 from adapters.summarize.prompt_loader import PromptSet, load_prompt_set
-from common.errors import Cancelled, Defer, LLMInvalidOutputError, LLMUnavailableError
+from common.errors import (
+    Cancelled,
+    Defer,
+    LLMInvalidOutputError,
+    LLMUnavailableError,
+    LocalLlmBusy,
+)
+from common.models import Chunk, Roster
 from tests.adapters.summarize.test_free_tier import (
     GOOD,
     KEY_A,
+    META,
     ROSTER_JSON,
     Clock,
     FakeSend,
@@ -57,12 +65,28 @@ def local_reply(
     return HttpResponse(200, json.dumps(body).encode())
 
 
+class Guard:
+    """The #393 ``LocalLlmGuard``: ``events`` records the order of lock calls."""
+
+    def __init__(self, events: list[str], *, busy: bool) -> None:
+        self.events = events
+        self.busy = busy
+
+    def ensure_held(self) -> None:
+        self.events.append("ensure_held")
+        if self.busy:
+            raise LocalLlmBusy(NOW, "whisper_busy")
+
+    def release(self) -> None:
+        self.events.append("release")
+
+
 class LocalScope:
-    """A JobScope with the #392 lock seam; ``events`` records the order of lock calls."""
+    """A JobScope with the #393 ``local_llm`` guard."""
 
     def __init__(self, *, free: bool = True) -> None:
-        self.free = free
         self.events: list[str] = []
+        self.local_llm = Guard(self.events, busy=not free)
         self.cancel = False
 
     def cancelled(self) -> bool:
@@ -70,13 +94,6 @@ class LocalScope:
 
     def now(self) -> datetime:
         return NOW
-
-    def hold_local_llm(self) -> bool:
-        self.events.append("hold")
-        return self.free
-
-    def release_local_llm(self) -> None:
-        self.events.append("release")
 
 
 @pytest.fixture(scope="module")
@@ -237,7 +254,7 @@ def test_keyless_remotes_count_as_failed(prompts: PromptSet) -> None:
 # --- guard, defer, unload ------------------------------------------------------------
 
 
-def test_lock_is_taken_once_before_first_local_send(prompts: PromptSet) -> None:
+def test_lock_is_verified_before_every_local_send(prompts: PromptSet) -> None:
     scope = LocalScope()
     seen: list[list[str]] = []
 
@@ -247,33 +264,34 @@ def test_lock_is_taken_once_before_first_local_send(prompts: PromptSet) -> None:
 
     s = make(prompts, [provider("a"), local()], send, scope=scope)
     roster(s)
-    roster(s)
-    assert scope.events == ["hold"]
-    assert seen[1] == ["hold"]  # the local send saw the lock already held
+    roster(s)  # "a" is cooling down: only the local send happens
+    assert scope.events == ["ensure_held", "ensure_held"]
+    # a, local, local: each local send saw one more check than the one before it.
+    assert seen == [[], ["ensure_held"], ["ensure_held", "ensure_held"]]
 
 
-@pytest.mark.parametrize(("retry", "seconds"), [(None, 300), (7, 7)])
-def test_lock_busy_defers_without_cooldown(
-    prompts: PromptSet, caplog: pytest.LogCaptureFixture, retry: float | None, seconds: int
-) -> None:
-    caplog.set_level(logging.INFO)
+def test_busy_lock_defers_the_job_with_no_send_cooldown_or_retry(prompts: PromptSet) -> None:
     scope = LocalScope(free=False)
     send = FakeSend(status(500))
-    extra: dict[str, Any] = {} if retry is None else {"local_busy_retry_sec": retry}
-    s = make(prompts, [provider("a"), local()], send, scope=scope, **extra)
-    with pytest.raises(Defer) as err:
+    s = make(prompts, [provider("a"), local()], send, scope=scope)
+    with pytest.raises(LocalLlmBusy) as err:
         roster(s)
-    assert err.value.until == NOW + timedelta(seconds=seconds)
-    assert send.order == ["a"] and "local-ollama" not in s._cooling_until
-    assert any("transcription running" in str(r.__dict__) for r in caplog.records)
+    assert isinstance(err.value, Defer) and not isinstance(err.value, LLMUnavailableError)
+    assert err.value.reason == "whisper_busy"
+    assert send.order == ["a"]  # the local send never went out, the remote was not retried
+    assert "local-ollama" not in s._cooling_until
+    assert scope.events == ["ensure_held"]  # asked once, not retried
+    assert s.take_usage().calls == 0  # no call was answered
 
 
-def test_lock_busy_but_a_remote_answers_succeeds(prompts: PromptSet) -> None:
-    s = make(prompts, [provider("a"), local()], FakeSend(completion(ROSTER_JSON)), scope=LocalScope(free=False))
+def test_busy_lock_but_a_remote_answers_succeeds(prompts: PromptSet) -> None:
+    scope = LocalScope(free=False)
+    s = make(prompts, [provider("a"), local()], FakeSend(completion(ROSTER_JSON)), scope=scope)
     assert roster(s).speakers
+    assert scope.events == []  # never reached the local provider
 
 
-def test_end_job_unloads_then_releases(prompts: PromptSet) -> None:
+def test_end_job_unloads_and_never_releases_the_lock(prompts: PromptSet) -> None:
     scope = LocalScope()
     unloaded: list[str] = []
 
@@ -285,12 +303,13 @@ def test_end_job_unloads_then_releases(prompts: PromptSet) -> None:
     roster(s)
     s.end_job()
     assert unloaded == [LOCAL_MODEL]
-    assert scope.events == ["hold", "unload", "release"]
+    # The analyze handler releases the lock after end_job returns, so unload comes first.
+    assert scope.events == ["ensure_held", "unload"]
     s.end_job()  # idempotent
-    assert scope.events == ["hold", "unload", "release"]
+    assert scope.events == ["ensure_held", "unload"]
 
 
-def test_unload_failure_is_logged_and_the_lock_is_still_released(
+def test_unload_failure_is_logged_and_end_job_does_not_raise(
     prompts: PromptSet, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.INFO)
@@ -302,11 +321,10 @@ def test_unload_failure_is_logged_and_the_lock_is_still_released(
     s = make(prompts, [provider("a"), local()], FakeSend(status(500), local_reply()), unload=unload, scope=scope)
     roster(s)
     s.end_job()
-    assert scope.events == ["hold", "release"]
     assert any(r.message == "free_tier_local_unload_failed" for r in caplog.records)
 
 
-def test_lock_is_released_after_cancel(prompts: PromptSet) -> None:
+def test_lock_is_not_released_by_the_adapter_after_cancel(prompts: PromptSet) -> None:
     scope = LocalScope()
     scope.cancel = True
 
@@ -324,26 +342,13 @@ def test_lock_is_released_after_cancel(prompts: PromptSet) -> None:
         roster(s)
     assert "local-ollama" not in s._cooling_until
     s.end_job()
-    assert scope.events == ["hold", "release"]
+    assert scope.events == ["ensure_held"]
 
 
 def test_no_job_scope_skips_local(prompts: PromptSet) -> None:
     send = FakeSend(status(500))
     s = make(prompts, [provider("a"), local()], send)
     with pytest.raises(LLMUnavailableError, match="local-ollama: no job scope"):
-        roster(s)
-    assert send.order == ["a"]
-
-
-def test_scope_without_lock_methods_skips_local(prompts: PromptSet) -> None:
-    class Plain:
-        def cancelled(self) -> bool:
-            return False
-
-    send = FakeSend(status(500))
-    s = make(prompts, [provider("a"), local()], send)
-    s.begin_job(Plain())  # type: ignore[arg-type]
-    with pytest.raises(LLMUnavailableError, match="local-ollama: no local-LLM lock"):
         roster(s)
     assert send.order == ["a"]
 
@@ -376,6 +381,25 @@ def test_shipped_file_ends_with_local_and_flag_gates_it() -> None:
         "ollama", "gemma4:e4b", 16384, None,
     )
     assert last.timeout_sec == 900 and last.base_url == settings().OLLAMA_HOST
+
+
+def test_a_20000_token_chunk_is_split_with_local_on_and_whole_with_it_off(
+    prompts: PromptSet,
+) -> None:
+    line = "[{sec}] " + "x" * 100  # about 36 tokens by the 3-bytes-per-token estimate
+    text = "\n".join(line.format(sec=i) for i in range(560))  # about 20000 tokens
+    chunk = Chunk(seq=0, start_sec=0, end_sec=560, text=text)
+    answer = completion('{"topics": [], "claims": [], "quotes": []}')
+
+    def sends(providers: list[Provider], replies: int) -> int:
+        send = FakeSend(*[answer] * replies)
+        s = make(prompts, providers, send)
+        s.analyze_chunk(chunk, Roster(()), META)
+        return len(send.calls)
+
+    # Budget 14336 with the local window (two pieces), 30720 without (one request).
+    assert sends([provider("a"), local()], 2) == 2
+    assert sends([provider("a")], 1) == 1
 
 
 def test_flag_default_is_false() -> None:

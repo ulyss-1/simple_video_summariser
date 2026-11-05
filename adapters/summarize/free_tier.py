@@ -30,9 +30,8 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import timedelta
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 from urllib.parse import urlsplit
 
 from adapters.summarize.abortable import (
@@ -60,7 +59,6 @@ from common.config import FREE_TIER_MODEL, Settings, get_settings
 from common.errors import (
     BugError,
     Cancelled,
-    Defer,
     LLMInvalidOutputError,
     LLMUnavailableError,
 )
@@ -87,7 +85,6 @@ _THINK_BLOCK = re.compile(r"\A\s*<(think|thought)>.*?</\1>", re.DOTALL)
 MIN_CONTEXT_TOKENS = 4096
 _OUTPUT_RESERVE_TOKENS = 2048
 _MAX_REASON_CHARS = 160
-_TRANSCRIPTION_RUNNING = "transcription running"
 _UNUSABLE_STATUSES ={401, 402, 403}  # 402: Gemini prepay credit depleted
 
 
@@ -260,20 +257,6 @@ def _ollama_unload(provider: Provider) -> None:
         raise OSError(f"HTTP {response.status}")
 
 
-@runtime_checkable
-class LocalLlmGuard(Protocol):
-    """The part of the job's scope that holds the #393 local-LLM lock (#392).
-
-    ``hold_local_llm`` is idempotent per job: True when this job holds the lock,
-    False while a transcription holds Whisper's. A scope without these methods
-    cannot guard the local model, so the local provider is skipped for it.
-    """
-
-    def hold_local_llm(self) -> bool: ...
-
-    def release_local_llm(self) -> None: ...
-
-
 class FreeTierSummarizer(OllamaSummarizer):
     """``Summarizer`` over the first available free-tier provider. One per process."""
 
@@ -290,7 +273,6 @@ class FreeTierSummarizer(OllamaSummarizer):
         cancel_poll_sec: float | None = None,
         clock: Callable[[], float] | None = None,
         output_reserve_tokens: int = _OUTPUT_RESERVE_TOKENS,
-        local_busy_retry_sec: float = 300.0,
         unload: Callable[[Provider], None] = _ollama_unload,
     ) -> None:
         if not providers:
@@ -320,9 +302,8 @@ class FreeTierSummarizer(OllamaSummarizer):
         self._providers = providers
         self._cooldown_sec = cooldown_sec
         self._send = send
-        self._local_busy_retry_sec = local_busy_retry_sec
         self._unload = unload
-        self._local_held: Provider | None = None  # set while this job holds the lock
+        self._local_held: Provider | None = None  # set once this job reached the local model
         self._cooling_until: dict[str, float] = {}
         self._disabled: set[str] = set()
         self.last_provider: str | None = None
@@ -364,34 +345,35 @@ class FreeTierSummarizer(OllamaSummarizer):
     # --- the local provider's lock (#392) --------------------------------------------
 
     def end_job(self) -> None:
-        """Unload the local model, then release the lock (never the other way round)."""
-        held, self._local_held = self._local_held, None
-        scope = self._scope
+        """Unload the local model if this job used it.
+
+        The analyze handler releases the #393 lock after ``end_job`` returns, so the
+        model is gone from memory before Whisper may start.
+        """
+        used, self._local_held = self._local_held, None
         try:
-            if held is not None:
+            if used is not None:
                 try:
-                    self._unload(held)
-                except Exception as err:  # noqa: BLE001 - the lock must still be released
+                    self._unload(used)
+                except Exception as err:  # noqa: BLE001 - the handler must still release the lock
                     _logger.warning(
                         "free_tier_local_unload_failed",
-                        extra={"provider": held.name, "error": type(err).__name__},
+                        extra={"provider": used.name, "error": type(err).__name__},
                     )
-                if isinstance(scope, LocalLlmGuard):
-                    scope.release_local_llm()
         finally:
             super().end_job()
 
     def _local_gate(self, provider: Provider) -> str | None:
-        """Why the local provider cannot be used now, else ``None`` once this job holds the lock."""
+        """Why the local provider cannot be used now, else ``None`` once the lock is held.
+
+        ``ensure_held`` may raise ``LocalLlmBusy`` (a ``Defer``): it is not caught, so a
+        transcription running defers the job, spends no attempt and is no cooldown.
+        """
         scope = self._scope
         if scope is None:
             return "no job scope"
-        if not isinstance(scope, LocalLlmGuard):
-            return "no local-LLM lock"
-        if self._local_held is None:
-            if not scope.hold_local_llm():
-                return _TRANSCRIPTION_RUNNING
-            self._local_held = provider
+        scope.local_llm.ensure_held()
+        self._local_held = provider
         return None
 
     # --- one model call: the first provider that answers -------------------------
@@ -405,19 +387,12 @@ class FreeTierSummarizer(OllamaSummarizer):
     ) -> str:
         sent = self._with_schema_hint(messages, format)
         failures: list[str] = []
-        lock_busy = False
         for provider in self._providers:
             skipped = self._skip_reason(provider)
             if skipped is None and provider.protocol == "ollama":
                 skipped = self._local_gate(provider)
-                lock_busy = skipped == _TRANSCRIPTION_RUNNING
             if skipped is not None:
                 failures.append(f"{provider.name}: {skipped}")
-                if lock_busy and provider.protocol == "ollama":
-                    _logger.info(
-                        "free_tier_provider_skipped",
-                        extra={"provider": provider.name, "model": provider.model, "reason": skipped},
-                    )
                 continue
             if provider.protocol == "ollama":
                 payload = build_ollama_payload(
@@ -429,10 +404,6 @@ class FreeTierSummarizer(OllamaSummarizer):
             content = self._try(provider, method, request, is_repair, failures)
             if content is not None:
                 return _THINK_BLOCK.sub("", _strip_think(content), count=1)
-        scope = self._scope
-        if lock_busy and scope is not None:
-            # Only the lock stood between this job and an answer: wait, do not spend an attempt.
-            raise Defer(scope.now() + timedelta(seconds=self._local_busy_retry_sec))
         raise LLMUnavailableError("no free-tier provider answered: " + "; ".join(failures))
 
     @staticmethod

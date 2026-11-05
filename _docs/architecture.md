@@ -2376,12 +2376,16 @@ earlier provider was skipped or failed for that call; it speaks Ollama's native 
 (`think: false`, native `format`, no `response_format`) through the helpers shared with
 `OllamaSummarizer`. Its failures cool it down for `FREE_LLM_COOLDOWN_SEC` (a 4xx is a
 skip, not a `BUG`); a full context or `done_reason = "length"` is `LLMInvalidOutputError`.
-Before its first attempt a job takes the #393 local-LLM lock through the job scope
-(`hold_local_llm`); if a transcription holds Whisper's lock and nothing else answered, the
-call raises `Defer` (`+300 s`, no attempt spent) instead of `LLMUnavailableError`. At
-`end_job` the model is unloaded (`keep_alive: 0`) and only then the lock released. A scope
-without the lock methods (the CLI, or until #393's `JobCheckpoints` implements them) skips
-the local provider. Every call is chunked for the smallest window, so enabling it moves the
+Before each local request the provider calls `scope.local_llm.ensure_held()`, the same
+#393 guard `OllamaSummarizer._chat` uses (the first call takes the lock, later ones verify
+it). A transcription holding Whisper's lock makes it raise `LocalLlmBusy`, a `Defer`
+(`whisper_busy`, about 30 s, no attempt spent): the free tier never catches it, so the job
+is deferred, the local provider is not cooled down, and no request goes out. It is raised
+only when the call reached the local provider, that is after every earlier provider failed
+or was skipped; a remote answer never touches the lock. At `end_job` the model is unloaded
+(`keep_alive: 0`); the analyze handler releases the lock after `end_job`, so unload always
+comes first. Without a job scope (the CLI) there is no lock and the local provider is
+skipped as "no job scope". Every call is chunked for the smallest window, so enabling it moves the
 prompt budget from 30720 to `OLLAMA_NUM_CTX - OLLAMA_OUTPUT_RESERVE_TOKENS` (14336 at 16384);
 startup warns `free_tier_local_context_small` below 16384. `ANALYZE_MAX_RUNTIME_SEC` must be
 raised for long videos (62 to 75 s of model time per minute of video).

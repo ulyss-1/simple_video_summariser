@@ -15,13 +15,18 @@ from typing import Any
 import psycopg
 import pytest
 
+from adapters.summarize.free_tier import FreeTierSummarizer, Provider
+from adapters.summarize.ollama import HttpResponse
+from adapters.summarize.prompt_loader import load_prompt_set
 from common.errors import Cancelled, Defer, LocalLlmBusy, ToolFailureError
 from common.llm_lock import LOCK_ID, LOCK_NAMESPACE_LLM, PostgresLocalLlmGuard
-from common.models import Roster, VideoMeta
+from common.models import Chunk, ChunkAnalysis, Roster, VideoMeta
 from common.queue import PostgresQueue
 from common.repo import failed_usage
 from services.analyzer import handler as handler_module
 from services.analyzer.handler import make_analyze_handler
+from tests.adapters.summarize.test_free_tier import provider
+from tests.adapters.summarize.test_free_tier_local import local, local_reply
 from tests.services.analyzer.fakes import CheckpointingSummarizer, make_job
 from tests.services.analyzer.test_handler import VIDEO, Rig
 
@@ -301,3 +306,141 @@ def test_a_deferral_writes_no_failed_usage_row(
         holder.close()
 
     assert wired.rig.count("analyze_failed_usage") == 0
+
+
+# --- the free tier's local fallback through the real guard (#392) -------------------
+
+
+class FreeTierProbe(FreeTierSummarizer):
+    """The real free-tier chain and job hooks; each stage makes one model call, no parsing."""
+
+    fail: BaseException | None = None
+
+    def _ask(self, method: str) -> None:
+        self._chat(method, [{"role": "user", "content": "hi"}], None, False)
+
+    def derive_roster(self, meta: VideoMeta, opening: str) -> Roster:
+        self._ask("roster")
+        return Roster(())
+
+    def analyze_chunk(self, chunk: Chunk, roster: Roster, meta: VideoMeta) -> ChunkAnalysis:
+        self._ask("chunk")
+        if self.fail is not None:
+            raise self.fail
+        return ChunkAnalysis(topics=(), claims=(), quotes=())
+
+    def reduce(self, partials: list[ChunkAnalysis], meta: VideoMeta) -> str:
+        self._ask("reduce")
+        return "tldr"
+
+
+class FreeWired:
+    """A handler over a ``FreeTierProbe`` whose remote always fails, so every call goes local."""
+
+    def __init__(
+        self, dsn: str, conn: psycopg.Connection[Any], modes: Callable[[], list[str]]
+    ) -> None:
+        self.events: list[str] = []
+        self.sent: list[str] = []
+        self.dsn = dsn
+        self.opened: list[psycopg.Connection[Any]] = []
+
+        def send(p: Provider, body: bytes, timeout: float, handle: Any) -> HttpResponse:
+            self.sent.append(p.name)
+            self.events.append(f"send:{p.name}:{','.join(modes())}")
+            if p.name == "remote":
+                return HttpResponse(500, b"nope")
+            return local_reply()
+
+        def unload(p: Provider) -> None:
+            self.events.append(f"unload:{','.join(modes())}")
+
+        self.summarizer = FreeTierProbe(
+            providers=[provider("remote"), local()],
+            timeout_sec=30,
+            cooldown_sec=120,
+            prompts=load_prompt_set("v1"),
+            send=send,
+            unload=unload,
+        )
+        # Rig only seeds the video and builds its own (unused) handler; it is typed for the fake.
+        self.rig = Rig(conn, dsn, self.summarizer)  # type: ignore[arg-type]
+        self.handler = make_analyze_handler(
+            connect=lambda: psycopg.connect(dsn),
+            summarizer=self.summarizer,
+            settings=self.rig.settings,
+            clock=self.rig.clock,
+            local_llm_guard=self._guard,
+        )
+
+    def _guard(self) -> PostgresLocalLlmGuard:
+        def connect() -> psycopg.Connection[Any]:
+            made = psycopg.connect(self.dsn)
+            self.opened.append(made)
+            return made
+
+        return PostgresLocalLlmGuard(connect)
+
+    def run(self) -> None:
+        self.handler(make_job(VIDEO, dedupe_key="v1:free"), self.rig.ctx)
+
+    def close(self) -> None:
+        for made in self.opened:
+            made.close()
+
+
+@pytest.fixture
+def free_wired(
+    conn: psycopg.Connection[Any], head_dsn: str, modes: Callable[[], list[str]]
+) -> Iterator[FreeWired]:
+    wired = FreeWired(head_dsn, conn, modes)
+    yield wired
+    wired.close()
+
+
+def test_free_tier_local_fallback_holds_the_lock_unloads_then_releases(
+    free_wired: FreeWired, modes: Callable[[], list[str]]
+) -> None:
+    free_wired.run()
+
+    sends = [e for e in free_wired.events if e.startswith("send:local-ollama")]
+    assert sends and all(e == "send:local-ollama:ExclusiveLock" for e in sends)
+    # The model is unloaded while the lock is still held; the handler frees it afterwards.
+    assert free_wired.events[-1] == "unload:ExclusiveLock"
+    assert modes() == []
+    assert free_wired.rig.count("analyses") == 1
+
+
+@pytest.mark.parametrize(
+    "error",
+    [ToolFailureError("boom"), Cancelled(), Defer(datetime(2030, 1, 1, tzinfo=UTC))],
+    ids=["error", "cancelled", "defer"],
+)
+def test_free_tier_lock_is_released_after_the_unload_on_every_exit_path(
+    free_wired: FreeWired, modes: Callable[[], list[str]], error: BaseException
+) -> None:
+    free_wired.summarizer.fail = error
+
+    with pytest.raises(type(error)):
+        free_wired.run()
+
+    assert free_wired.events[-1] == "unload:ExclusiveLock"
+    assert modes() == []
+
+
+def test_free_tier_busy_lock_defers_with_nothing_sent_locally_and_no_analysis(
+    free_wired: FreeWired, modes: Callable[[], list[str]], head_dsn: str
+) -> None:
+    holder = _whisper_holder(head_dsn)
+    try:
+        with pytest.raises(LocalLlmBusy) as busy:
+            free_wired.run()
+
+        assert busy.value.reason == "whisper_busy"
+        assert free_wired.sent == ["remote"]  # one remote try, no local send, no remote retry
+        assert not [e for e in free_wired.events if e.startswith("unload")]
+        assert free_wired.rig.count("analyses") == 0
+        assert free_wired.rig.count("analyze_failed_usage") == 0  # a deferral spends nothing
+        assert modes() == ["ShareLock"]
+    finally:
+        holder.close()
