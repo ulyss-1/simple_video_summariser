@@ -61,16 +61,17 @@ check_restic
 
 if [[ $MODE == init ]]; then
   stage init
-  err="$(mktemp)"
-  out="$(mktemp)"
-  if restic_run "$err" "$out" cat config; then
-    rm -f -- "$err" "$out"
+  if probe_repository auth; then
+    rm -f -- "$PROBE_ERR"
     fail init "the repository already exists; refusing to initialise it again"
   fi
-  if ! restic_run "$err" "$out" init; then
+  rm -f -- "$PROBE_ERR"
+  err="$(mktemp)"
+  out="$(mktemp)"
+  if ! RESTIC_TIMEOUT="${AUTH_PROBE_TIMEOUT:-45}" restic_run "$err" "$out" init; then
     show_tail "$err"
     rm -f -- "$err" "$out"
-    fail init "restic init failed (bucket missing, wrong token, or endpoint unreachable)"
+    fail init "restic init failed: access denied (wrong key pair or token not scoped to the bucket), bucket missing, or endpoint unreachable"
   fi
   rm -f -- "$err" "$out"
   log "event=init outcome=ok"
@@ -94,19 +95,26 @@ dc exec -T "$DB_SERVICE" pg_isready -U "$DB_USER" -d ytdigest -q >/dev/null 2>&1
 
 if [[ $MODE == check ]]; then
   stage repository
-  err="$(mktemp)"
-  out="$(mktemp)"
-  restic_run "$err" "$out" cat config --retry-lock 1m || {
-    show_tail "$err"
-    rm -f -- "$err" "$out"
-    fail repository "the restic repository is unreachable, not initialised, or the credentials are wrong"
+  probe_repository auth || {
+    show_tail "$PROBE_ERR"
+    rm -f -- "$PROBE_ERR"
+    fail repository "the repository cannot be read: not initialised, access denied (wrong key pair or token not scoped to the bucket), or bucket missing"
   }
-  rm -f -- "$err" "$out"
+  rm -f -- "$PROBE_ERR"
   log "event=check outcome=ok"
   exit 0
 fi
 
 log "event=start project=$PROJECT"
+
+# Fail in seconds on rejected credentials; the long timeout is for uploads.
+stage auth
+probe_repository auth || {
+  show_tail "$PROBE_ERR"
+  rm -f -- "$PROBE_ERR"
+  fail auth "the repository cannot be read: not initialised, access denied (wrong key pair or token not scoped to the bucket), or bucket missing"
+}
+rm -f -- "$PROBE_ERR"
 
 stage lock
 exec 9>"$STAGING/.lock"

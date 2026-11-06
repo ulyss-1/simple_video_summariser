@@ -48,7 +48,7 @@ def test_success_publishes_one_verified_snapshot_and_leaves_no_plaintext(rig: Ri
     assert result.returncode == 0, result.stderr
 
     # dump is validated before anything leaves the host; retention comes last
-    assert rig.restic_subcommands() == ["backup", "check", "forget"]
+    assert rig.restic_subcommands() == ["cat", "backup", "check", "forget"]  # cat = auth probe
     calls = rig.calls()
     list_at = next(i for i, c in enumerate(calls) if c["tool"] == "docker" and "--list" in c["args"])
     upload_at = next(i for i, c in enumerate(calls) if c["tool"] == "restic" and c["args"][0] == "backup")
@@ -136,7 +136,7 @@ def test_retention_runs_after_check_and_uses_the_configured_policy(rig: Rig) -> 
     assert "--keep-daily" not in forget and "--keep-weekly" not in forget
     assert forget[forget.index("--group-by") + 1] == "host,tags"
     assert forget[forget.index("--tag") + 1] == "ytdigest-pg"
-    assert rig.restic_subcommands() == ["backup", "check", "forget"]
+    assert rig.restic_subcommands() == ["cat", "backup", "check", "forget"]  # cat = auth probe
 
 
 def test_default_policy_is_14_days_with_a_floor_of_3(rig: Rig) -> None:
@@ -305,7 +305,7 @@ def test_not_enough_local_space_stops_before_the_dump(rig: Rig) -> None:
     result = rig.run(BACKUP)
     assert stage_of(result) == "disk"
     assert not any("pg_dump" in c["args"] for c in rig.calls("docker"))
-    assert rig.restic_subcommands() == []
+    assert rig.restic_subcommands() == ["cat"]  # only the auth probe ran
 
 
 def test_exactly_enough_local_space_is_accepted(rig: Rig) -> None:

@@ -487,7 +487,21 @@ into a live Postgres data directory and never edits `pgdata` in place.
   Start a new repository (new bucket or an empty one), run `--init` with a new
   password stored the way step 8 says, and take a backup at once. This is why
   the password is kept in two places away from the host.
-- **R2 unreachable or a token revoked.** The backup fails at stage `upload` or
+- **`FAILED stage=auth: no usable answer from the repository within 45s`**
+  (also from `--check` and `--init`). restic retries a rejected request with
+  growing waits for minutes, so every run first asks the repository for its
+  config under a 45 s cap (`AUTH_PROBE_TIMEOUT` in the environment; real
+  uploads keep the long `RESTIC_TIMEOUT`). No answer in time means one of: a
+  wrong key pair in `r2.env`, a deleted or expired API token, a token not
+  scoped to this bucket (Object Read and Write on the bucket), a wrong bucket
+  name or account id in `backup.conf`, or R2 unreachable. Fix: in the
+  Cloudflare dashboard confirm the token exists and covers the bucket, create a
+  new token if not, rewrite `r2.env`, then run `pg-backup.sh --check`. The
+  message names no key, account id or bucket on purpose. A repository that
+  answers but is not initialised fails fast at stage `auth` or `repository`
+  with a different message (run `--init`).
+- **R2 unreachable or a token revoked.** The backup fails at stage `auth`,
+  `upload` or
   `verify`, the freshness check turns red after 30 hours, and local data is
   unaffected. Check Cloudflare status and the token; nothing needs cleaning up,
   the next timer run retries by itself. Create a new token and rewrite
