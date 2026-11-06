@@ -335,12 +335,14 @@ def test_a_child_that_sent_done_but_will_not_exit_is_killed(tmp_path: Path) -> N
 def test_child_failures_map_to_the_classes_of_the_in_process_path(
     mode: str, error_type: type[Exception], error_class: ErrorClass, fragment: str, tmp_path: Path
 ) -> None:
-    # A long poll: a failure must be reported as itself, not lose a race with
-    # the (always true) cancel flag below.
-    rig = Rig(mode, tmp_path, poll_interval=DEADLINE_SEC)
+    # The cancel flag is only consulted when a poll slice passes with no
+    # message, and it is false here, so it cannot win. The order where it is
+    # true at the same moment as the death is forced in
+    # test_a_dead_child_is_reported_as_its_death_even_when_cancel_is_true.
+    rig = Rig(mode, tmp_path)
 
     with pytest.raises(Exception) as caught:
-        rig.transcriber.transcribe(AUDIO, cancelled=lambda: True)
+        rig.transcriber.transcribe(AUDIO, cancelled=never)
 
     assert type(caught.value) is error_type
     assert classify(caught.value) is error_class
@@ -348,6 +350,69 @@ def test_child_failures_map_to_the_classes_of_the_in_process_path(
     assert not isinstance(caught.value, Cancelled)
     if rig.pidfile.exists():
         assert_gone(rig.pids()["child"])
+
+
+@pytest.mark.parametrize(
+    ("mode", "error_type", "fragment"),
+    [
+        ("gated_segv_self", ToolFailureError, "SIGSEGV"),
+        ("gated_kill_self", ResourceError, "killed (SIGKILL), probably out of memory"),
+        ("gated_exit1", ToolFailureError, "status 1"),
+    ],
+)
+def test_a_dead_child_is_reported_as_its_death_even_when_cancel_is_true(
+    mode: str, error_type: type[Exception], fragment: str, tmp_path: Path
+) -> None:
+    """Forced order: child dead, end of stream queued, cancel true, then the parent polls.
+
+    The parent is parked inside its first ``cancelled()`` (child alive and
+    silent, so the answer is false). While it is parked the test lets the child
+    die and waits for the reader to queue the end-of-stream marker; only then
+    is the parent released, with the flag now true. Its next ``get`` finds the
+    marker at once, so the death must win over the flag.
+    """
+    rig = Rig(mode, tmp_path, poll_interval=0.02)
+    parked = threading.Event()
+    release = threading.Event()
+    dead_and_queued = threading.Event()
+    first_call = threading.Event()
+
+    def cancelled() -> bool:
+        if not first_call.is_set():
+            first_call.set()
+            parked.set()
+            assert release.wait(DEADLINE_SEC), "the test never released the parent"
+            return False
+        return dead_and_queued.is_set()
+
+    outcome: list[BaseException] = []
+
+    def call() -> None:
+        try:
+            rig.transcriber.transcribe(AUDIO, cancelled=cancelled)
+        except BaseException as exc:  # noqa: BLE001
+            outcome.append(exc)
+
+    worker = threading.Thread(target=call, daemon=True)
+    worker.start()
+    wait_for(parked.is_set, "the parent to poll a silent child and ask cancelled()")
+    child = rig.pids()["child"]
+    assert alive(child), "the child should still be alive and silent"
+
+    Path(f"{rig.pidfile}.go").touch()  # open the gate: the child now dies
+    assert_gone(child)
+    wait_for(
+        lambda: not any("_read_replies" in t.name for t in threading.enumerate()),
+        "the reader to queue the end of the stream",
+    )
+    dead_and_queued.set()  # the cancel flag is true from here on
+    release.set()
+    worker.join(DEADLINE_SEC)
+
+    assert not worker.is_alive(), "transcribe never returned"
+    assert len(outcome) == 1
+    assert type(outcome[0]) is error_type, repr(outcome[0])
+    assert fragment in str(outcome[0])
 
 
 def test_the_exit_status_message_carries_redacted_stderr(tmp_path: Path) -> None:
