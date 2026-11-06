@@ -53,8 +53,14 @@ stable.
      and cannot be changed, and it decides the endpoint host. A location hint
      is only best-effort and is not a residency guarantee. If you have a reason
      to pick another jurisdiction, do it now, and set `R2_JURISDICTION`
-     accordingly in step 8. Cloudflare is still a US company; the jurisdiction
-     is about where objects are stored.
+     accordingly in step 11. **If the bucket already exists in the default
+     jurisdiction, that is acceptable:** set `R2_JURISDICTION=default`
+     (endpoint `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`). The caveat is
+     residency: without a jurisdiction, Cloudflare only honours a best-effort
+     location hint, so objects may be stored outside the EU, and this cannot be
+     changed later (a different jurisdiction means a new bucket and a new
+     repository). Cloudflare is still a US company; the jurisdiction is about
+     where objects are stored.
    - Storage class: **Standard** (never Infrequent Access: it has no free
      allowance, a 30-day minimum and a retrieval fee).
    - Leave public access **off**: do not enable the `r2.dev` subdomain and do
@@ -555,7 +561,7 @@ account id, bucket name, access key, secret, signed URL or password that
 appears; the scripts print none of them, but check. **Never paste**
 `backup.conf`, `r2.env`, `restic.password` or a dump.
 
-1. Backend type: "restic over S3 to Cloudflare R2, EU jurisdiction" (no account
+1. Backend type: "restic over S3 to Cloudflare R2, <default or EU> jurisdiction" (no account
    details).
 2. `restic version | head -1`.
 3. `stat -c '%a %U %n' /etc/ytdigest-backup /etc/ytdigest-backup/*` (modes only).

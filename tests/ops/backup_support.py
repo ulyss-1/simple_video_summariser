@@ -46,23 +46,24 @@ MANIFEST_LINES = [
 
 RESTIC_STUB = r'''#!{python}
 import hashlib, json, os, shutil, sys
+from os import environ as ENV
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-d = Path(os.environ["STUB_DIR"])
+d = Path(ENV["STUB_DIR"])
 sc = json.loads((d / "scenario.json").read_text())
 state_file = d / "restic_state.json"
 state = json.loads(state_file.read_text()) if state_file.exists() else {
     "snapshots": [], "exists": sc.get("repo_exists", True), "n": 0}
 args = sys.argv[1:]
-password = Path(os.environ["RESTIC_PASSWORD_FILE"]).read_text() if os.environ.get("RESTIC_PASSWORD_FILE") else ""
+password = Path(ENV["RESTIC_PASSWORD_FILE"]).read_text() if ENV.get("RESTIC_PASSWORD_FILE") else ""
 with (d / "calls.jsonl").open("a") as fh:
     fh.write(json.dumps({"tool": "restic", "args": args, "env": {
-        "has_key": bool(os.environ.get("AWS_ACCESS_KEY_ID")),
-        "has_secret": bool(os.environ.get("AWS_SECRET_ACCESS_KEY")),
-        "region": os.environ.get("AWS_DEFAULT_REGION"),
-        "repo": os.environ.get("RESTIC_REPOSITORY"),
-        "password_file_set": bool(os.environ.get("RESTIC_PASSWORD_FILE"))}}) + "\n")
+        "has_key": bool(ENV.get("AWS_ACCESS_KEY_ID")),
+        "has_secret": bool(ENV.get("AWS_SECRET_ACCESS_KEY")),
+        "region": ENV.get("AWS_DEFAULT_REGION"),
+        "repo": ENV.get("RESTIC_REPOSITORY"),
+        "password_file_set": bool(ENV.get("RESTIC_PASSWORD_FILE"))}}) + "\n")
 
 def save():
     state_file.write_text(json.dumps(state))
@@ -76,8 +77,8 @@ def die(sub):
         if sc.get("leak"):
             sys.stderr.write(
                 "Fatal: unable to open config file: Stat: Get "
-                f"\"{os.environ.get('RESTIC_REPOSITORY')}/config?X-Amz-Credential={os.environ.get('AWS_ACCESS_KEY_ID')}\": "
-                f"403 secret={os.environ.get('AWS_SECRET_ACCESS_KEY')} password={password} "
+                f"\"{ENV.get('RESTIC_REPOSITORY')}/config?X-Amz-Credential={ENV.get('AWS_ACCESS_KEY_ID')}\": "
+                f"403 secret={ENV.get('AWS_SECRET_ACCESS_KEY')} password={password} "
                 f"host https://user:pw@{sc.get('leak_host', 'x.example')}/b bare {sc.get('leak_host', 'x.example')}\n")
         else:
             sys.stderr.write("Fatal: something failed\n")
@@ -156,16 +157,17 @@ sys.exit(2)
 
 DOCKER_STUB = r'''#!{python}
 import json, os, signal, sys, time
+from os import environ as ENV
 from pathlib import Path
 
-d = Path(os.environ["STUB_DIR"])
+d = Path(ENV["STUB_DIR"])
 sc = json.loads((d / "scenario.json").read_text())
 args = sys.argv[1:]
 
 def record(extra=None):
     with (d / "calls.jsonl").open("a") as fh:
         fh.write(json.dumps({"tool": "docker", "args": args,
-                             "compose_env": os.environ.get("COMPOSE_PROJECT_NAME"),
+                             "compose_env": ENV.get("COMPOSE_PROJECT_NAME"),
                              **(extra or {})}) + "\n")
 
 if args[:1] == ["info"]:

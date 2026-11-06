@@ -8,7 +8,8 @@ R2_ACCOUNT_ID=00000000000000000000000000000000
 # The bucket created for backups.
 R2_BUCKET=ytdigest-pg-backup
 # default | eu | fedramp. Must match the jurisdiction chosen when the bucket was
-# created, which cannot be changed afterwards. EU is the recommended choice.
+# created, which cannot be changed afterwards. EU is recommended; use `default`
+# for a bucket created without a jurisdiction (endpoint <ACCOUNT_ID>.r2.cloudflarestorage.com).
 R2_JURISDICTION=eu
 # Optional: a bare endpoint host, replacing the one derived from the account id
 # and jurisdiction. Leave commented out for Cloudflare R2.
