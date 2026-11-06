@@ -1,0 +1,80 @@
+[
+ {
+  "video_id": "k1xJbNAGmFg",
+  "title": "AI Stocks Are on Sale. It Won\u2019t Last",
+  "channel_id": "UCyqlbzLoYtpqDXwRI9Yh5LA",
+  "duration_sec": 1084,
+  "transcript_source": "whisper",
+  "sha256": {
+   "meta": "6e2b06b17697073d81dd7aff0b1b81aee04b43fdbfe6428f64ab5feabcffb74e",
+   "segments": "ec0d9f1b86bfd2177edbdb8e2661c89c3ffa3ded1c28408b6b5241fe8abba290"
+  },
+  "frozen_at": "2026-11-05 00:33:32",
+  "kind": "whisper"
+ },
+ {
+  "video_id": "zVc-S0Od8_0",
+  "title": "Nvidia Just Gave Away the Next Boom (THIS IS HUGE!)",
+  "channel_id": "UCyqlbzLoYtpqDXwRI9Yh5LA",
+  "duration_sec": 1117,
+  "transcript_source": "whisper",
+  "sha256": {
+   "meta": "12b155823c203e0ee508e131449b1433b81fc4ac7c55c2ab6096873a04699cbb",
+   "segments": "23111f74ae7ece9d07fb9f728a0acefba52ac2795b53aa88a51ef6c256785fa2"
+  },
+  "frozen_at": "2026-11-05 01:53:26",
+  "kind": "whisper"
+ },
+ {
+  "video_id": "iM3YsKfRh6E",
+  "title": "The #1 Predictor of How Long You Will Live",
+  "channel_id": "UC3w193M5tYPJqF0Hi-7U-2g",
+  "duration_sec": 1359,
+  "transcript_source": "whisper",
+  "sha256": {
+   "meta": "bfd6cefbc4af28eed14203a1540adc84e085b25a8bf094fc3cb86446a96b94d9",
+   "segments": "305216f941e7855e7d1a99b99d2f46d8b478d8fbcfef4d6672171909de2d5e15"
+  },
+  "frozen_at": "2026-11-05 03:30:37",
+  "kind": "whisper"
+ },
+ {
+  "video_id": "hoYWNqh_u5I",
+  "title": "AI Bubble Bursting Now, Best Thing That Can Happen To Markets!",
+  "channel_id": "UCrTTBSUr0zhPU56UQljag5A",
+  "duration_sec": 1470,
+  "transcript_source": "whisper",
+  "sha256": {
+   "meta": "0057a2d38d3dd286804e3cf3a67550ff0302bcc69dcaecfeea81f3a2f9f47701",
+   "segments": "113e0b17fd7132124eaae7fe58e5faf544f7d17e5963c3cf29bee1521292201e"
+  },
+  "frozen_at": "2026-11-05 05:21:55",
+  "kind": "whisper"
+ },
+ {
+  "video_id": "SMFV5A8aq0c",
+  "title": "These Stocks Are Going Down",
+  "channel_id": "UCbta0n8i6Rljh0obO7HzG9A",
+  "duration_sec": 1550,
+  "transcript_source": "whisper",
+  "sha256": {
+   "meta": "164285be6360a9d8ec793d4bbc3e480ac3138bffd5c92415a77bafbf57097d89",
+   "segments": "85329e5f21d704b2d505c78589a3281bd1381195f3421d9c4a7323d3145a3011"
+  },
+  "frozen_at": "2026-11-05 06:44:36",
+  "kind": "whisper"
+ },
+ {
+  "video_id": "eeawNrRi-cc",
+  "title": "The Stock Market Rotation Has Begun",
+  "channel_id": "UCfCT7SSFEWyG4th9ZmaGYqQ",
+  "duration_sec": 1516,
+  "transcript_source": "captions",
+  "sha256": {
+   "meta": "c570814537b9ce64c0a0104ada64313dcb444b3812df439d83d36400db0e46d2",
+   "segments": "66b1272db88c95d3177d0b085ed2a7275f928a2b30334caf57b44c33b9baca39"
+  },
+  "frozen_at": "2026-11-05 07:06:15",
+  "kind": "auto"
+ }
+]

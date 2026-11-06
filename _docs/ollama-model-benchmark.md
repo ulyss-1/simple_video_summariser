@@ -376,8 +376,77 @@ Order was randomised (seed `r2-rep`): qwen 3, gemma 3, gemma 2, gemma 1, qwen 1,
 
 #### Not done in round 2
 
-- The five videos YouTube rate-limited in round 1 (`PxP7IoagbtA`, `_Yt7NuD-nbk`, `_m1XcP1addc`, `hoYWNqh_u5I`, `HKskNSEb5_c`; reserves not tried): the subtitle request answered HTTP 429 on every attempt from 16:06 to the last attempt at 18:40 (the orchestrator stopped the acquirer at 18:46; about 2.5 hours, one video at a time, 45 s apart, back-off up to 30 min). Step 3 therefore did not run. It needs another night or a yt-dlp cookie file (issue #63).
+- The five videos YouTube rate-limited in round 1 (`PxP7IoagbtA`, `_Yt7NuD-nbk`, `_m1XcP1addc`, `hoYWNqh_u5I`, `HKskNSEb5_c`; reserves not tried): the subtitle request answered HTTP 429 on every attempt from 16:06 to the last attempt at 18:40 (the orchestrator stopped the acquirer at 18:46; about 2.5 hours, one video at a time, 45 s apart, back-off up to 30 min). Step 3 therefore did not run. It needs another night or a yt-dlp cookie file (issue #63). Superseded in rounds 3 and 4: four of the five were run after getting their transcripts from Whisper instead of captions, plus a substitute; `HKskNSEb5_c` was never covered (see "Rounds 3 and 4" below).
 - The concurrent runs have no clean same-round baseline: the 7.8k-token video was run alone at 16384 only in round 1 (`ctx16k` rows above), so the slowdown of qwen's first call (307 s against 166.0 s for the same roster call alone, about 1.85 times) is compared across rounds.
+
+### Rounds 3 and 4 (issue #382, 2026-11-04 and 2026-11-05, labels `r3-ctx16k` and `r4-ctx16k`)
+
+Run to complete the owner's ten-video comparison: round 3 covered four videos with both models, round 4 six more. Same host, same code (the analyzer, adapter and chunking at `origin/master` 81c60f5), Ollama 0.40.13, the settings of round 2: `OLLAMA_NUM_CTX` 16384, reserve 2048, `CHUNK_SEC` 900, `OVERLAP_SEC` 60, prompt v1, `think` false, 900 s per call, 75 min per run, a cold start for every run (models unloaded, `/api/ps` empty), a sampler for PSI, swap, `MemAvailable` and the loaded model for the whole window, and the 1 GB `MemAvailable` watchdog (it never tripped: the runs were alone on the host). The live transcriber was stopped for both windows; the live analyzer only calls remote APIs. Model order per video was randomised from the seed `r3-ctx16k:<video>` (round 3) and `r4-ctx16k:<video>` (round 4); the stop rule was 3 failures per model. Raw tables, run records, scores with their private mappings, hashes and the scripts are in `_docs/ollama-benchmark-382/round3/`, `round4/` and `tools/round3/`, `tools/round4/`. Rounds 3 and 4 tables are never mixed with the earlier ones.
+
+#### Transcripts
+
+YouTube still answered HTTP 429 on the subtitle request throughout 2026-11-04 (and at 23:55, when round 4 started), but audio downloads worked. The transcripts were therefore made without the subtitle endpoint: the repo's `YouTubeAudio` adapter downloaded the audio and the repo's own `FasterWhisperTranscriber` ran Whisper large-v3 int8 in a throwaway container (`ytdigest-whisper:latest`, model volume read-only, `--network none`, 6 GB, a dummy `DATABASE_URL` for the child process, one video at a time and never beside an LLM run), so the segments have the shape of the live pipeline. Nine of the ten transcripts are Whisper: `PxP7IoagbtA`, `_Yt7NuD-nbk` and `_m1XcP1addc` (3 threads, round 3), `YjdfcHo_lE4` (exported read-only from the live API, where the live transcriber had produced it with Whisper) and `k1xJbNAGmFg`, `zVc-S0Od8_0`, `iM3YsKfRh6E`, `hoYWNqh_u5I`, `SMFV5A8aq0c` (6 CPUs and 6 threads, round 4; this differs from round 3 and, at these audio lengths, bought no clear speed-up). The tenth, `eeawNrRi-cc`, uses YouTube auto-captions: the subtitle endpoint answered again on 2026-11-05 at 07:06, when it was fetched. Whisper's wall time was 1.8 to 2.9 times the audio length (engine `rtf` 1.83, 2.34 and 2.60 with 3 threads; 1.81, 1.93, 2.37, 2.41 and 2.90 with 6 threads), much slower than the 1.14 of a 40 s trial, so on this host a transcript costs one to three times as long as a gemma summary of the same video (1971 to 4270 s of Whisper against 856 to 1696 s for one gemma run). Whisper transcripts here are lower case and unpunctuated, so the summaries of these videos are not strictly comparable with those of the caption-based videos of rounds 1 and 2.
+
+#### The ten videos and the runs
+
+The ten are: round 3 `PxP7IoagbtA`, `YjdfcHo_lE4`, `_Yt7NuD-nbk`, `_m1XcP1addc` (Sven Carlin, Sven Carlin, After Hours, BWB; 1046 to 1553 s), round 4 `k1xJbNAGmFg` (BWB, 1084 s), `zVc-S0Od8_0` (BWB, 1117 s), `iM3YsKfRh6E` (Dr. Berg, 1359 s), `hoYWNqh_u5I` (Sven Carlin, 1470 s), `SMFV5A8aq0c` (Joseph Carlson, 1550 s) and `eeawNrRi-cc` (After Hours, 1516 s, captions). `HKskNSEb5_c` (After Hours, 43 min), a planned video of the first rounds, was never covered: its transcript and runs did not fit the window, and `eeawNrRi-cc` replaced it so that the set reached ten.
+
+| Video         | est tokens | gemma4:e4b | qwen3.5:4b          |
+| ------------- | ---------- | ---------- | ------------------- |
+| `PxP7IoagbtA` | 4639       | ok, 856 s  | ok, 1436 s          |
+| `YjdfcHo_lE4` | 6743       | ok, 1263 s | ok, 1587 s          |
+| `_Yt7NuD-nbk` | 7725       | ok, 1210 s | ok, 1722 s          |
+| `_m1XcP1addc` | 8507       | ok, 1696 s | failed, 1091 s      |
+| `k1xJbNAGmFg` | 6672       | ok, 1512 s | failed, 1060 s      |
+| `zVc-S0Od8_0` | 6882       | ok, 1470 s | failed, 1075 s      |
+| `iM3YsKfRh6E` | 7511       | ok, 1316 s | failed, 1075 s      |
+| `hoYWNqh_u5I` | 6592       | ok, 1162 s | not run (stop rule) |
+| `SMFV5A8aq0c` | 9565       | ok, 1204 s | not run (stop rule) |
+| `eeawNrRi-cc` | 9120       | ok, 1417 s | not run (stop rule) |
+
+That is 17 runs: gemma4:e4b completed 10 of 10; qwen3.5:4b completed 3 of 7 attempts and was then stopped by the 3-failure rule (round 4 held three qwen failures; the earlier one of round 3 is not counted towards that restart). Where both models ran on the same video, gemma was faster in the three completed pairs (856 against 1436 s, 1263 against 1587 s, 1210 against 1722 s): generation 6.3 to 7.7 tokens/s (all ten gemma runs) against 4.4 to 4.6 for qwen in the completed runs (about 5 in the failed ones), prefill about 22 against 24. Gemma used 11.9 to 12.1 GB at peak and left a minimum of 2.5 to 2.7 GB of `MemAvailable`, qwen 8.2 to 9.2 GB and 5.4 to 6.3 GB; swap reached 2.5 to 3.0 GB for both, with a maximum PSI full10 of 2.63 (gemma) and 1.59 (qwen). Per-call columns, parser counters and the sampler figures are in `round3/tables.md` and `round4/tables.md`.
+
+#### Failures of qwen3.5:4b, with the cause
+
+All four failures are the same event: the roster call succeeded (160 to 191 s, 18 to 21 output tokens), then the first chunk call hit the 900 s call timeout (`TimeoutError`, the adapter reports `LLM_UNAVAILABLE: Ollama ... did not answer`) and the run ended after 1060 to 1091 s with no timing data for the timed-out call. Memory was ample in every one (minimum `MemAvailable` 6.1 to 6.3 GB, PSI full10 at most 1.59, swap-in 1 to 13 MB), so it is not memory pressure. Why the call ran past 900 s was not observed. The circumstantial reading is that a chunk call needs about 6k tokens of prefill at about 24 tokens/s (around 250 s) and then qwen's usual 2000 to 3000 generated tokens at 4.4 to 5 tokens/s (400 to 650 s), so it sits close to the limit and a slightly longer generation crosses it; qwen's successful chunk calls in these rounds generated up to 3010 tokens. That is consistent with rounds 1 and 2 but unproven here. Whether a longer `OLLAMA_TIMEOUT_SEC` would let qwen finish was not tested.
+
+#### Quality: scores
+
+Scoring was blind as in the earlier rounds (rubric `RUBRIC.md`: faithfulness F, instruction following I, coverage C, integers 1 to 5; mechanical FACTS lines with the abbreviation-aware sentence counter; packs without model names; mappings kept apart and used only to un-blind). The scorers were LLM scorers of one model family, the same in both passes; no human scored. Raw scores and mappings: `round3/pass1.json`, `pass2.json`, `mapping_pass1.json`, `mapping_pass2.json` and `round4/abs1.json`, `abs2.json`, `mapping_abs1.json`, `mapping_abs2.json`.
+
+Round 3, paired (X and Y shown together, two passes, mean of the two):
+
+| Video           | gemma4:e4b F / I / C | qwen3.5:4b F / I / C    |
+| --------------- | -------------------- | ----------------------- |
+| `PxP7IoagbtA`   | 4.0 / 5.0 / 3.5      | 2.0 / 4.5 / 3.5         |
+| `YjdfcHo_lE4`   | 4.0 / 4.5 / 3.5      | 2.0 / 4.5 / 4.0         |
+| `_Yt7NuD-nbk`   | 4.0 / 5.0 / 4.0      | 3.5 / 3.0 / 4.0         |
+| mean of these 3 | 4.0 / 4.8 / 3.7      | 2.5 / 4.0 / 3.8         |
+| `_m1XcP1addc`   | 4.5 / 5.0 / 3.5      | no output (qwen failed) |
+
+Over all four round-3 videos gemma scores 4.1 / 4.9 / 3.6 (8 scores per column). The faithfulness gap (gemma 4.0 against 2.5, 1.5 points) is of the size seen in rounds 1 and 2 (1.75 at 8192 and 1.25 at 16384 in the corrected scores); the scorers named the kind of error again for qwen: the wrong name for a company (EchoStar called "Ironwood"), a claim attributed to the wrong person, and a host's cautionary statement turned into its opposite ("liabilities are manageable", where the host calls $600 billion a risk). Coverage is level and instruction following favours gemma by 0.8 on these three videos; the one video where qwen came close on faithfulness is `_Yt7NuD-nbk` (3.5 against 4.0), and there it was also weaker on instruction following (3.0 against 5.0).
+
+Round 4, absolute (one gemma summary per unit, no pair to compare with; both passes, mean of two):
+
+| Video                    | F   | I   | C   |
+| ------------------------ | --- | --- | --- |
+| `iM3YsKfRh6E`            | 4.0 | 3.5 | 3.5 |
+| `hoYWNqh_u5I`            | 4.0 | 4.0 | 4.0 |
+| `SMFV5A8aq0c`            | 4.0 | 5.0 | 4.5 |
+| `k1xJbNAGmFg`            | 4.0 | 4.0 | 4.0 |
+| `zVc-S0Od8_0`            | 3.5 | 4.0 | 3.5 |
+| `eeawNrRi-cc` (captions) | 4.0 | 4.5 | 4.5 |
+| mean (12 scores)         | 3.9 | 4.2 | 4.0 |
+
+#### Limitations
+
+- Only three videos have a complete pair of summaries; for the other seven the comparison rests on qwen's failures (four of seven attempts), not on a quality contrast.
+- One family of LLM scorers, two blind passes, no human; scores are integers on a three-criterion rubric and the two passes differ by one point in 16 of the 39 cells that both scored (never by more). The absolute scores of round 4 are softer than the paired ones, because a scorer without a second summary has nothing to be harsh against; they must not be set against the paired columns.
+- Qwen's reliability is 3 completed runs of 7 attempted, and the cause of the slow first chunk call was not observed. A longer call timeout was not tried.
+- One host, one Ollama version, one `OLLAMA_NUM_CTX` (16384). Videos are 17 to 26 minutes from five channels, mostly finance, English only.
+- Nine transcripts are Whisper large-v3 int8 and one is auto-captions; Whisper ran with 3 threads in round 3 and 6 in round 4.
+- `HKskNSEb5_c` was never covered; the ten were reached by substituting `eeawNrRi-cc`.
+- The concurrent-memory finding (nothing runs beside Whisper) stays from round 2; rounds 3 and 4 ran with the jobs separated and did not re-test it.
 
 ### Recommendation (evidence-based advice pending the owner's decision)
 
@@ -393,12 +462,25 @@ By the rule as written the memory condition is measured and failed for both mode
 
 Settings finding, independent of the model choice: with `OLLAMA_NUM_CTX` 8192 and `CHUNK_SEC` 900, 4 of 10 main runs failed or were cut, 2 of them by the context limit and both on a chunk prompt of 5.6k to 6.0k tokens; at `OLLAMA_NUM_CTX` 16384 all 4 runs succeeded. Raising `OLLAMA_NUM_CTX` to 16384, or shortening `CHUNK_SEC` so a chunk prompt stays well below the budget, is a candidate fix for both models. It costs memory (a larger KV cache, see the runner sizes above) and was tested on only two videos. Whichever way the owner goes, a follow-up measurement should include more videos (the five that could not be fetched) and, if the two jobs are ever to overlap, a host with more memory.
 
+#### Update after rounds 3 and 4 (owner's decision, 2026-11-05)
+
+The owner's decision, which this benchmark informs but does not make: use the free-tier remote summariser first, with a local Ollama model as the fallback, and keep the analyzer's Ollama jobs and the transcriber from ever running at the same time (#392, #393). The local fallback should be `gemma4:e4b` at `OLLAMA_NUM_CTX` 16384; `qwen3.5:4b` is not recommended.
+
+- Why `gemma4:e4b`: it completed 10 of 10 videos at 16384 (qwen 3 of 7 attempts), was faster in all three completed pairs (856, 1263 and 1210 s against 1436, 1587 and 1722 s) and was more faithful in the only three complete blind pairs (4.0 against 2.5 on a 1 to 5 scale; coverage level, instruction following 4.8 against 4.0). Qwen's errors are invented or swapped names and reversed statements, and its first chunk call exceeded the 900 s limit in all four failures.
+- What it costs: gemma4:e4b leaves a minimum of 2.5 to 2.7 GB of `MemAvailable` alone on this 14 GB host, so it cannot share the host with a transcription (round 2), which is why the serialisation is a requirement, not an option.
+- What would change the answer: qwen with a longer call timeout is untested and might finish where it timed out (it is also slower and less faithful, so it would need to win on something else, for example memory headroom); a host with more memory would remove the serialisation; a larger or different model family, a human scorer or more paired videos would test the quality finding (three pairs and one scorer family are thin evidence). The choice of `OLLAMA_MODEL` stays with the owner.
+
 ## Status
 
 The analyzer can now be run at `OLLAMA_NUM_CTX=16384` through `.env` (#389);
 see "Labelled experiment" above.
 
-Not decided. `OLLAMA_MODEL` stays `qwen3.5:4b`. The #382 results and an
+Rounds 3 and 4 (ten videos in all) are in "Rounds 3 and 4" above; the
+owner's decision they inform (free tier first, `gemma4:e4b` as the local
+fallback at `OLLAMA_NUM_CTX` 16384, the analyzer's Ollama jobs and the
+transcriber never overlapping, #392 and #393) is stated in "Update after
+rounds 3 and 4". This document changes no default: `OLLAMA_MODEL` in the
+code and `.env.example` stays `qwen3.5:4b` until the owner changes it. The #382 results and an
 evidence-based recommendation (pending the owner's decision) are in
 "Real-transcript benchmark (issue #382)" above. Changing the default
 needs the owner's approval and an update of `.env.example` and

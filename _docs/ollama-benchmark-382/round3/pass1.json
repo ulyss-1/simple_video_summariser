@@ -1,0 +1,10 @@
+{
+"U01":{"X":{"faithfulness":4,"instruction_following":5,"coverage":4,"note":"Faithful to host's stance (valuations matter, both right, lost decades, dividend businesses); minor: loose 'some speakers' framing; omits Microsoft liabilities/fully invested detail."},
+"Y":{"faithfulness":2,"instruction_following":4,"coverage":4,"note":"Says host shows Microsoft liabilities are manageable (host says $600B liabilities are a risk); 'guaranteed dividends' unsupported; many bear/bull claims misattributed to Tommy Lee, PTJ quote misattributed; claims list padded with garbled items."}},
+"U02":{"X":{"faithfulness":4,"instruction_following":5,"coverage":4,"note":"Accurate on PNW timing, spinoffs, Generac, EchoStar/SpaceX (incl. host's SpaceX-worth-zero), GenDigital, Invesco; TLDR omits EchoStar/Invesco but topics carry them."},
+"Y":{"faithfulness":2,"instruction_following":4,"coverage":4,"note":"Renames EchoStar as 'Ironwood' and maps IVZ to Ironwood; says Invesco deserves P/E 10 if market crashes (wrong); misses host's SpaceX-worth-zero view; GoDaddy churn pinned on GoDaddy ok; claims padded."}},
+"U03":{"X":{"faithfulness":3,"instruction_following":3,"coverage":4,"note":"Claim 'There is never going to be a bear market again' inverts the host's rhetorical question; Lululemon 45% garbled; 'consistently lose' overstated. 30 speakers outside roster per FACTS."},
+"Y":{"faithfulness":4,"instruction_following":5,"coverage":4,"note":"Mostly accurate; same truncated 'never going to be a bear market' claim but followed by 'Of course not'; garbled Lululemon/NVIDIA claim; Dalio/Burry 2008 and track record covered."}},
+"U04":{"X":{"faithfulness":4,"instruction_following":5,"coverage":3,"note":"Accurate; TLDR spends a sentence on gold/sponsor and misses SK Hynix canary thesis, ADR/ETF guidance and 3-year forecasts; minor 'Amazon' is caption error for Micron."},
+"Y":{"faithfulness":null,"instruction_following":null,"coverage":null,"note":"NO OUTPUT; none"}}
+}

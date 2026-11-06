@@ -1,0 +1,53 @@
+{
+ "U01": {
+  "X": {
+   "faithfulness": 4,
+   "instruction_following": 5,
+   "coverage": 3,
+   "justification": "Mostly accurate view of bulls vs bears, valuations, lost decades; misses 2% yield and Microsoft liabilities detail; minor muddled 'some speakers suggested' phrasing"
+  },
+  "Y": {
+   "faithfulness": 2,
+   "instruction_following": 5,
+   "coverage": 3,
+   "justification": "TLDR says host's forensic accounting shows Microsoft liabilities manageable (transcript: $600B risk); 'guaranteed dividends' invented; claims misattributed to Tommy Lee (Zitron, Taleb, Baltimore remarks) and 2033 bubble to Paul Tudor Jones; broad but distorted"
+  }
+ },
+ "U02": {
+  "X": {
+   "faithfulness": 4,
+   "instruction_following": 4,
+   "coverage": 3,
+   "justification": "Facts and entities correct (EchoStar/SpaceX, Invesco, Generac); thin on GoDaddy/FedEx/REITs/Tyler/Hasbro; overlapping topics and a junk fragment claim"
+  },
+  "Y": {
+   "faithfulness": 2,
+   "instruction_following": 5,
+   "coverage": 4,
+   "justification": "Calls EchoStar 'Ironwood' and Invesco ticker IVZ 'Ironwood' (invented entity); 25-to-140 price run attributed to GNRC; but wide, mostly accurate coverage of PNW, SOLV, GNRC, GenDigital, GoDaddy, FedEx, REITs, Tyler, Hasbro"
+  }
+ },
+ "U03": {
+  "X": {
+   "faithfulness": 4,
+   "instruction_following": 5,
+   "coverage": 4,
+   "justification": "Accurate on Burry/Dalio calls, 2010-2017 bull run, S&P buy-and-hold, AI valuations, Lynch pencil-in; Lululemon 61%/45% and S&P line garbled from captions"
+  },
+  "Y": {
+   "faithfulness": 4,
+   "instruction_following": 3,
+   "coverage": 4,
+   "justification": "Accurate track-record, Buffett, Burry positions, AI valuations; slight stretch saying both were bearish in 2019 (only Burry); FACTS report 30 speakers outside roster"
+  }
+ },
+ "U04": {
+  "X": {
+   "faithfulness": 5,
+   "instruction_following": 5,
+   "coverage": 4,
+   "justification": "All figures check against transcript (SK Hynix $62B, four layers, HDD through 2028, gold -25%); omits Micron/SanDisk/ETF detail and forecast table in TLDR"
+  },
+  "Y": "none"
+ }
+}

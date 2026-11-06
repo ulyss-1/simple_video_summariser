@@ -1,0 +1,8 @@
+{
+"A01":{"faithfulness":4,"instruction_following":3,"coverage":4,"note":"Faithful overall (garbled nitric-oxide claim is verbatim); FACTS shows 8 speakers outside roster, duplicated mitochondria topics; omits author's own score/percentile and 4x4 protocol detail in TLDR."},
+"A02":{"faithfulness":4,"instruction_following":4,"coverage":4,"note":"Claims supported; TLDR slightly generic; topics repeat (bubble burst/AI concerns x2) padding list; covers OpenAI funding, commoditization, value-investing stance."},
+"A03":{"faithfulness":4,"instruction_following":5,"coverage":4,"note":"Mostly supported; 'driven by inflation concerns' overstates (upcoming report); TLDR ends on SBF oddly; misses Broadcom/jobs-report specifics and AWS rebuttal detail but topics cover rebuttal, Costco, Meta vs Google, SBF."},
+"A04":{"faithfulness":4,"instruction_following":4,"coverage":4,"note":"Numbers supported; topic 'Analysis of a high-growth AI company' is vague/muddled (Comfort Systems), TLDR skips Invent/Comfort and wait-for-earnings detail partly; sponsor ad given TLDR space; topics redundant."},
+"A05":{"faithfulness":3,"instruction_following":4,"coverage":3,"note":"Robo-taxi 'over a million next year' (Musk's 2019 promise) attributed to Brian; $3-4T presented as projection without it being Nvidia's self-serving figure; Amazon 'AI subscriptions' toll collector slightly off; omits Nvidia/Micron/memory-cycle and valuation-ladder points; redundant topics."},
+"A06":{"faithfulness":4,"instruction_following":4,"coverage":4,"note":"Supported; midterm topic framed only as negative impact though speaker concludes not bearish; duplicate Duolingo and data-center topics; covers rotation, Duolingo, Uber, data-center scarcity but not the portfolio-gain/winners detail."}
+}
