@@ -397,11 +397,17 @@ First decide which case you are in.
    docker compose -f compose.yml exec -T db psql -U ytdigest -d ytdigest -c '\dt'   # "Did not find any relations"
    ```
 
+   On a brand-new volume the first healthcheck can pass while the entrypoint is
+   still initialising, and `psql` then says "the database system is starting
+   up". Wait until
+   `docker compose -f compose.yml exec -T db pg_isready -h 127.0.0.1 -U ytdigest -d ytdigest`
+   succeeds (the TCP listener only exists once the real server is up), then retry.
+
 4. Restore, stopping at the first error:
 
    ```bash
    docker compose -f compose.yml exec -T db pg_restore --exit-on-error --no-owner -U ytdigest -d ytdigest \
-     < /var/lib/ytdigest-backup/dr/<path-printed-above>/ytdigest.dump
+     < "<the ytdigest.dump path printed by --fetch-only>"
    ```
 
 5. **Inspect before migrating.** Read the restored revision and compare with
@@ -429,12 +435,18 @@ into a live Postgres data directory and never edits `pgdata` in place.
    copy of a stopped server is safe; the rule is only "never copy a live one"):
 
    ```bash
-   docker volume create ytdigest_pgdata_failed_$(date -u +%Y%m%d)
-   docker run --rm -v ytdigest_pgdata:/from:ro -v ytdigest_pgdata_failed_$(date -u +%Y%m%d):/to alpine cp -a /from/. /to/
+   BACKUP_IMG="$(docker compose -f compose.yml config --images | grep '^postgres:')"   # the pinned image already on the host
+   FAILED="ytdigest_pgdata_failed_$(date -u +%Y%m%d)"
+   docker volume create "$FAILED"
+   docker run --rm --pull=never -v ytdigest_pgdata:/from:ro -v "$FAILED":/to "$BACKUP_IMG" cp -a /from/. /to/
+   for v in ytdigest_pgdata "$FAILED"; do
+     docker run --rm --pull=never -v "$v":/v:ro "$BACKUP_IMG" sh -c 'find /v -type f | wc -l; du -sk /v'
+   done
    ```
 
-   Check the copy is not empty. Do not delete `ytdigest_pgdata` until the
-   restore below is verified; keep the `_failed_` volume until you are sure.
+   The two file counts and sizes must be equal and not zero. Do not delete
+   `ytdigest_pgdata` until they match and the restore below is verified; keep
+   the `_failed_` volume until you are sure.
 
 3. Prove the snapshot with the drill (6a step 2), then fetch it.
 4. Get fresh storage: with `db` stopped and the old volume safely copied, remove

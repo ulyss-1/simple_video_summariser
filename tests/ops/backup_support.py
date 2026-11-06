@@ -143,7 +143,7 @@ sys.exit(2)
 '''
 
 DOCKER_STUB = r'''#!{python}
-import json, os, sys, time
+import json, os, signal, sys, time
 from pathlib import Path
 
 d = Path(os.environ["STUB_DIR"])
@@ -189,7 +189,7 @@ prog = cmd[0]
 
 def marker_and_block(name):
     (d / name).write_text("1")
-    time.sleep(60)
+    signal.pause()
 
 if prog == "pg_isready":
     sys.exit(sc.get("ready_rc", 0))

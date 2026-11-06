@@ -94,6 +94,21 @@ class Fixture:
             assert real is not None
             path_dirs.insert(0, str(Path(real).parent))
             self.stub = None
+        # A docker wrapper that, only while `race_flag` exists, commits one more
+        # row to the source right before pg_dump runs: the forced interleaving
+        # for "the manifest still matches the dump while the workers write".
+        self.race_flag = tmp_path / "race_flag"
+        wrapper = self.bin / "docker"
+        wrapper.write_text(
+            "#!/bin/bash\n"
+            f'if [[ -e "{self.race_flag}" && " $* " == *" pg_dump "* ]]; then\n'
+            f'  {docker} compose -p "{self.source}" -f compose.yml exec -T db psql -v ON_ERROR_STOP=1 '
+            "-U ytdigest -d ytdigest -c \"INSERT INTO videos (channel_id, title) VALUES (2, 'late')\" >/dev/null || exit 97\n"
+            "fi\n"
+            f'exec {docker} "$@"\n'
+        )
+        wrapper.chmod(0o755)
+        path_dirs.insert(0, str(self.bin))
         self.path = ":".join(path_dirs)
         (self.cfg / "backup.conf").write_text(
             f"R2_ACCOUNT_ID={'0' * 32}\nR2_BUCKET=local-test-bucket\nSTAGING_DIR={self.staging}\n"
@@ -222,3 +237,17 @@ def test_the_production_project_is_refused_before_docker_is_asked_anything(fx: F
     assert drill.returncode != 0
     assert "stage=target" in drill.stderr
     assert "production project" in drill.stderr
+
+
+def test_manifest_matches_the_dump_while_the_source_keeps_writing(fx: Fixture) -> None:
+    """Forced interleaving: a row is committed after the snapshot is exported and
+    before pg_dump starts. Because both share one exported snapshot, the dump has
+    3 videos like the manifest, though the source now has 4."""
+    fx.race_flag.write_text("1")
+    snapshot = _backup(fx)
+    assert fx.psql("SELECT count(*) FROM videos").stdout.strip() == "4"
+
+    drill = _run(["bash", str(DRILL), "--snapshot", snapshot, "--project", fx.drill], fx.env(), timeout=900)
+    assert drill.returncode == 0, drill.stdout + drill.stderr
+    assert "outcome=verified" in drill.stdout
+    assert _leftovers(fx.drill) == ("", "")
