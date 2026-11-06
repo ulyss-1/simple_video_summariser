@@ -1,0 +1,12 @@
+# Every 6 hours (#150). Repeats the alert while stale; rate limiting is the
+# notification channel's job.
+[Unit]
+Description=ytdigest Postgres backup freshness check
+
+[Timer]
+OnCalendar=*-*-* 00/6:50:00 UTC
+Persistent=true
+Unit=ytdigest-pg-backup-fresh.service
+
+[Install]
+WantedBy=timers.target

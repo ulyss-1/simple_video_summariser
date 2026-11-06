@@ -1,0 +1,14 @@
+# Started by OnFailure= of the backup and freshness units (#150); %i is the
+# failed unit's name. Runs the owner's NOTIFY_HOOK (backup.conf), if any.
+[Unit]
+Description=ytdigest Postgres backup failure notification for %i
+
+[Service]
+Type=oneshot
+User=@USER@
+WorkingDirectory=@REPO@
+ExecStart=@REPO@/ops/host/pg-backup-notify.sh %i
+TimeoutStartSec=2min
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes

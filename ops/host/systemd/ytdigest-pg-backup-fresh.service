@@ -1,0 +1,19 @@
+# Freshness check (#150): fails when the newest verified off-host snapshot is
+# older than RPO + grace (backup.conf: 24 h + 6 h by default). A failure runs the
+# same notification hook as a failed backup.
+[Unit]
+Description=ytdigest Postgres backup freshness check
+Documentation=file:@REPO@/_docs/backup-restore.md
+After=network-online.target
+Wants=network-online.target
+OnFailure=ytdigest-pg-backup-notify@%n.service
+
+[Service]
+Type=oneshot
+User=@USER@
+WorkingDirectory=@REPO@
+ExecStart=@REPO@/ops/host/pg-backup-status.sh --check-fresh
+TimeoutStartSec=15min
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
