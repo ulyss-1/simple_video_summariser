@@ -1,0 +1,30 @@
+# Copy to /etc/ytdigest-backup/backup.conf (owned by the deploy account, mode 600,
+# directory mode 700). Plain KEY=VALUE lines: no quotes, no spaces, no secrets.
+# The access key, secret and restic password live in r2.env and restic.password,
+# never here. Runbook: _docs/backup-restore.md.
+
+# Cloudflare account id (32 hex characters, shown in the R2 overview).
+R2_ACCOUNT_ID=00000000000000000000000000000000
+# The bucket created for backups.
+R2_BUCKET=ytdigest-pg-backup
+# default | eu | fedramp. Must match the jurisdiction chosen when the bucket was
+# created, which cannot be changed afterwards. EU is the recommended choice.
+R2_JURISDICTION=eu
+# Optional: a bare endpoint host, replacing the one derived from the account id
+# and jurisdiction. Leave commented out for Cloudflare R2.
+#R2_ENDPOINT_HOST=
+
+# Freshness limit is RPO_HOURS + GRACE_HOURS since the newest verified snapshot.
+RPO_HOURS=24
+GRACE_HOURS=6
+# Retention: keep this many daily and weekly snapshots (KEEP_DAILY >= 1).
+KEEP_DAILY=7
+KEEP_WEEKLY=4
+
+# Plaintext staging for one run: owned by the deploy account, mode 700, outside
+# Docker's data root and the checkout.
+STAGING_DIR=/var/lib/ytdigest-backup
+
+# Optional absolute path of an executable that sends failure notices; it is run
+# as `HOOK failure "<message>"`. Empty means failures are only in the journal.
+#NOTIFY_HOOK=/etc/ytdigest-backup/notify-hook.sh

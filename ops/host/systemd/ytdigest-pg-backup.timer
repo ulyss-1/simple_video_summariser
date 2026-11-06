@@ -1,0 +1,12 @@
+# Nightly at 02:30 UTC (#150). Persistent=true runs a missed night after boot.
+[Unit]
+Description=Nightly ytdigest Postgres backup
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 UTC
+RandomizedDelaySec=10min
+Persistent=true
+Unit=ytdigest-pg-backup.service
+
+[Install]
+WantedBy=timers.target

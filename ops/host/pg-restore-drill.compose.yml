@@ -1,0 +1,26 @@
+# Disposable PostgreSQL 18 for the restore drill (#150), used only by
+# ops/host/pg-restore-drill.sh under a project named ytdigest-drill-*.
+# No network, no published port, its own volume: it cannot reach, and is never
+# the same volume as, the production `pgdata`. The image is the same pinned
+# one as `db` in compose.yml (a test keeps them equal).
+services:
+  db:
+    image: postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5
+    network_mode: none
+    environment:
+      POSTGRES_USER: ytdigest
+      POSTGRES_PASSWORD: drill-disposable-no-network
+      POSTGRES_DB: ytdrill
+    volumes:
+      - drillpgdata:/var/lib/postgresql
+    healthcheck:
+      # TCP on loopback, not the socket: the entrypoint's temporary init server
+      # listens on the socket only, so this turns healthy only for the real one.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ytdigest -d ytdrill"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+volumes:
+  drillpgdata:

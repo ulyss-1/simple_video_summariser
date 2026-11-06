@@ -1,0 +1,23 @@
+# Nightly encrypted off-host Postgres backup (#150). Installed by
+# ops/host/install-pg-backup-units.sh, which fills in @USER@ and @REPO@.
+# No credential is in this file: the script reads mode-600 files from
+# /etc/ytdigest-backup (or YTDIGEST_BACKUP_CONFIG_DIR) itself.
+[Unit]
+Description=ytdigest Postgres backup to off-host restic repository
+Documentation=file:@REPO@/_docs/backup-restore.md
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+OnFailure=ytdigest-pg-backup-notify@%n.service
+
+[Service]
+Type=oneshot
+User=@USER@
+WorkingDirectory=@REPO@
+ExecStart=@REPO@/ops/host/pg-backup.sh
+TimeoutStartSec=3h
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+Nice=10
+IOSchedulingClass=idle

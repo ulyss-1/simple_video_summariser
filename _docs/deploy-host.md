@@ -113,17 +113,23 @@ docker info --format '{{.DockerRootDir}}'       # confirm the new path
 
 **Sizing** (adds up to the preflight's 40 GB default):
 
-| Item | Reserved size |
-|---|---:|
-| Images: backend, whisper (+~2 GB over backend), web, bake-off (#76) | 8 GB |
-| `whisper-models` volume (~3 GB per large model; ~3 GB for the #3 bake-off set) | 3 GB |
-| `audio` volume (`AUDIO_MAX_GB`, default 20) | 20 GB |
-| `pgdata` volume | 4 GB |
-| build cache | 5 GB |
-| **Total** | **40 GB** |
+| Item                                                                           | Reserved size |
+| ------------------------------------------------------------------------------ | ------------: |
+| Images: backend, whisper (+~2 GB over backend), web, bake-off (#76)            |          8 GB |
+| `whisper-models` volume (~3 GB per large model; ~3 GB for the #3 bake-off set) |          3 GB |
+| `audio` volume (`AUDIO_MAX_GB`, default 20)                                    |         20 GB |
+| `pgdata` volume                                                                |          4 GB |
+| build cache                                                                    |          5 GB |
+| **Total**                                                                      |     **40 GB** |
 
 Reclaim space with `docker builder prune` and `docker image prune`.
 **`docker compose down -v` deletes `pgdata`** — never run it on the server.
+
+**Back up `pgdata` before relying on this host (#150).** The named volume is
+the only copy of every transcript and analysis. `_docs/backup-restore.md` sets
+up a nightly encrypted `pg_dump` pushed off-host to Cloudflare R2, a restore
+drill, and the disaster-recovery steps; do its "Steps you must do" after the
+first deploy (section 11) and before treating the host as production.
 
 ---
 
@@ -229,15 +235,15 @@ Only the reverse proxy's ports are open inbound (the proxy itself is #141);
 `web` stays on `127.0.0.1:8080` (§11.4, D13). Outbound HTTPS the host and
 containers need:
 
-| Destination | For |
-|---|---|
-| `www.youtube.com`, `*.googlevideo.com` | video metadata and audio (yt-dlp) |
+| Destination                                                     | For                                                                    |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `www.youtube.com`, `*.googlevideo.com`                          | video metadata and audio (yt-dlp)                                      |
 | `huggingface.co`, `cas-bridge.xethub.hf.co`, `us.aws.cdn.hf.co` | Whisper models (the Xet CDN; the old `cdn-lfs.huggingface.co` is gone) |
-| `pypi.org`, `files.pythonhosted.org` | image builds |
-| `deb.debian.org` | image builds (Debian base) |
-| `registry.npmjs.org` | web image build |
-| `registry-1.docker.io` | base images |
-| `api.anthropic.com` | only when `SUMMARIZER=anthropic` |
+| `pypi.org`, `files.pythonhosted.org`                            | image builds                                                           |
+| `deb.debian.org`                                                | image builds (Debian base)                                             |
+| `registry.npmjs.org`                                            | web image build                                                        |
+| `registry-1.docker.io`                                          | base images                                                            |
+| `api.anthropic.com`                                             | only when `SUMMARIZER=anthropic`                                       |
 
 ---
 
@@ -272,7 +278,7 @@ OLLAMA_HOST=172.17.0.1:11434 ollama pull "${OLLAMA_MODEL:-qwen3.5:4b}"
 ```
 
 **Host firewall (ufw active, default deny incoming).** A container reaches the
-bridge address as a connection *into the host*, so `ufw` drops it. Symptom:
+bridge address as a connection _into the host_, so `ufw` drops it. Symptom:
 host `curl http://172.17.0.1:11434/api/tags` works, the container times out
 (a DROP, not a refusal), and `ops/host/preflight.sh` FAILs
 `ollama-from-container`. Found on the ProBook (2026-11-02). Allow Docker's
@@ -594,13 +600,13 @@ logs:
 docker compose logs --tail 200 transcriber analyzer
 ```
 
-| `error_class` | Meaning and where to look |
-|---|---|
-| `TRANSIENT_NETWORK` | Egress is blocked or flaky: §7. |
-| `RATE_LIMITED` | YouTube throttling or its bot check (`HTTP Error 429`, "Sign in to confirm you're not a bot"). The remedy is the optional cookie file (#63); see the comment in `compose.yml`'s `transcriber` service. |
-| `PERMANENT_SOURCE` | The video itself; `status: unavailable` with `removed`, `private`, `geoblocked` or `agegated`. Replace the ID in this section, in a reviewed change, with another public video that has manual English captions. |
-| `LLM_UNAVAILABLE` | Ollama binding and model: §8. |
-| `LLM_INVALID_OUTPUT` | The model's reply failed validation. It is retried; report a `dead` analyze job as an issue. |
+| `error_class`        | Meaning and where to look                                                                                                                                                                                        |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TRANSIENT_NETWORK`  | Egress is blocked or flaky: §7.                                                                                                                                                                                  |
+| `RATE_LIMITED`       | YouTube throttling or its bot check (`HTTP Error 429`, "Sign in to confirm you're not a bot"). The remedy is the optional cookie file (#63); see the comment in `compose.yml`'s `transcriber` service.           |
+| `PERMANENT_SOURCE`   | The video itself; `status: unavailable` with `removed`, `private`, `geoblocked` or `agegated`. Replace the ID in this section, in a reviewed change, with another public video that has manual English captions. |
+| `LLM_UNAVAILABLE`    | Ollama binding and model: §8.                                                                                                                                                                                    |
+| `LLM_INVALID_OUTPUT` | The model's reply failed validation. It is retried; report a `dead` analyze job as an issue.                                                                                                                     |
 
 A log line `No supported JavaScript runtime` is a real fault since #134: the
 image ships Deno and `yt-dlp-ejs`, so it means the image is not the expected
@@ -637,7 +643,7 @@ credentials-file: /etc/cloudflared/<tunnel-id>.json
 ingress:
   - hostname: dev-ytdigest.devopsdojo.click
     service: http://127.0.0.1:8080
-  - service: http_status:404       # required catch-all
+  - service: http_status:404 # required catch-all
 ```
 
 One-time setup, on a machine where `cloudflared tunnel login` was done for
