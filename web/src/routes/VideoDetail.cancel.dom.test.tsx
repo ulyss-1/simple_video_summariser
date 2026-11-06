@@ -4,7 +4,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { components } from '../api'
 import { FakePlayerProvider } from '../components/FakePlayerProvider'
-import { POLL_INTERVAL_MS } from '../hooks/useVideo'
+import { CANCEL_POLL_INTERVAL_MS, POLL_INTERVAL_MS } from '../hooks/useVideo'
 import { setupUser } from '../test/user'
 import { Library } from './Library'
 import { VideoDetail } from './VideoDetail'
@@ -166,7 +166,7 @@ const confirmBtn = () =>
 const keepBtn = () =>
   screen.getByRole('button', { name: 'Keep processing' }) as HTMLButtonElement
 const HINT =
-  'This usually takes up to a minute: the worker learns of the request on its next heartbeat, then stops its download or model call.'
+  'Cancel requested, waiting for the worker (up to 5 s). It then stops its download or model call.'
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -515,6 +515,40 @@ describe('Cancelled state', () => {
     script(video({ status: 'processing', active_job: job({ state: 'pending' }) }))
     await mount()
     expect(screen.getByRole('status').textContent).toBe('Queued: Transcribing')
+  })
+})
+
+describe('polling cadence (#395)', () => {
+  it('polls every 5 s while a cancel is pending and every 15 s otherwise', async () => {
+    expect(CANCEL_POLL_INTERVAL_MS).toBe(5_000)
+    expect(POLL_INTERVAL_MS).toBe(15_000)
+    script(running())
+    await mount()
+    const start = videoGets()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CANCEL_POLL_INTERVAL_MS)
+    })
+    expect(videoGets()).toBe(start)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS - CANCEL_POLL_INTERVAL_MS)
+    })
+    expect(videoGets()).toBe(start + 1)
+  })
+
+  it('refetches after 5 s once the request is stored', async () => {
+    script(running({ cancel_requested_at: REQUESTED }))
+    await mount()
+    const start = videoGets()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CANCEL_POLL_INTERVAL_MS)
+    })
+    expect(videoGets()).toBe(start + 1)
+  })
+
+  it('shows no hint while no request is stored', async () => {
+    script(running())
+    await mount()
+    expect(screen.queryByText(HINT)).toBeNull()
   })
 })
 

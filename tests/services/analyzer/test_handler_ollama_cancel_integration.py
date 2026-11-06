@@ -77,6 +77,7 @@ def test_a_cancel_stored_during_an_ollama_generation_aborts_it_and_saves_nothing
         queue,
         liveness_path=tmp_path / "hb",
         heartbeat_sec=60,
+        cancel_poll_sec=5,
         heartbeat_queue_factory=lambda: PostgresQueue(hb),
         runtime_limit_sec=lambda job: None,
         timer_factory=timers,

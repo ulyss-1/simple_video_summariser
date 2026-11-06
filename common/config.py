@@ -160,6 +160,9 @@ class Settings(BaseSettings):
     # deleted video once they are this many days old (#327).
     CANCELLED_JOB_RETENTION_DAYS: PositiveInt = 7
     HEARTBEAT_SEC: PositiveInt = 60
+    # How often a worker reads (never writes) its running job's cancel flag, so
+    # a user cancel is noticed in seconds, not at the next heartbeat (#395).
+    CANCEL_POLL_SEC: PositiveInt = 5
     REAP_AFTER_SEC: PositiveInt = 300
     # How often the planner looks for stale jobs (#38); much shorter than
     # POLL_INTERVAL_SEC so a crashed worker's job is not stranded for an hour.
@@ -316,6 +319,16 @@ class Settings(BaseSettings):
         if minimum is not None and value < minimum:
             raise ValueError(
                 f"DB_POOL_MAX_SIZE ({value}) must be at least DB_POOL_MIN_SIZE ({minimum})"
+            )
+        return value
+
+    @field_validator("CANCEL_POLL_SEC")
+    @classmethod
+    def _cancel_poll_not_slower_than_heartbeat(cls, value: int, info: ValidationInfo) -> int:
+        heartbeat = info.data.get("HEARTBEAT_SEC")
+        if heartbeat is not None and value > heartbeat:
+            raise ValueError(
+                f"CANCEL_POLL_SEC ({value}) must not exceed HEARTBEAT_SEC ({heartbeat})"
             )
         return value
 

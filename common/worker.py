@@ -233,6 +233,7 @@ class Worker:
         poll_sec: float = 5,
         liveness_path: Path = Path("/tmp/heartbeat"),
         heartbeat_sec: float | None = None,
+        cancel_poll_sec: float | None = None,
         shutdown_grace_sec: float | None = None,
         settings: Settings | None = None,
         heartbeat_queue_factory: Callable[[], JobQueue] | None = None,
@@ -262,6 +263,11 @@ class Worker:
 
         self._heartbeat_sec = (
             heartbeat_sec if heartbeat_sec is not None else float(_resolved_settings().HEARTBEAT_SEC)
+        )
+        self._cancel_poll_sec = (
+            cancel_poll_sec
+            if cancel_poll_sec is not None
+            else float(_resolved_settings().CANCEL_POLL_SEC)
         )
         self._grace_sec = (
             shutdown_grace_sec
@@ -476,6 +482,7 @@ class Worker:
         stop_flag = threading.Event()
         tick_lock = threading.Lock()
         handle_box: dict[str, TimerHandle] = {}
+        poll_box: dict[str, TimerHandle] = {}
         captured_context = contextvars.copy_context()
         cancel_logged = False
 
@@ -542,11 +549,53 @@ class Worker:
         def _tick_in_context() -> None:
             captured_context.run(_tick)
 
+        def _poll() -> None:
+            # Read-only cancel-flag poll (#395): learns of a user cancel within
+            # ``CANCEL_POLL_SEC`` instead of waiting for the 60 s heartbeat.
+            # Shares ``tick_lock`` and the heartbeat connection with ``_tick``,
+            # so the connection is never used by two threads. It never writes;
+            # a LOST lease is left to the heartbeat tick to act on.
+            nonlocal cancel_logged
+            with tick_lock:
+                if stop_flag.is_set():
+                    return
+                try:
+                    hb_queue = self._get_heartbeat_queue()
+                    seen = hb_queue.cancel_requested(job.id, self._name)
+                except Exception as exc:  # noqa: BLE001 - retried on the next tick
+                    _log.error(
+                        "worker.cancel_poll_failed",
+                        worker=self._name,
+                        job_id=job.id,
+                        error=str(exc),
+                    )
+                    self._discard_heartbeat_queue()
+                else:
+                    if seen is HeartbeatResult.CANCEL_REQUESTED:
+                        ctx._cancel()
+                        if not cancel_logged:
+                            cancel_logged = True
+                            _log.info(
+                                "worker.cancel_requested",
+                                worker=self._name,
+                                job_id=job.id,
+                            )
+                        return  # seen: do not re-arm
+                if not stop_flag.is_set():
+                    poll_box["handle"] = self._timer_factory(
+                        self._cancel_poll_sec, _poll_in_context
+                    )
+
+        def _poll_in_context() -> None:
+            captured_context.run(_poll)
+
         handle_box["handle"] = self._timer_factory(self._heartbeat_sec, _tick_in_context)
+        poll_box["handle"] = self._timer_factory(self._cancel_poll_sec, _poll_in_context)
 
         def stop() -> None:
             stop_flag.set()
             handle_box["handle"].cancel()
+            poll_box["handle"].cancel()
             # Block until an in-flight tick (one that passed the stop_flag
             # check before we set it above) has released the lock, so no
             # heartbeat call is still running once stop() returns.

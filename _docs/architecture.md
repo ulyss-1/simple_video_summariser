@@ -272,6 +272,7 @@ class JobQueue(Protocol):
     def claim(self, kinds: Sequence[str], *, worker: str,
               dedupe_key: str | None = None) -> AbstractContextManager[Job | None]: ...
     def heartbeat(self, job_id: int, worker: str) -> HeartbeatResult: ...
+    def cancel_requested(self, job_id: int, worker: str) -> HeartbeatResult: ...  # read-only (#395)
     def reap_stale(self, older_than_sec: int | None = None) -> int: ...
     def fail_job(self, job: Job, worker: str, exc: BaseException) -> None: ...
     def force_pending(self, job_id: int, priority: int) -> bool: ...
@@ -285,13 +286,15 @@ runs over `InProcessQueue`, and the API write-path functions (`submit_video`,
 reached only by code that legitimately builds a `PostgresQueue` (operator
 sweeps and lifecycle) stay off it.
 
-- On the port: `enqueue`, `claim`, `heartbeat`, `reap_stale`, `force_pending`,
+- On the port: `enqueue`, `claim`, `heartbeat`, `cancel_requested`, `reap_stale`, `force_pending`,
   `raise_priority`, `fail_job`.
 - `heartbeat` answers `HELD` (the worker still holds the job), `CANCEL_REQUESTED`
   (it holds it and a user asked it to stop, #237) or `LOST` (the reaper or a
   newer claim took it). On `CANCEL_REQUESTED` the worker sets `ctx.cancelled`
   and keeps heartbeating until the handler returns, so the reaper does not race
-  a handler that is winding down. `handoff`, which enqueues a successor, refuses
+  a handler that is winding down. `cancel_requested` (#395) answers the same three
+  values with one read-only `SELECT` by primary key (no `UPDATE`, no lock) and
+  `InProcessQueue` returns `HELD`; the worker calls it every `CANCEL_POLL_SEC`. `handoff`, which enqueues a successor, refuses
   atomically when the parent job has a cancel request: it inserts nothing and
   raises `Cancelled`, so a cancelled `ingest` never leaves a `transcribe` or
   `analyze` job. It reads the parent's request before it checks that the video
@@ -533,8 +536,9 @@ transaction. Each `pending` job of the video ends at once as `dead` with
 `retry_dead` and both clearing `cancel_requested_at`: `POST /ops/jobs/{id}/retry`
 and `POST /videos` (#304), which revives the video's newest job in place when it
 is a cancelled one (see the `POST /videos` row in §8.3). The database row is the source of truth. The
-worker learns of it on its next heartbeat tick (60 s) and the handler stops at
-its next checkpoint. Every outcome write of a job with a request becomes the
+worker learns of it within `CANCEL_POLL_SEC` (default 5 s) by a read-only poll
+(#395); the heartbeat (60 s) is the lease and still reports `CANCEL_REQUESTED` as a
+backstop. The handler stops at its next checkpoint. Every outcome write of a job with a request becomes the
 cancelled outcome: a raised `Cancelled`, any other exception, `Defer`, the
 watchdog's `fail_job` and the reaper all end `CANCELLED`, never `pending`. A
 handler that returns normally ends `done`, with `cancel_requested_at` still set.
@@ -1364,8 +1368,9 @@ web/src/
 - **Video page cancel (#300).** With `active_job` set and no `cancel_requested_at`,
   the page offers `Cancel processing` (inline confirmation, `POST /videos/{id}/cancel`,
   hook `useCancelProcessing`), then invalidates `['video', id]`. While
-  `cancel_requested_at` is set the status line reads `Cancelling: <stage>…` and the
-  page keeps polling; once the job is terminal, `last_cancelled` makes it read
+  `cancel_requested_at` is set the status line reads `Cancelling: <stage>…` with the
+  hint `Cancel requested, waiting for the worker (up to 5 s). It then stops its download or model call.`
+  and the page polls every 5 s instead of 15 s (#395; `CANCEL_WAIT_SEC` in `web/src/lib/ops.ts`); once the job is terminal, `last_cancelled` makes it read
   `Processing cancelled (<kind>)`. `Delete video` is available in every state and
   answers `204` also during processing (#303), so the delete flow has no `409` case.
   When `status = 'idle'` and `last_cancelled` is set, the page offers
@@ -1493,6 +1498,7 @@ than reading `os.environ` directly.
 | `UPCOMING_MAX_WAIT_DAYS` | `14` | transcriber: ingest reschedules a premiere or live stream until it is available, and dead-letters it this many days after discovery (#65) |
 | `CANCELLED_JOB_RETENTION_DAYS` | `7` | planner: the `reap` task deletes a `dead` / `CANCELLED` job of a deleted video (tombstone, no `videos` row) this many days after it finished (#327); its returned count includes them |
 | `HEARTBEAT_SEC` / `REAP_AFTER_SEC` | `60` / `300` | workers, planner |
+| `CANCEL_POLL_SEC` | `5` | workers: how often a running job's cancel flag is read (never written) so a user cancel is noticed in seconds; rejected when above `HEARTBEAT_SEC` (#395) |
 | `MAX_ATTEMPTS_TRANSCRIBE` | `2` | transcriber |
 | `INGEST_MAX_RUNTIME_SEC` / `ANALYZE_MAX_RUNTIME_SEC` / `TRANSCRIBE_MAX_RTF` | `600` / `3600` / `3.0` | workers (§11.5); compose passes `ANALYZE_MAX_RUNTIME_SEC` to the analyzer only |
 | `TRANSCRIBER_CPUS` | `3.0` | compose |
@@ -2257,8 +2263,13 @@ heartbeat answer `LOST` and stop the process on every delete). If a request is
 stored when the shutdown signal arrives, the job still ends `CANCELLED` and the
 worker then exits as for any shutdown. The watchdog's exit with status 70 on a
 job with a request records `CANCELLED`, not `TOOL_FAILURE`, and schedules no
-retry. The heartbeat tick still sets `ctx.cancelled` (up to 60 s after the
-request); the long stretches with no checkpoint then stop within about a second
+retry. The worker learns of a request within `CANCEL_POLL_SEC` (default 5 s) by a
+read-only poll on the heartbeat connection (#395): one `SELECT` by primary key per
+running job per tick, no write. The poll shares the heartbeat's lock and
+connection, stops once it has seen the request, and leaves a lost lease to the
+heartbeat. The 60 s heartbeat still reports `CANCEL_REQUESTED` as a backstop. Before
+#395 the wait was up to 60 s: the #324 live test measured 28 s from request to
+worker, then 0.57 s to kill the child. The long stretches with no checkpoint then stop within about a second
 because the adapters poll the flag (#302). Each service passes
 `lambda: ctx.cancelled` as a `cancelled` callable (`None` outside a job) to the
 metadata, subtitle and audio ports and, through `JobScope.cancelled()`, to the

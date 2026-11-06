@@ -7,6 +7,8 @@ import {
   bulkRetryMessage,
   bulkScopeLabel,
   buildJobsRequest,
+  CANCEL_REQUESTED_MESSAGE,
+  CANCEL_WAIT_SEC,
   cancelMessage,
   cancelPath,
   canCancel,
@@ -453,7 +455,12 @@ describe('cancel helpers (#301)', () => {
   })
 
   const job = (outcome: string) => ({ job_id: 1, kind: 'ingest', outcome })
-  const REQUESTED = 'Cancel requested: the job stops at its next checkpoint, which can take about a minute'
+  const REQUESTED =
+    'Cancel requested: the worker is told within about 5 s and the job stops at its next checkpoint'
+  it('shares one wait constant with the views', () => {
+    expect(CANCEL_WAIT_SEC).toBe(5)
+    expect(CANCEL_REQUESTED_MESSAGE).toBe(REQUESTED)
+  })
   it.each([
     [202, { video_id: 'v', jobs: [job('cancel_requested')] }, REQUESTED],
     [202, { video_id: 'v', jobs: [job('cancel_requested'), job('cancelled')] }, REQUESTED],

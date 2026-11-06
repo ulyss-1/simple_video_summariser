@@ -317,7 +317,10 @@ export function cancelPath(videoId: string): string {
   return `videos/${encodeURIComponent(videoId)}/cancel`
 }
 
-const CANCEL_REQUESTED_MESSAGE = 'Cancel requested: the job stops at its next checkpoint, which can take about a minute'
+/** Seconds a worker takes to learn of a cancel: the server's CANCEL_POLL_SEC default (#395). */
+export const CANCEL_WAIT_SEC = 5
+
+export const CANCEL_REQUESTED_MESSAGE = `Cancel requested: the worker is told within about ${CANCEL_WAIT_SEC} s and the job stops at its next checkpoint`
 
 function cancelJobs(body: unknown): CancelOut['jobs'] | null {
   if (!isObject(body) || !Array.isArray(body.jobs)) return null

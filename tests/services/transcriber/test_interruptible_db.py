@@ -76,6 +76,7 @@ class Setup:
             self.queue,
             liveness_path=tmp_path / "hb",
             heartbeat_sec=60,
+            cancel_poll_sec=5,
             shutdown_grace_sec=GRACE_SEC,
             heartbeat_queue_factory=lambda: PostgresQueue(self.hb),
             runtime_limit_sec=lambda job: None,

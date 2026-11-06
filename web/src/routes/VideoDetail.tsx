@@ -15,6 +15,7 @@ import { useRestartProcessing } from '../hooks/useRestartProcessing'
 import { reanalyzeErrorMessage, useReanalyze } from '../hooks/useReanalyze'
 import { useVideo, VideoApiError } from '../hooks/useVideo'
 import { parseStartTime } from '../lib/moment'
+import { CANCEL_WAIT_SEC } from '../lib/ops'
 import { parseVideoId } from '../lib/videoId'
 
 type Video = components['schemas']['VideoDetail']
@@ -53,8 +54,7 @@ function cancellingText(kind: string): string {
 
 const cancelledText = (kind: string) => `Processing cancelled (${kind})`
 
-const CANCELLING_HINT =
-  'This usually takes up to a minute: the worker learns of the request on its next heartbeat, then stops its download or model call.'
+const CANCELLING_HINT = `Cancel requested, waiting for the worker (up to ${CANCEL_WAIT_SEC} s). It then stops its download or model call.`
 
 /** `YYYY-MM-DD` in UTC, or null when absent or unparsable. */
 function utcDate(value: string | null): string | null {

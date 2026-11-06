@@ -306,7 +306,12 @@ starts over if it is resumed." for a `transcribe` job, with `Confirm cancel` and
 `Keep processing`. Focus moves to `Keep processing`; `Escape` or `Keep processing`
 returns it to `Cancel processing`. Errors are fixed `role="alert"` texts. On success
 the status line (`tabIndex={-1}`) takes focus: "Cancelling: {stage}…" with the
-heartbeat hint underneath, later "Processing cancelled ({kind})". Deleting a
+hint underneath ("Cancel requested, waiting for the worker (up to 5 s). It then stops
+its download or model call.", #395; the page polls every 5 s meanwhile), later
+"Processing cancelled ({kind})". On the Ops page the `cancelling` badge is followed by
+"Cancel requested {time} · waiting for the worker (up to 5 s)" and the response
+message reads "Cancel requested: the worker is told within about 5 s and the job
+stops at its next checkpoint". Deleting a
 video that is processing adds "Processing is stopped and any running work is
 discarded." to the delete confirmation.
 

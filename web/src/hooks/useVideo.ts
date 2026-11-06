@@ -1,11 +1,15 @@
 import { useQuery } from '@tanstack/react-query'
 import type { components } from '../api'
 import { api, rethrowHttp } from '../api'
+import { CANCEL_WAIT_SEC } from '../lib/ops'
 
 export type VideoDetailData = components['schemas']['VideoDetail']
 
 /** Refetch interval while a job is active for the video. */
 export const POLL_INTERVAL_MS = 15_000
+
+/** Refetch interval while a cancel request waits for the worker (#395). */
+export const CANCEL_POLL_INTERVAL_MS = CANCEL_WAIT_SEC * 1000
 
 /** A non-2xx response. Carries only the status: the body is never surfaced. */
 export class VideoApiError extends Error {
@@ -51,6 +55,10 @@ export function useVideo(videoId: string | null) {
     queryKey: ['video', videoId],
     queryFn: ({ signal }) => fetchVideo(videoId as string, signal),
     enabled: videoId !== null,
-    refetchInterval: (q) => (q.state.data?.active_job != null ? POLL_INTERVAL_MS : false),
+    refetchInterval: (q) => {
+      const job = q.state.data?.active_job
+      if (job == null) return false
+      return job.cancel_requested_at != null ? CANCEL_POLL_INTERVAL_MS : POLL_INTERVAL_MS
+    },
   })
 }

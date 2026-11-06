@@ -218,6 +218,9 @@ class _LazyQueue:
     def heartbeat(self, job_id: int, worker: str) -> HeartbeatResult:
         raise NotImplementedError
 
+    def cancel_requested(self, job_id: int, worker: str) -> HeartbeatResult:
+        raise NotImplementedError
+
     def reap_stale(self, older_than_sec: int | None = None) -> int:
         raise NotImplementedError
 

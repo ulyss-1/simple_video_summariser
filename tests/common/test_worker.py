@@ -36,7 +36,7 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import psycopg
 import pytest
@@ -103,6 +103,8 @@ class FakeQueue:
         self.heartbeat_result: HeartbeatResult | Callable[[], HeartbeatResult] | Exception = (
             HeartbeatResult.HELD
         )
+        self.cancel_poll_calls: list[tuple[int, str]] = []
+        self.cancel_poll_result: HeartbeatResult | Exception = HeartbeatResult.HELD
         self.close_calls = 0
         self.close_raises: Exception | None = None
 
@@ -138,6 +140,13 @@ class FakeQueue:
             raise result
         if callable(result):
             return result()
+        return result
+
+    def cancel_requested(self, job_id: int, worker: str) -> HeartbeatResult:
+        self.cancel_poll_calls.append((job_id, worker))
+        result = self.cancel_poll_result
+        if isinstance(result, Exception):
+            raise result
         return result
 
     def close(self) -> None:
@@ -198,6 +207,9 @@ class FakeTimerHandle:
 class FakeTimerFactory:
     def __init__(self) -> None:
         self.scheduled: list[tuple[float, FakeTimerHandle]] = []
+        # The cancel-poll delay (#395); ``last`` skips these so the older tests
+        # keep addressing the heartbeat / watchdog timers.
+        self.poll_sec: float | None = 5
 
     def __call__(self, interval: float, function: Callable[[], None]) -> FakeTimerHandle:
         handle = FakeTimerHandle(function)
@@ -206,7 +218,11 @@ class FakeTimerFactory:
 
     @property
     def last(self) -> FakeTimerHandle:
-        return self.scheduled[-1][1]
+        return next(h for i, h in reversed(self.scheduled) if i != self.poll_sec)
+
+    @property
+    def last_poll(self) -> FakeTimerHandle:
+        return next(h for i, h in reversed(self.scheduled) if i == self.poll_sec)
 
 
 def make_worker(
@@ -218,6 +234,7 @@ def make_worker(
     liveness_path: Path,
     poll_sec: float = 5,
     heartbeat_sec: float = 60,
+    cancel_poll_sec: float = 5,
     shutdown_grace_sec: float = 20,
     sleep: Callable[[float], None] | None = None,
     rng: random.Random | None = None,
@@ -230,6 +247,9 @@ def make_worker(
         heartbeat_queue_factory = (
             (lambda: heartbeat_queue) if heartbeat_queue is not None else (lambda: queue)
         )
+    if timer_factory is None:
+        timer_factory = FakeTimerFactory()
+    timer_factory.poll_sec = cancel_poll_sec
     return Worker(
         "w1",
         ["ingest"],
@@ -238,11 +258,12 @@ def make_worker(
         poll_sec=poll_sec,
         liveness_path=liveness_path,
         heartbeat_sec=heartbeat_sec,
+        cancel_poll_sec=cancel_poll_sec,
         shutdown_grace_sec=shutdown_grace_sec,
         heartbeat_queue_factory=heartbeat_queue_factory,
         sleep=sleep if sleep is not None else (lambda _s: None),
         rng=rng if rng is not None else random.Random(0),
-        timer_factory=timer_factory if timer_factory is not None else FakeTimerFactory(),
+        timer_factory=timer_factory,
         reconnect=reconnect if reconnect is not None else (lambda: queue),
         runtime_limit_sec=runtime_limit_sec,
         exit_process=exit_codes.append if exit_codes is not None else (lambda _code: None),
@@ -343,6 +364,7 @@ def test_database_backoff_is_capped_at_max_db_backoff_sec(tmp_path: Path) -> Non
         queue,
         liveness_path=tmp_path / "hb",
         heartbeat_sec=60,
+        cancel_poll_sec=5,
         shutdown_grace_sec=20,
         sleep=sleeps.append,
         max_db_backoff_sec=8,
@@ -384,6 +406,7 @@ def test_database_outage_reconnects_by_default_and_carries_on(
         dead,
         liveness_path=tmp_path / "hb",
         heartbeat_sec=60,
+        cancel_poll_sec=5,
         shutdown_grace_sec=20,
         heartbeat_queue_factory=lambda: fresh,
         sleep=lambda _s: None,
@@ -472,6 +495,158 @@ def test_heartbeat_scheduled_at_heartbeat_sec_interval(tmp_path: Path) -> None:
     worker.run(max_iterations=1)
 
     assert timer_factory.scheduled[0][0] == 42
+
+
+def test_cancel_poll_and_heartbeat_are_armed_with_their_own_delays(tmp_path: Path) -> None:
+    queue = FakeQueue([make_job()])
+    timer_factory = FakeTimerFactory()
+
+    worker = make_worker(
+        queue,
+        lambda job, ctx: None,
+        liveness_path=tmp_path / "hb",
+        heartbeat_sec=42,
+        cancel_poll_sec=7,
+        timer_factory=timer_factory,
+    )
+    worker.run(max_iterations=1)
+
+    assert [interval for interval, _h in timer_factory.scheduled[:2]] == [42, 7]
+
+
+def test_a_stored_request_is_seen_at_the_next_poll_tick_and_logged_once(tmp_path: Path) -> None:
+    queue = FakeQueue([make_job()])
+    timer_factory = FakeTimerFactory()
+    seen: dict[str, Any] = {}
+
+    def handler(job: Job, ctx: JobContext) -> None:
+        # t=1: the user cancels; the heartbeat (60 s) is far away.
+        queue.cancel_poll_result = HeartbeatResult.CANCEL_REQUESTED
+        seen["before_poll"] = ctx.cancelled
+        with capture_logs() as logs:
+            timer_factory.last_poll.fire()  # t=5: the poll tick
+        seen["after_poll"] = ctx.cancelled
+        seen["logs"] = [log["event"] for log in logs]
+        seen["heartbeats"] = len(queue.heartbeat_calls)
+        seen["armed"] = len(timer_factory.scheduled)
+
+    worker = make_worker(queue, handler, liveness_path=tmp_path / "hb", timer_factory=timer_factory)
+    worker.run(max_iterations=1)
+
+    assert seen["before_poll"] is False
+    assert seen["after_poll"] is True
+    assert seen["logs"] == ["worker.cancel_requested"]
+    assert seen["heartbeats"] == 0  # (c) the poll never calls heartbeat
+    assert queue.cancel_poll_calls == [(1, "w1")]
+    assert seen["armed"] == 2  # heartbeat + first poll only: a seen request is not re-polled
+
+
+def test_a_poll_with_no_request_re_arms_and_never_touches_heartbeat(tmp_path: Path) -> None:
+    queue = FakeQueue([make_job()])
+    timer_factory = FakeTimerFactory()
+    seen: dict[str, Any] = {}
+
+    def handler(job: Job, ctx: JobContext) -> None:
+        before = len(timer_factory.scheduled)
+        timer_factory.last_poll.fire()
+        seen["rearmed"] = timer_factory.scheduled[-1][0] if len(timer_factory.scheduled) == before + 1 else None
+        seen["cancelled"] = ctx.cancelled
+        # (c) the heartbeat never calls the cancel poll
+        polls = len(queue.cancel_poll_calls)
+        timer_factory.last.fire()
+        seen["poll_calls_unchanged"] = len(queue.cancel_poll_calls) == polls
+
+    worker = make_worker(queue, handler, liveness_path=tmp_path / "hb", timer_factory=timer_factory)
+    worker.run(max_iterations=1)
+
+    assert seen == {"rearmed": 5, "cancelled": False, "poll_calls_unchanged": True}
+    assert len(queue.heartbeat_calls) == 1
+
+
+def test_a_request_first_seen_by_the_poll_is_not_logged_again_by_the_heartbeat(tmp_path: Path) -> None:
+    queue = FakeQueue([make_job()])
+    timer_factory = FakeTimerFactory()
+    seen: dict[str, Any] = {}
+
+    def handler(job: Job, ctx: JobContext) -> None:
+        queue.cancel_poll_result = HeartbeatResult.CANCEL_REQUESTED
+        queue.heartbeat_result = HeartbeatResult.CANCEL_REQUESTED
+        with capture_logs() as logs:
+            timer_factory.last_poll.fire()
+            timer_factory.last.fire()  # the 60 s heartbeat answers CANCEL_REQUESTED too
+        seen["logs"] = [log["event"] for log in logs if log["event"] == "worker.cancel_requested"]
+
+    worker = make_worker(queue, handler, liveness_path=tmp_path / "hb", timer_factory=timer_factory)
+    worker.run(max_iterations=1)
+
+    assert seen["logs"] == ["worker.cancel_requested"]
+
+
+def test_a_lost_lease_seen_by_the_poll_is_left_to_the_heartbeat(tmp_path: Path) -> None:
+    queue = FakeQueue([make_job()])
+    timer_factory = FakeTimerFactory()
+    seen: dict[str, Any] = {}
+
+    def handler(job: Job, ctx: JobContext) -> None:
+        queue.cancel_poll_result = HeartbeatResult.LOST
+        timer_factory.last_poll.fire()
+        seen["cancelled"] = ctx.cancelled
+
+    worker = make_worker(queue, handler, liveness_path=tmp_path / "hb", timer_factory=timer_factory)
+    worker.run(max_iterations=1)
+
+    assert seen["cancelled"] is False
+
+
+def test_after_stop_neither_timer_fires_a_query(tmp_path: Path) -> None:
+    queue = FakeQueue([make_job()])
+    timer_factory = FakeTimerFactory()
+
+    worker = make_worker(queue, lambda job, ctx: None, liveness_path=tmp_path / "hb", timer_factory=timer_factory)
+    worker.run(max_iterations=1)
+
+    heartbeats, polls = len(queue.heartbeat_calls), len(queue.cancel_poll_calls)
+    for _interval, handle in timer_factory.scheduled:
+        assert handle.cancelled is True
+        handle.fire()
+    assert (len(queue.heartbeat_calls), len(queue.cancel_poll_calls)) == (heartbeats, polls)
+
+
+def test_a_failing_poll_discards_the_queue_and_the_next_tick_reconnects(tmp_path: Path) -> None:
+    job = make_job()
+    queue = FakeQueue([job])
+    queue_a, queue_b = FakeQueue(), FakeQueue()
+    connections = iter([queue_a, queue_b])
+    timer_factory = FakeTimerFactory()
+    seen: dict[str, Any] = {}
+
+    def handler(job: Job, ctx: JobContext) -> None:
+        queue_a.cancel_poll_result = ConnectionError("dead")
+        before = len(timer_factory.scheduled)
+        with capture_logs() as logs:
+            timer_factory.last_poll.fire()  # fails on A
+        seen["failed"] = [log["event"] for log in logs]
+        seen["rearmed"] = len(timer_factory.scheduled) == before + 1
+        timer_factory.last_poll.fire()  # reconnects: B
+        seen["a_polls"] = len(queue_a.cancel_poll_calls)
+        seen["b_polls"] = len(queue_b.cancel_poll_calls)
+
+    worker = make_worker(
+        queue,
+        handler,
+        liveness_path=tmp_path / "hb",
+        heartbeat_queue_factory=lambda: next(connections),
+        timer_factory=timer_factory,
+    )
+    worker.run(max_iterations=1)
+
+    assert seen == {
+        "failed": ["worker.cancel_poll_failed"],
+        "rearmed": True,
+        "a_polls": 1,
+        "b_polls": 1,
+    }
+    assert queue_a.close_calls == 1
 
 
 def test_heartbeat_stops_within_one_tick_after_handler_returns(tmp_path: Path) -> None:
@@ -1112,7 +1287,7 @@ def test_real_sigterm_stops_an_idle_worker(tmp_path: Path) -> None:
             worker = Worker(
                 "w1", ["ingest"], lambda job, ctx: None, IdleQueue(),
                 poll_sec=0.2, liveness_path=Path({str(liveness)!r}),
-                heartbeat_sec=60, shutdown_grace_sec=20,
+                heartbeat_sec=60, cancel_poll_sec=5, shutdown_grace_sec=20,
                 heartbeat_queue_factory=lambda: IdleQueue(),
             )
             worker._install_signals()  # avoid a race between READY and run()'s own install
@@ -1202,6 +1377,7 @@ def make_pg_worker(
         claim_queue,
         liveness_path=liveness_path,
         heartbeat_sec=60,
+        cancel_poll_sec=5,
         shutdown_grace_sec=20,
         heartbeat_queue_factory=lambda: heartbeat_queue,
         timer_factory=timer_factory,
@@ -1240,6 +1416,76 @@ def test_heartbeat_updates_heartbeat_at_via_a_connection_distinct_from_claim(
     assert at_claim["heartbeat_at"] is not None
     assert after is not None
     assert after >= at_claim["heartbeat_at"]
+
+
+class _RecordingCursor(psycopg.Cursor[Any]):
+    statements: ClassVar[list[str]] = []
+
+    def execute(self, query: Any, params: Any = None, **kwargs: Any) -> Any:
+        _RecordingCursor.statements.append(str(getattr(query, "as_string", lambda: query)()))
+        return super().execute(query, params, **kwargs)
+
+
+@pytest.mark.integration
+def test_cancel_poll_sees_a_stored_request_without_any_heartbeat_tick_and_writes_nothing(
+    claim_queue: PostgresQueue,
+    claim_conn: psycopg.Connection[Any],
+    head_dsn: str,
+    tmp_path: Path,
+) -> None:
+    """#395: real queue, manual timers. The poll tick alone sees the request,
+    issues exactly one SELECT and no write; the heartbeat tick never ran."""
+    job_id = claim_queue.enqueue("ingest", "v1")
+    assert job_id is not None
+    timer_factory = FakeTimerFactory()
+    seen: dict[str, Any] = {}
+    _RecordingCursor.statements = []
+    hb_conn = psycopg.connect(head_dsn, autocommit=True, cursor_factory=_RecordingCursor)
+
+    def handler(job: Job, ctx: JobContext) -> None:
+        with claim_conn.cursor() as cur:
+            cur.execute("UPDATE jobs SET cancel_requested_at = now() WHERE id = %s", (job_id,))
+        def version() -> tuple[Any, ...]:
+            with claim_conn.cursor() as cur:
+                cur.execute("SELECT heartbeat_at, xmin::text FROM jobs WHERE id = %s", (job_id,))
+                found = cur.fetchone()
+            assert found is not None
+            return tuple(found)
+
+        before = version()
+        _RecordingCursor.statements = []
+        with capture_logs() as logs:
+            timer_factory.last_poll.fire()
+        seen["cancelled"] = ctx.cancelled
+        seen["statements"] = list(_RecordingCursor.statements)
+        seen["events"] = [log["event"] for log in logs]
+        seen["unchanged"] = version() == before
+
+    try:
+        worker = Worker(
+            "w1",
+            ["ingest"],
+            handler,
+            claim_queue,
+            liveness_path=tmp_path / "hb",
+            heartbeat_sec=60,
+            cancel_poll_sec=5,
+            shutdown_grace_sec=20,
+            heartbeat_queue_factory=lambda: PostgresQueue(hb_conn, settings=_pg_settings()),
+            timer_factory=timer_factory,
+            sleep=lambda _s: None,
+            runtime_limit_sec=lambda _job: None,
+            install_signal_handlers=False,
+        )
+        worker.run(max_iterations=1)
+    finally:
+        hb_conn.close()
+
+    assert seen["cancelled"] is True
+    assert seen["events"] == ["worker.cancel_requested"]
+    assert len(seen["statements"]) == 1
+    assert seen["statements"][0].lstrip().upper().startswith("SELECT")
+    assert seen["unchanged"] is True
 
 
 @pytest.mark.integration
@@ -1413,7 +1659,7 @@ def test_no_limit_means_no_timer_and_no_exit(tmp_path: Path) -> None:
     )
     worker.run(max_iterations=1)
 
-    assert [interval for interval, _ in timers.scheduled] == [60]  # the heartbeat only
+    assert [interval for interval, _ in timers.scheduled] == [60, 5]  # heartbeat and cancel poll only
 
 
 def test_the_worker_still_exits_when_recording_the_failure_raises(tmp_path: Path) -> None:
@@ -1578,6 +1824,7 @@ def test_a_worker_built_without_settings_runs_unlimited_when_no_environment_is_c
         queue,
         liveness_path=tmp_path / "hb",
         heartbeat_sec=60,
+        cancel_poll_sec=5,
         shutdown_grace_sec=20,
         heartbeat_queue_factory=lambda: queue,
         sleep=lambda _s: None,
@@ -1589,7 +1836,7 @@ def test_a_worker_built_without_settings_runs_unlimited_when_no_environment_is_c
         worker.run(max_iterations=1)
 
     assert len(seen) == 1
-    assert [interval for interval, _ in timers.scheduled] == [60]  # no limit timer
+    assert [interval for interval, _ in timers.scheduled] == [60, 5]  # no limit timer
     assert codes == []
     assert any(e["event"] == "worker.runtime_limit_settings_unavailable" for e in logs)
 
@@ -1770,6 +2017,7 @@ def test_a_terminated_heartbeat_connection_is_replaced_and_heartbeats_resume(
             claim_queue,
             liveness_path=tmp_path / "hb",
             heartbeat_sec=60,
+            cancel_poll_sec=5,
             shutdown_grace_sec=20,
             heartbeat_queue_factory=factory,
             timer_factory=timer_factory,
