@@ -33,6 +33,7 @@ import {
   stateBadgeClass,
   stateLabel,
   type OpsFilters,
+  CANCEL_WAIT_SEC,
 } from '../lib/ops'
 
 // Plain semantic HTML on purpose: styling is #132. Filters and the cursor live
@@ -527,6 +528,7 @@ function JobRow({
             {' '}
             <small className="muted">
               Cancel requested <time dateTime={j.cancel_requested_at}>{formatUtc(j.cancel_requested_at)}</time>
+              {` · waiting for the worker (up to ${CANCEL_WAIT_SEC} s)`}
             </small>
           </>
         )}

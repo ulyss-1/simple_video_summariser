@@ -130,6 +130,9 @@ class InProcessQueue:
     def heartbeat(self, job_id: int, worker: str) -> HeartbeatResult:
         return HeartbeatResult.HELD
 
+    def cancel_requested(self, job_id: int, worker: str) -> HeartbeatResult:
+        return HeartbeatResult.HELD
+
     def reap_stale(self, older_than_sec: int | None = None) -> int:
         return 0
 

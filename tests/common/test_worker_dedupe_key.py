@@ -44,6 +44,7 @@ def _worker(queue: Any, tmp_path: Path, **kwargs: Any) -> Worker:
         queue,
         liveness_path=tmp_path / "hb",
         heartbeat_sec=60,
+        cancel_poll_sec=5,
         shutdown_grace_sec=20,
         sleep=lambda _s: None,
         rng=random.Random(0),

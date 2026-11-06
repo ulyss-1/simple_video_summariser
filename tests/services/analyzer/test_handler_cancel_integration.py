@@ -86,6 +86,7 @@ def test_a_cancel_stored_while_the_analyzer_runs_ends_the_job_cancelled_keeps_it
         queue,
         liveness_path=tmp_path / "hb",
         heartbeat_sec=60,
+        cancel_poll_sec=5,
         heartbeat_queue_factory=lambda: PostgresQueue(hb),
         runtime_limit_sec=lambda job: None,
         timer_factory=timers,

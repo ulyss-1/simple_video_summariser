@@ -160,7 +160,7 @@ def test_every_architecture_variable_is_a_field_except_transcriber_cpus() -> Non
         "PROMPT_VERSION", "CHUNK_SEC", "OVERLAP_SEC", "WHISPER_MODEL",
         "WHISPER_COMPUTE", "WHISPER_THREADS", "PREFER_WHISPER",
         "AUTO_CAPTION_FALLBACK", "AUDIO_KEEP", "AUDIO_TTL_DAYS",
-        "AUDIO_MAX_GB", "POLL_INTERVAL_SEC", "HEARTBEAT_SEC",
+        "AUDIO_MAX_GB", "POLL_INTERVAL_SEC", "HEARTBEAT_SEC", "CANCEL_POLL_SEC",
         "REAP_AFTER_SEC", "MAX_ATTEMPTS_TRANSCRIBE", "LOG_LEVEL",
         "LOG_FORMAT", "AUDIO_DIR", "YTDLP_COOKIE_FILE",
         "WORKER_SHUTDOWN_GRACE_SEC", "REAP_INTERVAL_SEC",
@@ -490,6 +490,28 @@ def test_default_reap_and_heartbeat_pass_the_rule() -> None:
     s = build_settings(DATABASE_URL=DB_URL)
 
     assert (s.HEARTBEAT_SEC, s.REAP_AFTER_SEC) == (60, 300)
+
+
+# --- CANCEL_POLL_SEC (#395) ------------------------------------------------------
+
+
+def test_cancel_poll_defaults_to_five_seconds() -> None:
+    assert build_settings(DATABASE_URL=DB_URL).CANCEL_POLL_SEC == 5
+
+
+def test_cancel_poll_slower_than_the_heartbeat_is_rejected_naming_both() -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        build_settings(DATABASE_URL=DB_URL, HEARTBEAT_SEC=60, CANCEL_POLL_SEC=61)
+
+    message = str(exc_info.value)
+    assert "CANCEL_POLL_SEC" in message
+    assert "HEARTBEAT_SEC" in message
+
+
+def test_cancel_poll_equal_to_the_heartbeat_is_accepted() -> None:
+    s = build_settings(DATABASE_URL=DB_URL, HEARTBEAT_SEC=60, CANCEL_POLL_SEC=60)
+
+    assert s.CANCEL_POLL_SEC == 60
 
 
 # --- PROMPT_VERSION -----------------------------------------------------------

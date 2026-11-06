@@ -1550,7 +1550,7 @@ describe('cancel and CANCELLED jobs (#301)', () => {
     jobs: outcome === null ? [] : [{ job_id: 1, kind: 'ingest', outcome }],
   })
   const REQUESTED =
-    'Cancel requested: the job stops at its next checkpoint, which can take about a minute'
+    'Cancel requested: the worker is told within about 5 s and the job stops at its next checkpoint'
   const advance = async (ms: number) => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(ms)
@@ -1589,6 +1589,7 @@ describe('cancel and CANCELLED jobs (#301)', () => {
     expect(within(row).getByText('cancelling')).toBeTruthy()
     expect(within(row).queryByText('running')).toBeNull()
     expect(row.textContent).toContain('Cancel requested')
+    expect(row.textContent).toContain(' · waiting for the worker (up to 5 s)')
     expect(row.textContent).toContain('2026-10-26 10:05 UTC')
     expect(row.textContent).not.toMatch(/cancelled/i)
     expect(cancelBtn(3)).toBeNull()

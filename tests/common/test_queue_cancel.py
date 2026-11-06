@@ -104,6 +104,34 @@ def test_heartbeat_tells_held_from_cancel_requested_from_lost(
     assert queue.heartbeat(job_id, "w1") is HeartbeatResult.LOST  # no longer running
 
 
+def test_cancel_requested_reads_the_flag_and_writes_nothing(
+    conn: psycopg.Connection[Any], queue: PostgresQueue
+) -> None:
+    seed_video(conn)
+    job_id = queue.enqueue("ingest", VID)
+    assert job_id is not None
+    assert queue.cancel_requested(job_id, "w1") is HeartbeatResult.LOST  # pending
+    manager, _job = claim_one(queue)
+
+    def snapshot() -> tuple[Any, ...]:
+        with conn.cursor() as cur:
+            cur.execute("SELECT heartbeat_at, xmin::text FROM jobs WHERE id = %s", (job_id,))
+            found = cur.fetchone()
+        assert found is not None
+        return tuple(found)
+
+    before = snapshot()
+    assert queue.cancel_requested(job_id, "w1") is HeartbeatResult.HELD
+    assert snapshot() == before
+    request_cancel(conn, job_id)
+    before = snapshot()
+    assert queue.cancel_requested(job_id, "w1") is HeartbeatResult.CANCEL_REQUESTED
+    assert queue.cancel_requested(job_id, "w2") is HeartbeatResult.LOST
+    assert snapshot() == before  # heartbeat_at and the row version are untouched
+    manager.__exit__(None, None, None)
+    assert queue.cancel_requested(job_id, "w1") is HeartbeatResult.LOST
+
+
 # ---------------------------------------------------------------------------
 # every outcome path with a request ends CANCELLED
 # ---------------------------------------------------------------------------

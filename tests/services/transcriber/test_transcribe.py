@@ -148,6 +148,9 @@ class SpyQueue:
         self.heartbeats += 1
         return self.inner.heartbeat(job_id, worker)
 
+    def cancel_requested(self, job_id: int, worker: str) -> HeartbeatResult:
+        return self.inner.cancel_requested(job_id, worker)
+
     def claim(
         self, kinds: Sequence[str], *, worker: str, dedupe_key: str | None = None
     ) -> AbstractContextManager[Job | None]:

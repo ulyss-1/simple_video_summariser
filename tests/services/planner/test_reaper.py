@@ -62,6 +62,9 @@ class FakeQueue:
     def heartbeat(self, job_id: int, worker: str) -> HeartbeatResult:
         raise AssertionError("the reaper must not heartbeat")
 
+    def cancel_requested(self, job_id: int, worker: str) -> HeartbeatResult:
+        raise AssertionError("the reaper must not poll for a cancel")
+
     def reap_stale(self, older_than_sec: int | None = None) -> int:
         self.reap_calls.append((older_than_sec,))
         if self._error is not None:

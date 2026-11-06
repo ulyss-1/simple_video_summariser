@@ -162,6 +162,9 @@ class FakeQueue:
     def heartbeat(self, job_id: int, worker: str) -> HeartbeatResult:
         return HeartbeatResult.HELD
 
+    def cancel_requested(self, job_id: int, worker: str) -> HeartbeatResult:
+        return HeartbeatResult.HELD
+
     def enqueue(self, kind: str, video_id: str, **kwargs: Any) -> int | None:
         raise NotImplementedError
 

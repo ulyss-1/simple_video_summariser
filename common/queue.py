@@ -508,6 +508,8 @@ class JobQueue(Protocol):
 
     def heartbeat(self, job_id: int, worker: str) -> HeartbeatResult: ...
 
+    def cancel_requested(self, job_id: int, worker: str) -> HeartbeatResult: ...
+
     def reap_stale(self, older_than_sec: int | None = None) -> int: ...
 
     def fail_job(self, job: Job, worker: str, exc: BaseException) -> None: ...
@@ -967,6 +969,21 @@ class PostgresQueue:
                 UPDATE jobs SET heartbeat_at = now()
                 WHERE id = %(id)s AND state = 'running' AND locked_by = %(worker)s
                 RETURNING cancel_requested_at IS NOT NULL
+                """,
+                {"id": job_id, "worker": worker},
+            )
+            row = cur.fetchone()
+        if row is None:
+            return HeartbeatResult.LOST
+        return HeartbeatResult.CANCEL_REQUESTED if row[0] else HeartbeatResult.HELD
+
+    def cancel_requested(self, job_id: int, worker: str) -> HeartbeatResult:
+        """Read-only twin of ``heartbeat`` (#395): same answer, writes nothing."""
+        with self._conn.transaction(), self._conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT cancel_requested_at IS NOT NULL FROM jobs
+                WHERE id = %(id)s AND state = 'running' AND locked_by = %(worker)s
                 """,
                 {"id": job_id, "worker": worker},
             )
