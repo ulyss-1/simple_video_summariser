@@ -52,6 +52,16 @@ def main() -> None:
             )
         os.replace(tmp, pidfile)
 
+    if mode.startswith("gated_"):
+        # Report, then wait for the test to create PIDFILE.go before behaving as
+        # the rest of the mode says (bounded: a test that never opens the gate
+        # must not leave this process behind).
+        mode = mode.removeprefix("gated_")
+        record()
+        deadline = time.monotonic() + 30
+        while not os.path.exists(pidfile + ".go") and time.monotonic() < deadline:
+            time.sleep(0.005)
+
     def block() -> None:
         while True:
             time.sleep(60)
