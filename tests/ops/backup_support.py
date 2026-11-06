@@ -78,7 +78,7 @@ def die(sub):
                 "Fatal: unable to open config file: Stat: Get "
                 f"\"{os.environ.get('RESTIC_REPOSITORY')}/config?X-Amz-Credential={os.environ.get('AWS_ACCESS_KEY_ID')}\": "
                 f"403 secret={os.environ.get('AWS_SECRET_ACCESS_KEY')} password={password} "
-                f"host https://user:pw@{sc.get('leak_host', 'x.example')}/b\n")
+                f"host https://user:pw@{sc.get('leak_host', 'x.example')}/b bare {sc.get('leak_host', 'x.example')}\n")
         else:
             sys.stderr.write("Fatal: something failed\n")
         sys.exit(rc)
@@ -92,6 +92,7 @@ if sub == "version":
 for s in sc.get("seed_snapshots", []):
     if not any(x["id"] == s["id"] for x in state["snapshots"]):
         state["snapshots"].append({"id": s["id"], "time": iso(s["epoch"]), "path": None})
+save()
 die(sub)
 if sub == "cat":
     sys.exit(0 if state["exists"] else 1)
@@ -122,6 +123,17 @@ if sub == "check":
 if sub == "forget":
     ids = [a for a in args[1:] if len(a) == 64 and all(c in "0123456789abcdef" for c in a)]
     state["snapshots"] = [s for s in state["snapshots"] if s["id"] not in ids]
+    if "--keep-within" in args:
+        # restic semantics: keep-within counts back from the NEWEST snapshot's
+        # time, and keep-last keeps the newest N; a snapshot kept by either stays.
+        within = int(args[args.index("--keep-within") + 1].rstrip("d")) * 86400
+        last = int(args[args.index("--keep-last") + 1])
+        snaps = sorted(state["snapshots"], key=lambda s: s["time"])
+        ts = {s["id"]: datetime.fromisoformat(s["time"]).timestamp() for s in snaps}
+        newest = max(ts.values()) if ts else 0
+        keep = {s["id"] for s in snaps[-last:]}
+        keep |= {i for i, t in ts.items() if newest - t <= within}
+        state["snapshots"] = [s for s in state["snapshots"] if s["id"] in keep]
     save()
     sys.exit(0)
 if sub == "stats":

@@ -17,9 +17,11 @@ R2_JURISDICTION=eu
 # Freshness limit is RPO_HOURS + GRACE_HOURS since the newest verified snapshot.
 RPO_HOURS=24
 GRACE_HOURS=6
-# Retention: keep this many daily and weekly snapshots (KEEP_DAILY >= 1).
-KEEP_DAILY=7
-KEEP_WEEKLY=4
+# Retention: snapshots newer than RETENTION_DAYS days are kept, and the newest
+# KEEP_LAST_FLOOR are always kept, however old (safety floor for a long outage
+# or a clock jump). Both must be positive integers.
+RETENTION_DAYS=14
+KEEP_LAST_FLOOR=3
 
 # Plaintext staging for one run: owned by the deploy account, mode 700, outside
 # Docker's data root and the checkout.

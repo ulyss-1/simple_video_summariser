@@ -89,7 +89,7 @@ def test_the_config_example_parses_and_has_no_secret_keys() -> None:
     text = (HOST / "backup.conf.example").read_text()
     assert not re.search(r"^(AWS_|RESTIC_)", text, re.MULTILINE)
     keys = {m.group(1) for m in re.finditer(r"^([A-Z][A-Z0-9_]*)=", text, re.MULTILINE)}
-    assert {"R2_ACCOUNT_ID", "R2_BUCKET", "R2_JURISDICTION", "RPO_HOURS", "GRACE_HOURS", "KEEP_DAILY", "KEEP_WEEKLY"} <= keys
+    assert {"R2_ACCOUNT_ID", "R2_BUCKET", "R2_JURISDICTION", "RPO_HOURS", "GRACE_HOURS", "RETENTION_DAYS", "KEEP_LAST_FLOOR"} <= keys
 
 
 def test_the_shipped_config_example_is_accepted_by_the_scripts(tmp_path: Path) -> None:
@@ -197,7 +197,9 @@ RUNBOOK_MUST_MENTION = (
     "bucket lock",
     "Not proven",
     "10 GB",
-    "1.3%",
+    "1.6%",
+    "lifecycle",
+    "--keep-within 14d --keep-last 3",
 )
 
 
@@ -226,3 +228,27 @@ def test_runbook_secret_commands_never_put_values_on_a_command_line() -> None:
     assert not re.search(r"AWS_SECRET_ACCESS_KEY=[A-Za-z0-9]{8,}", text)
     assert ACCOUNT_ID not in text and BUCKET not in text
     assert "RESTIC_PASSWORD=" not in text
+
+
+def test_the_documented_notify_hook_never_puts_the_url_in_argv(tmp_path: Path) -> None:
+    text = RUNBOOK.read_text()
+    assert "notify-url)" not in text
+    line = re.search(r"^\s*'(curl [^\n]*)' \\?$", text, re.MULTILINE)
+    assert line, "documented curl line not found"
+    conf = tmp_path / "notify-curl.conf"
+    conf.write_text('url = "https://hc.example/ping/SECRET-TOKEN-123"\n')
+    log = tmp_path / "argv.log"
+    stub = tmp_path / "curl"
+    stub.write_text(f'#!/bin/bash\nprintf "%s\\n" "$@" > {log}\n')
+    stub.chmod(0o755)
+    hook = tmp_path / "hook.sh"
+    cmd = line.group(1).replace("/etc/ytdigest-backup/notify-curl.conf", str(conf))
+    hook.write_text(f"#!/bin/bash\n{cmd}\n")
+    hook.chmod(0o755)
+    run = subprocess.run(
+        [str(hook), "failure", "msg"], env={"PATH": f"{tmp_path}:/usr/bin:/bin"}, check=False
+    )
+    assert run.returncode == 0
+    argv = log.read_text()
+    assert "SECRET-TOKEN" not in argv and "hc.example" not in argv
+    assert f"-K\n{conf}" in argv

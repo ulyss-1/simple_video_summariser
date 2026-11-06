@@ -55,7 +55,7 @@ redact() {
   local line secret
   while IFS= read -r line || [[ -n $line ]]; do
     for secret in "${CRED[AWS_ACCESS_KEY_ID]:-}" "${CRED[AWS_SECRET_ACCESS_KEY]:-}" \
-      "${CONF[R2_ACCOUNT_ID]:-}" "${CONF[R2_BUCKET]:-}" "${PASSWORD_VALUE:-}"; do
+      "${CONF[R2_ACCOUNT_ID]:-}" "${CONF[R2_ENDPOINT_HOST]:-}" "${CONF[R2_BUCKET]:-}" "${PASSWORD_VALUE:-}"; do
       [[ -n $secret ]] && line="${line//"$secret"/<redacted>}"
     done
     line="$(sed -E 's#[A-Za-z][A-Za-z0-9+.-]*://[^[:space:]]*#<url>#g' <<<"$line")"
@@ -122,18 +122,18 @@ load_config() {
   check_dir "$CONFIG_DIR" config
   check_secret_file "$CONFIG_DIR/backup.conf" config
   parse_kv "$CONFIG_DIR/backup.conf" CONF \
-    'R2_ACCOUNT_ID|R2_BUCKET|R2_JURISDICTION|R2_ENDPOINT_HOST|RPO_HOURS|GRACE_HOURS|KEEP_DAILY|KEEP_WEEKLY|STAGING_DIR|NOTIFY_HOOK' config
+    'R2_ACCOUNT_ID|R2_BUCKET|R2_JURISDICTION|R2_ENDPOINT_HOST|RPO_HOURS|GRACE_HOURS|RETENTION_DAYS|KEEP_LAST_FLOOR|STAGING_DIR|NOTIFY_HOOK' config
   CONF[R2_JURISDICTION]="${CONF[R2_JURISDICTION]:-default}"
   CONF[RPO_HOURS]="${CONF[RPO_HOURS]:-24}"
   CONF[GRACE_HOURS]="${CONF[GRACE_HOURS]:-6}"
-  CONF[KEEP_DAILY]="${CONF[KEEP_DAILY]:-7}"
-  CONF[KEEP_WEEKLY]="${CONF[KEEP_WEEKLY]:-4}"
+  CONF[RETENTION_DAYS]="${CONF[RETENTION_DAYS]:-14}"
+  CONF[KEEP_LAST_FLOOR]="${CONF[KEEP_LAST_FLOOR]:-3}"
   CONF[STAGING_DIR]="${CONF[STAGING_DIR]:-/var/lib/ytdigest-backup}"
   CONF[NOTIFY_HOOK]="${CONF[NOTIFY_HOOK]:-}"
   need_int RPO_HOURS 1 720
   need_int GRACE_HOURS 0 720
-  need_int KEEP_DAILY 1 365   # 0 would keep nothing: refused on purpose
-  need_int KEEP_WEEKLY 0 520
+  need_int RETENTION_DAYS 1 3650   # positive: 0 would keep nothing
+  need_int KEEP_LAST_FLOOR 1 1000   # the floor: never fewer than this many
   [[ ${CONF[R2_BUCKET]:-} =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]] \
     || fail config "R2_BUCKET missing or not a valid bucket name (3-63 of a-z 0-9 -)"
   case "${CONF[R2_JURISDICTION]}" in

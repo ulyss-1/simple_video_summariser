@@ -119,41 +119,84 @@ def test_endpoint_is_derived_from_config_never_hard_coded(rig: Rig, conf: str, h
     assert rig.calls("restic")[-1]["env"]["repo"] == f"s3:https://{host}/{BUCKET}"
 
 
-def test_retention_runs_after_check_and_uses_the_configured_policy(rig: Rig) -> None:
+def _conf(rig: Rig, extra: str = "") -> None:
     rig.write_file(
         "backup.conf",
-        f"R2_ACCOUNT_ID={ACCOUNT_ID}\nR2_BUCKET={BUCKET}\nKEEP_DAILY=3\nKEEP_WEEKLY=2\n"
-        f"STAGING_DIR={rig.staging}\n",
+        f"R2_ACCOUNT_ID={ACCOUNT_ID}\nR2_BUCKET={BUCKET}\n{extra}STAGING_DIR={rig.staging}\n",
     )
+
+
+def test_retention_runs_after_check_and_uses_the_configured_policy(rig: Rig) -> None:
+    _conf(rig, "RETENTION_DAYS=10\nKEEP_LAST_FLOOR=5\n")
     assert rig.run(BACKUP).returncode == 0
     (forget,) = rig.restic_calls("forget")
     assert "--prune" in forget
-    assert forget[forget.index("--keep-daily") + 1] == "3"
-    assert forget[forget.index("--keep-weekly") + 1] == "2"
+    assert forget[forget.index("--keep-within") + 1] == "10d"
+    assert forget[forget.index("--keep-last") + 1] == "5"
+    assert "--keep-daily" not in forget and "--keep-weekly" not in forget
     assert forget[forget.index("--group-by") + 1] == "host,tags"
     assert forget[forget.index("--tag") + 1] == "ytdigest-pg"
+    assert rig.restic_subcommands() == ["backup", "check", "forget"]
 
 
-def test_default_policy_is_7_daily_and_4_weekly(rig: Rig) -> None:
+def test_default_policy_is_14_days_with_a_floor_of_3(rig: Rig) -> None:
     assert rig.run(BACKUP).returncode == 0
     (forget,) = rig.restic_calls("forget")
-    assert forget[forget.index("--keep-daily") + 1] == "7"
-    assert forget[forget.index("--keep-weekly") + 1] == "4"
+    assert forget[forget.index("--keep-within") + 1] == "14d"
+    assert forget[forget.index("--keep-last") + 1] == "3"
+
+
+def _surviving(rig: Rig) -> set[str]:
+    state = json.loads((rig.stub / "restic_state.json").read_text())
+    return {s["id"] for s in state["snapshots"]}
+
+
+DAY = 86400
+
+
+def test_snapshots_at_14_days_are_kept_and_one_second_older_are_pruned(rig: Rig) -> None:
+    # age is counted back from the newest snapshot, which is the one just taken (NOW)
+    rig.seed((snap_id(1), NOW - 14 * DAY), (snap_id(2), NOW - 14 * DAY - 1), (snap_id(3), NOW - 13 * DAY))
+    assert rig.run(BACKUP).returncode == 0
+    kept = _surviving(rig)
+    assert snap_id(1) in kept and snap_id(3) in kept  # exactly 14 d and just inside
+    assert snap_id(2) not in kept  # just outside (floor of 3 is filled by the newer ones)
+
+
+def test_the_keep_last_floor_survives_when_every_old_snapshot_is_past_14_days(rig: Rig) -> None:
+    # A failed night (not simulated here) after a long outage: the only snapshots
+    # are old. The new one is newest, so keep-within is relative to it; the floor
+    # still keeps the newest 3 whatever their age.
+    rig.seed((snap_id(1), NOW - 90 * DAY), (snap_id(2), NOW - 60 * DAY), (snap_id(3), NOW - 30 * DAY))
+    assert rig.run(BACKUP).returncode == 0
+    kept = _surviving(rig)
+    assert snap_id(1) not in kept  # 4 snapshots exist, the floor keeps the newest 3
+    assert {snap_id(2), snap_id(3)} <= kept and len(kept) == 3
+
+
+def test_a_failed_backup_prunes_nothing_even_with_old_snapshots(rig: Rig) -> None:
+    rig.seed((snap_id(1), NOW - 90 * DAY), (snap_id(2), NOW - 60 * DAY))
+    rig.set(fail={"backup": 1})
+    assert rig.run(BACKUP).returncode != 0
+    assert rig.restic_calls("forget") == []
+    assert _surviving(rig) == {snap_id(1), snap_id(2)}
 
 
 @pytest.mark.parametrize(
     ("name", "value", "ok"),
     [
-        ("KEEP_DAILY", "0", False),  # would keep nothing
-        ("KEEP_DAILY", "1", True),  # just inside
-        ("KEEP_DAILY", "365", True),
-        ("KEEP_DAILY", "366", False),
-        ("KEEP_WEEKLY", "0", True),
-        ("KEEP_WEEKLY", "521", False),
+        ("RETENTION_DAYS", "0", False),  # would keep nothing
+        ("RETENTION_DAYS", "1", True),
+        ("RETENTION_DAYS", "3650", True),
+        ("RETENTION_DAYS", "3651", False),
+        ("RETENTION_DAYS", "-1", False),
+        ("KEEP_LAST_FLOOR", "0", False),  # no floor is not allowed
+        ("KEEP_LAST_FLOOR", "1", True),
+        ("KEEP_LAST_FLOOR", "1001", False),
         ("RPO_HOURS", "0", False),
         ("RPO_HOURS", "1", True),
         ("GRACE_HOURS", "0", True),
-        ("KEEP_DAILY", "x", False),
+        ("RETENTION_DAYS", "x", False),
     ],
     ids=lambda v: str(v),
 )
@@ -475,3 +518,11 @@ def test_scripts_never_read_dotenv_or_the_postgres_password(name: str) -> None:
 def test_scripts_use_strict_mode_and_a_restrictive_umask() -> None:
     assert "set -Eeuo pipefail" in BACKUP.read_text()
     assert "umask 077" in (HOST / "pg-backup-lib.sh").read_text()
+
+
+def test_a_custom_endpoint_host_is_masked_in_restic_errors(rig: Rig) -> None:
+    _conf(rig, "R2_ENDPOINT_HOST=s3.example.test\n")
+    rig.set(fail={"backup": 1}, leak=True, leak_host="s3.example.test")
+    result = rig.run(BACKUP)
+    assert stage_of(result) == "upload"
+    assert "s3.example.test" not in result.stdout + result.stderr

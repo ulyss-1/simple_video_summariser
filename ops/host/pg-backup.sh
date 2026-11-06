@@ -212,7 +212,7 @@ fi
 stage retention
 if ! restic_run "$RERR" "$ROUT" forget --prune --retry-lock 2m \
   --tag "$BACKUP_TAG" --host "$BACKUP_HOST" --group-by host,tags \
-  --keep-daily "${CONF[KEEP_DAILY]}" --keep-weekly "${CONF[KEEP_WEEKLY]}"; then
+  --keep-within "${CONF[RETENTION_DAYS]}d" --keep-last "${CONF[KEEP_LAST_FLOOR]}"; then
   show_tail "$RERR"
   fail retention "retention failed; the new snapshot is stored and verified, nothing was lost"
 fi

@@ -208,14 +208,15 @@ change the system are marked **(sudo)**.
     executable named by `NOTIFY_HOOK` in `backup.conf`. Without a hook, a failure
     is only in the journal, which nobody reads. Pick a channel (email, Telegram,
     or a dead-man's-switch such as Healthchecks.io) and write the hook. Example
-    for a Healthchecks.io-style ping, with the secret URL in its own `600` file:
+    for a Healthchecks.io-style ping, with the secret URL in a `600` curl config file read with `-K`, so the URL is never a command-line argument (visible in `ps`):
 
     ```bash
     umask 077
     read -rsp 'Failure ping URL: ' U; printf '\n'
-    printf '%s' "$U" > /etc/ytdigest-backup/notify-url; unset U
+    printf 'url = "%s"\n' "$U" > /etc/ytdigest-backup/notify-curl.conf; unset U
+    chmod 600 /etc/ytdigest-backup/notify-curl.conf
     printf '%s\n' '#!/bin/bash' '# $1 = failure, $2 = message' \
-      'curl -fsS -m 20 --data-raw "$2" "$(cat /etc/ytdigest-backup/notify-url)" >/dev/null' \
+      'curl -fsS -m 20 -K /etc/ytdigest-backup/notify-curl.conf --data-raw "$2" >/dev/null' \
       > /etc/ytdigest-backup/notify-hook.sh
     chmod 700 /etc/ytdigest-backup/notify-hook.sh
     ```
@@ -275,7 +276,7 @@ How one backup works:
    then is a `.partial` file renamed and published.
 4. `restic backup` uploads the dump and manifest (encrypted, authenticated),
    `restic check` verifies the repository, and only after that does
-   `restic forget --prune` apply retention (7 daily, 4 weekly). If the check
+   `restic forget --prune` apply retention (`--keep-within 14d --keep-last 3`). If the check
    fails the new snapshot is withdrawn and every older one is kept. On the 1st
    of each UTC month the check also reads 10% of the data.
 5. The plaintext staging directory is removed on success, failure, `SIGINT` and
@@ -334,8 +335,19 @@ is not backup monitoring.
 
 ## 4. Retention and cadence
 
-- Nightly 02:30 UTC, 24 h RPO, 6 h grace, keep 7 daily and 4 weekly
-  (`KEEP_DAILY` must be at least 1; `0` would keep nothing and is rejected).
+- Nightly 02:30 UTC, 24 h RPO, 6 h grace. Backups older than 14 days are
+  removed automatically: `restic forget --prune --keep-within 14d --keep-last 3`
+  (`RETENTION_DAYS=14`, `KEEP_LAST_FLOOR=3` in `backup.conf`; both must be
+  positive integers, `0` is rejected).
+- **Safety floor.** `--keep-last 3` always keeps the newest three snapshots,
+  however old. After a long outage of backups, or a clock jump, the age rule
+  alone could delete every known-good snapshot; the floor cannot. restic counts
+  `--keep-within` back from the newest snapshot, not from the wall clock.
+- **Do not use an R2 bucket lifecycle (expiry) rule for this.** A lifecycle
+  rule deletes objects by age, including restic pack files that newer snapshots
+  still reference, and corrupts the repository. Retention is restic's job only.
+  If you later add bucket lock (section 9), its age must stay **shorter** than
+  `RETENTION_DAYS` and it must exclude the `locks/` prefix.
 - Retention runs only after the new snapshot is uploaded and `restic check`
   passed. A failed backup or check never deletes an older snapshot.
 - Every snapshot is a full dump, and restic deduplicates compressed dumps
@@ -502,9 +514,10 @@ Checked on 2026-11-06 against Cloudflare's documentation.
   Access has no free allowance. Overage is billed ($0.015 per GB-month,
   $4.50 per million Class A, $0.36 per million Class B) and there is no
   documented hard cap or spending limit.
-- Expected use: the development database is about 11 MB, so 11 snapshots of the
-  full size is about 127 MB, **about 1.3% of the 10 GB**. It stays inside the
-  free tier until the database reaches roughly 900 MB. A run uses a few hundred
+- Expected use: the development database is about 11 MB, so about 14
+  nightly dumps of the full size (restic dedupes compressed dumps poorly) is
+  about 160 MB, **about 1.6% of the 10 GB**. It stays inside the free tier until
+  the database reaches roughly 700 MB. A run uses a few hundred
   operations. Record the real database size at the first backup.
 - **Data in an unpaid or suspended account is not guaranteed.** Cloudflare
   publishes nothing about R2 data when an invoice goes unpaid, and there are
