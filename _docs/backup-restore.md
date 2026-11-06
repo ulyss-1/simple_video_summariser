@@ -341,8 +341,9 @@ is not backup monitoring.
 
 ## 4. Retention and cadence
 
-- Nightly 02:30 UTC, 24 h RPO, 6 h grace. Backups older than 14 days are
-  removed automatically: `restic forget --prune --keep-within 14d --keep-last 3`
+- Nightly 02:30 UTC, 24 h RPO, 6 h grace. A snapshot is kept only if it is
+  newer than 14 days (counted back from the newest snapshot; exactly 14 days old is
+  removed) and older ones are removed automatically: `restic forget --prune --keep-within 14d --keep-last 3`
   (`RETENTION_DAYS=14`, `KEEP_LAST_FLOOR=3` in `backup.conf`; both must be
   positive integers, `0` is rejected).
 - **Safety floor.** `--keep-last 3` always keeps the newest three snapshots,

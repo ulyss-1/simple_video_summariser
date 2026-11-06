@@ -251,3 +251,46 @@ def test_manifest_matches_the_dump_while_the_source_keeps_writing(fx: Fixture) -
     assert drill.returncode == 0, drill.stdout + drill.stderr
     assert "outcome=verified" in drill.stdout
     assert _leftovers(fx.drill) == ("", "")
+
+
+def test_real_restic_keep_within_is_strict_and_keep_last_is_a_floor(tmp_path: Path) -> None:
+    """The retention flags the script passes, against real restic with backdated
+    snapshots: exactly 14 d older than the newest is pruned, one second inside is kept,
+    and --keep-last keeps the newest N whatever their age."""
+    restic = shutil.which("restic")
+    if restic is None:
+        pytest.skip("restic is a host dependency, not installed here")
+    repo = tmp_path / "r"
+    pw = tmp_path / "pw"
+    pw.write_text(RESTIC_PASSWORD)
+    pw.chmod(0o600)
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "RESTIC_REPOSITORY": str(repo),
+           "RESTIC_PASSWORD_FILE": str(pw)}
+    data = tmp_path / "d"
+    data.mkdir()
+    (data / "f").write_text("x")
+
+    def run(*args: str) -> subprocess.CompletedProcess[str]:
+        proc = subprocess.run([restic, *args], env=env, capture_output=True, text=True, timeout=120, check=False)
+        assert proc.returncode == 0, proc.stderr
+        return proc
+
+    def survivors(floor: int, stamps: dict[str, str]) -> set[str]:
+        shutil.rmtree(repo, ignore_errors=True)
+        run("init", "--quiet")
+        for name, when in stamps.items():
+            run("backup", "--quiet", "--tag", name, "--time", when, str(data))
+        run("forget", "--keep-within", "14d", "--keep-last", str(floor), "--group-by", "host")
+        out = json.loads(run("snapshots", "--json").stdout)
+        return {tag for snap in out for tag in snap["tags"]}
+
+    newest = "2026-11-01 12:00:00"
+    assert survivors(1, {
+        "exact": "2026-10-18 12:00:00",   # exactly 14 d older: pruned
+        "inside": "2026-10-18 12:00:01",  # one second inside: kept
+        "new": newest,
+    }) == {"inside", "new"}
+    assert survivors(3, {
+        "old1": "2026-08-01 12:00:00", "old2": "2026-09-01 12:00:00",
+        "old3": "2026-10-01 12:00:00", "new": newest,
+    }) == {"old2", "old3", "new"}  # the floor keeps the newest 3 whatever their age

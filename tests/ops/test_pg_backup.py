@@ -154,13 +154,17 @@ def _surviving(rig: Rig) -> set[str]:
 DAY = 86400
 
 
-def test_snapshots_at_14_days_are_kept_and_one_second_older_are_pruned(rig: Rig) -> None:
-    # age is counted back from the newest snapshot, which is the one just taken (NOW)
-    rig.seed((snap_id(1), NOW - 14 * DAY), (snap_id(2), NOW - 14 * DAY - 1), (snap_id(3), NOW - 13 * DAY))
+def test_a_snapshot_one_second_inside_14_days_is_kept_and_exactly_14_days_is_pruned(rig: Rig) -> None:
+    # Real restic's keep-within is strict: a snapshot must be NEWER than 14 d (counted
+    # back from the newest snapshot, the one just taken) to be kept; the real-restic
+    # test in test_pg_backup_restore_docker.py proves that boundary. Floor 1 so it
+    # does not hide the age rule.
+    _conf(rig, "KEEP_LAST_FLOOR=1\n")
+    rig.seed((snap_id(1), NOW - 14 * DAY), (snap_id(2), NOW - 14 * DAY + 1), (snap_id(3), NOW - 13 * DAY))
     assert rig.run(BACKUP).returncode == 0
     kept = _surviving(rig)
-    assert snap_id(1) in kept and snap_id(3) in kept  # exactly 14 d and just inside
-    assert snap_id(2) not in kept  # just outside (floor of 3 is filled by the newer ones)
+    assert snap_id(2) in kept and snap_id(3) in kept  # just inside, and well inside
+    assert snap_id(1) not in kept  # exactly 14 days is outside
 
 
 def test_the_keep_last_floor_survives_when_every_old_snapshot_is_past_14_days(rig: Rig) -> None:

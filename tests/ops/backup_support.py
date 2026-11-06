@@ -125,15 +125,16 @@ if sub == "forget":
     ids = [a for a in args[1:] if len(a) == 64 and all(c in "0123456789abcdef" for c in a)]
     state["snapshots"] = [s for s in state["snapshots"] if s["id"] not in ids]
     if "--keep-within" in args:
-        # restic semantics: keep-within counts back from the NEWEST snapshot's
-        # time, and keep-last keeps the newest N; a snapshot kept by either stays.
+        # restic semantics (verified with real restic 0.18.1): keep-within counts back
+        # from the NEWEST snapshot's time and is strict (exactly N days old is pruned);
+        # keep-last keeps the newest N; a snapshot kept by either stays.
         within = int(args[args.index("--keep-within") + 1].rstrip("d")) * 86400
         last = int(args[args.index("--keep-last") + 1])
         snaps = sorted(state["snapshots"], key=lambda s: s["time"])
         ts = {s["id"]: datetime.fromisoformat(s["time"]).timestamp() for s in snaps}
         newest = max(ts.values()) if ts else 0
         keep = {s["id"] for s in snaps[-last:]}
-        keep |= {i for i, t in ts.items() if newest - t <= within}
+        keep |= {i for i, t in ts.items() if newest - t < within}
         state["snapshots"] = [s for s in state["snapshots"] if s["id"] in keep]
     save()
     sys.exit(0)
