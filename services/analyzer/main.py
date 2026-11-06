@@ -235,9 +235,13 @@ def _model_name(settings: Settings) -> str:
     return summarizer_model(settings)
 
 
-def _report_ollama(settings: Settings, transport: GetTransport) -> None:
+#: The context at which the free-tier local fallback keeps the remote chunks large (#392).
+LOCAL_FALLBACK_MIN_CTX = 16384
+
+
+def _report_ollama(settings: Settings, transport: GetTransport, model: str | None = None) -> None:
     """Probe Ollama once and log the outcome (#84). Never raises, never exits."""
-    probe = probe_ollama(settings.OLLAMA_HOST, settings.OLLAMA_MODEL, transport=transport)
+    probe = probe_ollama(settings.OLLAMA_HOST, model or settings.OLLAMA_MODEL, transport=transport)
     if probe.outcome == "ready":
         _log.info("analyzer.ollama_ready", host=probe.host, model=probe.model)
     elif probe.outcome == "model_missing":
@@ -360,9 +364,24 @@ def _run(
     }
     if settings.SUMMARIZER == "anthropic":
         fields["anthropic_batch"] = settings.ANTHROPIC_BATCH
+    local_model: str | None = None
+    if settings.SUMMARIZER == "free":
+        fields["free_local_fallback"] = settings.FREE_LLM_LOCAL_FALLBACK
+        fields["free_providers"] = list(getattr(summarizer, "provider_names", ()))
+        if settings.FREE_LLM_LOCAL_FALLBACK:
+            local_model = getattr(summarizer, "local_model", None)
     _log.info("analyzer.started", **fields)
+    if local_model is not None and settings.OLLAMA_NUM_CTX < LOCAL_FALLBACK_MIN_CTX:
+        _log.warning(
+            "free_tier_local_context_small",
+            ollama_num_ctx=settings.OLLAMA_NUM_CTX,
+            expected=LOCAL_FALLBACK_MIN_CTX,
+            note="every free-tier call is chunked for the local window; set OLLAMA_NUM_CTX=16384",
+        )
     if settings.SUMMARIZER == "ollama" and not latch.requested:
         _report_ollama(settings, probe_transport or urllib_get_transport)
+    elif local_model is not None and not latch.requested:
+        _report_ollama(settings, probe_transport or urllib_get_transport, model=local_model)
     if latch.requested:
         return 0
 

@@ -94,6 +94,9 @@ class Settings(BaseSettings):
     FREE_LLM_TIMEOUT_SEC: PositiveInt = 120
     # How long a provider that rate-limited or failed is skipped.
     FREE_LLM_COOLDOWN_SEC: PositiveInt = 120
+    # Keep the providers file's protocol = "ollama" table (the local last resort,
+    # #392); off, the file is validated and the table dropped.
+    FREE_LLM_LOCAL_FALLBACK: bool = False
     GROQ_API_KEY: SecretStr | None = None
     GEMINI_API_KEY: SecretStr | None = None
     OPENROUTER_API_KEY: SecretStr | None = None

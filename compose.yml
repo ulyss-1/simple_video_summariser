@@ -162,6 +162,7 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       # SUMMARIZER=free (#364): the free-tier keys, also analyzer only.
       GROQ_API_KEY: ${GROQ_API_KEY:-}
+      FREE_LLM_LOCAL_FALLBACK: ${FREE_LLM_LOCAL_FALLBACK:-0}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-}

@@ -1469,6 +1469,7 @@ than reading `os.environ` directly.
 | `OLLAMA_OUTPUT_RESERVE_TOKENS` | `2048` | analyzer: tokens of `OLLAMA_NUM_CTX` kept free for the reply; prompt budget is `OLLAMA_NUM_CTX - OLLAMA_OUTPUT_RESERVE_TOKENS`, and startup fails if it is `>= OLLAMA_NUM_CTX` (#85) |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY_FILE` / `ANTHROPIC_MODEL` | — / — / `claude-haiku-4-5` | analyzer (D6: API key only); the explicit file path is the opt-in Compose-secret source |
 | `FREE_LLM_PROVIDERS_FILE` | — (the shipped `adapters/summarize/free_providers.toml`) | analyzer, `SUMMARIZER=free` (#364): TOML list of OpenAI-compatible providers (`name`, `base_url`, `model`, `context_tokens`, `key_setting`), tried in file order |
+| `FREE_LLM_LOCAL_FALLBACK` | `0` | analyzer, `SUMMARIZER=free` (#392): keep the providers file's `protocol = "ollama"` table (local `gemma4:e4b`, last resort, guarded by the #393 lock); protocols are `openai`, `puter`, `ollama` |
 | `FREE_LLM_TIMEOUT_SEC` / `FREE_LLM_COOLDOWN_SEC` | `120` / `120` | analyzer: per-request timeout; how long a provider that rate-limited or failed is skipped (#364) |
 | `GROQ_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY` / `CEREBRAS_API_KEY` / `PUTER_AUTH_TOKEN` | — | analyzer only: the free-tier keys a provider names as its `key_setting`; a provider without a key is skipped (#364) |
 | `ANTHROPIC_BATCH` | `1` | use Batch API — 50% cost (16.8) |
@@ -2366,6 +2367,28 @@ mismatch and premieres, leave both columns alone). The reasons are
 analyze job found a transcription running) and `analysis_waiting`. `GET /ops/jobs`
 already returns `last_error`, so the Ops page shows why a job waits. Each deferral
 logs one INFO line, `job.deferred_for_lock`, with `reason` and `until`.
+
+**Local last resort (`FREE_LLM_LOCAL_FALLBACK=1`, #392).** The shipped list ends with a
+`protocol = "ollama"` table (`local-ollama`, `model = "gemma4:e4b"`; host, context and
+timeout from `OLLAMA_HOST`, `OLLAMA_NUM_CTX`, `OLLAMA_TIMEOUT_SEC`, never `OLLAMA_MODEL`).
+It is validated always and dropped unless the flag is on. A call reaches it only when every
+earlier provider was skipped or failed for that call; it speaks Ollama's native `/api/chat`
+(`think: false`, native `format`, no `response_format`) through the helpers shared with
+`OllamaSummarizer`. Its failures cool it down for `FREE_LLM_COOLDOWN_SEC` (a 4xx is a
+skip, not a `BUG`); a full context or `done_reason = "length"` is `LLMInvalidOutputError`.
+Before each local request the provider calls `scope.local_llm.ensure_held()`, the same
+#393 guard `OllamaSummarizer._chat` uses (the first call takes the lock, later ones verify
+it). A transcription holding Whisper's lock makes it raise `LocalLlmBusy`, a `Defer`
+(`whisper_busy`, about 30 s, no attempt spent): the free tier never catches it, so the job
+is deferred, the local provider is not cooled down, and no request goes out. It is raised
+only when the call reached the local provider, that is after every earlier provider failed
+or was skipped; a remote answer never touches the lock. At `end_job` the model is unloaded
+(`keep_alive: 0`); the analyze handler releases the lock after `end_job`, so unload always
+comes first. Without a job scope (the CLI) there is no lock and the local provider is
+skipped as "no job scope". Every call is chunked for the smallest window, so enabling it moves the
+prompt budget from 30720 to `OLLAMA_NUM_CTX - OLLAMA_OUTPUT_RESERVE_TOKENS` (14336 at 16384);
+startup warns `free_tier_local_context_small` below 16384. `ANALYZE_MAX_RUNTIME_SEC` must be
+raised for long videos (62 to 75 s of model time per minute of video).
 
 **Secrets.** `.env` is gitignored; `.env.example` is committed with placeholder
 values. `POSTGRES_PASSWORD` uses `:?required` so the stack refuses to start

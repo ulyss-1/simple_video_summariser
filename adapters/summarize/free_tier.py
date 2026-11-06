@@ -48,12 +48,20 @@ from adapters.summarize.ollama import (
     Transport,
     _count,
     _strip_think,
+    build_ollama_payload,
+    parse_ollama_reply,
     urllib_transport,
 )
+from adapters.summarize.ollama import _scrub as scrub_host
 from adapters.summarize.prompt_loader import PromptSet, load_prompt_set
 from adapters.summarize.repair import Message
 from common.config import FREE_TIER_MODEL, Settings, get_settings
-from common.errors import Cancelled, LLMInvalidOutputError, LLMUnavailableError
+from common.errors import (
+    BugError,
+    Cancelled,
+    LLMInvalidOutputError,
+    LLMUnavailableError,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -71,13 +79,13 @@ KEY_SETTINGS = (
 #: How a provider is spoken to. ``openai``: chat completions at ``base_url`` +
 #: ``/chat/completions``. ``puter``: the call route behind Puter's ``puter.ai.chat``,
 #: ``base_url`` is the whole URL (undocumented by Puter, so best effort).
-PROTOCOLS = ("openai", "puter")
+PROTOCOLS = ("openai", "puter", "ollama")
 _THINK_BLOCK = re.compile(r"\A\s*<(think|thought)>.*?</\1>", re.DOTALL)
 
 MIN_CONTEXT_TOKENS = 4096
 _OUTPUT_RESERVE_TOKENS = 2048
 _MAX_REASON_CHARS = 160
-_UNUSABLE_STATUSES = {401, 402, 403}  # 402: Gemini prepay credit depleted
+_UNUSABLE_STATUSES ={401, 402, 403}  # 402: Gemini prepay credit depleted
 
 
 class FreeTierConfigError(ValueError):
@@ -93,11 +101,14 @@ class Provider:
     key_setting: str
     api_key: str | None  # None: the key setting is unset, the provider is skipped
     protocol: str = "openai"
+    timeout_sec: float | None = None  # None: the summarizer's own timeout
 
     @property
     def url(self) -> str:
         if self.protocol == "puter":
             return self.base_url
+        if self.protocol == "ollama":
+            return self.base_url.rstrip("/") + "/api/chat"
         return self.base_url.rstrip("/") + "/chat/completions"
 
 
@@ -118,6 +129,9 @@ def load_providers(path: Path, settings: Settings) -> list[Provider]:
     if not isinstance(entries, list) or not entries:
         raise FreeTierConfigError(f"{path}: needs at least one [[provider]] table")
 
+    if sum(1 for e in entries if isinstance(e, dict) and e.get("protocol") == "ollama") > 1:
+        raise FreeTierConfigError(f"{path}: at most one provider may use protocol ollama")
+
     providers: list[Provider] = []
     for index, entry in enumerate(entries, 1):
         where = f"{path} provider #{index}"
@@ -126,6 +140,32 @@ def load_providers(path: Path, settings: Settings) -> list[Provider]:
         name = _text(entry, "name", where)
         if any(p.name == name for p in providers):
             raise FreeTierConfigError(f"{where}: duplicate provider name {name!r}")
+        if entry.get("protocol") == "ollama":
+            for forbidden in ("base_url", "key_setting", "context_tokens"):
+                if forbidden in entry:
+                    raise FreeTierConfigError(
+                        f"{where}: protocol ollama takes no '{forbidden}' "
+                        "(it uses OLLAMA_HOST and OLLAMA_NUM_CTX)"
+                    )
+            if index != len(entries):
+                raise FreeTierConfigError(f"{where}: protocol ollama must be the last provider")
+            if settings.FREE_LLM_LOCAL_FALLBACK and settings.OLLAMA_NUM_CTX < MIN_CONTEXT_TOKENS:
+                raise FreeTierConfigError(
+                    f"{where}: OLLAMA_NUM_CTX must be >= {MIN_CONTEXT_TOKENS} for the local provider"
+                )
+            local = Provider(
+                name,
+                settings.OLLAMA_HOST,
+                _text(entry, "model", where),
+                settings.OLLAMA_NUM_CTX,
+                "",
+                None,
+                "ollama",
+                float(settings.OLLAMA_TIMEOUT_SEC),
+            )
+            if settings.FREE_LLM_LOCAL_FALLBACK:
+                providers.append(local)
+            continue
         base_url = _text(entry, "base_url", where)
         parts = urlsplit(base_url)
         if parts.scheme != "https" or not parts.hostname or parts.username or parts.password:
@@ -197,6 +237,26 @@ def _bearer_send(
     return bearer_transport(provider.url, body, timeout, provider.api_key, handle)
 
 
+def _default_send(
+    provider: Provider, body: bytes, timeout: float, handle: CallHandle | None
+) -> HttpResponse:
+    if provider.protocol == "ollama":
+        return urllib_transport(provider.url, body, timeout, handle)
+    return _bearer_send(provider, body, timeout, handle)
+
+
+UNLOAD_TIMEOUT_SEC = 10.0
+
+
+def _ollama_unload(provider: Provider) -> None:
+    """Ask Ollama to drop the model from memory now (``keep_alive: 0``). Raises on failure."""
+    url = provider.base_url.rstrip("/") + "/api/generate"
+    body = json.dumps({"model": provider.model, "keep_alive": 0}).encode("utf-8")
+    response = urllib_transport(url, body, UNLOAD_TIMEOUT_SEC)
+    if not 200 <= response.status < 300:
+        raise OSError(f"HTTP {response.status}")
+
+
 class FreeTierSummarizer(OllamaSummarizer):
     """``Summarizer`` over the first available free-tier provider. One per process."""
 
@@ -209,16 +269,19 @@ class FreeTierSummarizer(OllamaSummarizer):
         timeout_sec: float,
         cooldown_sec: float,
         prompts: PromptSet,
-        send: Send = _bearer_send,
+        send: Send = _default_send,
         cancel_poll_sec: float | None = None,
         clock: Callable[[], float] | None = None,
+        output_reserve_tokens: int = _OUTPUT_RESERVE_TOKENS,
+        unload: Callable[[Provider], None] = _ollama_unload,
     ) -> None:
         if not providers:
             raise FreeTierConfigError("no free-tier providers configured")
         if not any(p.api_key for p in providers):
             raise FreeTierConfigError(
                 "no free-tier provider has an API key; set one of "
-                + ", ".join(sorted({p.key_setting for p in providers}))
+                + ", ".join(sorted({p.key_setting for p in providers if p.key_setting}))
+                + " (for the local Ollama alone, use SUMMARIZER=ollama)"
             )
         extra: dict[str, Any] = {}
         if cancel_poll_sec is not None:
@@ -231,7 +294,7 @@ class FreeTierSummarizer(OllamaSummarizer):
             # Chunks are sized for the smallest context in the list, so any
             # provider can take any prompt.
             num_ctx=min(p.context_tokens for p in providers),
-            output_reserve_tokens=_OUTPUT_RESERVE_TOKENS,
+            output_reserve_tokens=output_reserve_tokens,
             timeout_sec=timeout_sec,
             prompts=prompts,
             **extra,
@@ -239,6 +302,8 @@ class FreeTierSummarizer(OllamaSummarizer):
         self._providers = providers
         self._cooldown_sec = cooldown_sec
         self._send = send
+        self._unload = unload
+        self._local_held: Provider | None = None  # set once this job reached the local model
         self._cooling_until: dict[str, float] = {}
         self._disabled: set[str] = set()
         self.last_provider: str | None = None
@@ -249,18 +314,67 @@ class FreeTierSummarizer(OllamaSummarizer):
         settings: Settings | None = None,
         *,
         transport: Transport = urllib_transport,
-        send: Send = _bearer_send,
+        send: Send = _default_send,
     ) -> FreeTierSummarizer:
         """``transport`` exists for the base signature and is not used."""
         s = settings or get_settings()
         path = s.FREE_LLM_PROVIDERS_FILE or DEFAULT_PROVIDERS_FILE
+        providers = load_providers(path, s)
+        # The local window is the smallest, so its reserve sizes every call's budget.
+        has_local = any(p.protocol == "ollama" for p in providers)
         return cls(
-            providers=load_providers(path, s),
+            providers=providers,
             timeout_sec=s.FREE_LLM_TIMEOUT_SEC,
             cooldown_sec=s.FREE_LLM_COOLDOWN_SEC,
             prompts=load_prompt_set(s.PROMPT_VERSION),
             send=send,
+            output_reserve_tokens=(
+                s.OLLAMA_OUTPUT_RESERVE_TOKENS if has_local else _OUTPUT_RESERVE_TOKENS
+            ),
         )
+
+    @property
+    def provider_names(self) -> tuple[str, ...]:
+        return tuple(p.name for p in self._providers)
+
+    @property
+    def local_model(self) -> str | None:
+        """The model of the local provider, ``None`` when the list has none."""
+        return next((p.model for p in self._providers if p.protocol == "ollama"), None)
+
+    # --- the local provider's lock (#392) --------------------------------------------
+
+    def end_job(self) -> None:
+        """Unload the local model if this job used it.
+
+        The analyze handler releases the #393 lock after ``end_job`` returns, so the
+        model is gone from memory before Whisper may start.
+        """
+        used, self._local_held = self._local_held, None
+        try:
+            if used is not None:
+                try:
+                    self._unload(used)
+                except Exception as err:  # noqa: BLE001 - the handler must still release the lock
+                    _logger.warning(
+                        "free_tier_local_unload_failed",
+                        extra={"provider": used.name, "error": type(err).__name__},
+                    )
+        finally:
+            super().end_job()
+
+    def _local_gate(self, provider: Provider) -> str | None:
+        """Why the local provider cannot be used now, else ``None`` once the lock is held.
+
+        ``ensure_held`` may raise ``LocalLlmBusy`` (a ``Defer``): it is not caught, so a
+        transcription running defers the job, spends no attempt and is no cooldown.
+        """
+        scope = self._scope
+        if scope is None:
+            return "no job scope"
+        scope.local_llm.ensure_held()
+        self._local_held = provider
+        return None
 
     # --- one model call: the first provider that answers -------------------------
 
@@ -275,12 +389,18 @@ class FreeTierSummarizer(OllamaSummarizer):
         failures: list[str] = []
         for provider in self._providers:
             skipped = self._skip_reason(provider)
+            if skipped is None and provider.protocol == "ollama":
+                skipped = self._local_gate(provider)
             if skipped is not None:
                 failures.append(f"{provider.name}: {skipped}")
                 continue
-            request = json.dumps(
-                self._payload(provider, sent, format), ensure_ascii=False
-            ).encode("utf-8")
+            if provider.protocol == "ollama":
+                payload = build_ollama_payload(
+                    provider.model, messages, format, provider.context_tokens
+                )
+            else:
+                payload = self._payload(provider, sent, format)
+            request = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             content = self._try(provider, method, request, is_repair, failures)
             if content is not None:
                 return _THINK_BLOCK.sub("", _strip_think(content), count=1)
@@ -320,7 +440,7 @@ class FreeTierSummarizer(OllamaSummarizer):
         return out
 
     def _skip_reason(self, provider: Provider) -> str | None:
-        if provider.api_key is None:
+        if provider.api_key is None and provider.protocol != "ollama":
             return f"no key ({provider.key_setting} unset)"
         if provider.name in self._disabled:
             return "disabled (key rejected)"
@@ -340,7 +460,11 @@ class FreeTierSummarizer(OllamaSummarizer):
         """The reply text, or ``None`` after recording why this provider was passed over."""
         started = self._clock()
 
+        timeout = provider.timeout_sec or self._timeout
+
         def fail(reason: str, *, disable: bool = False) -> None:
+            if provider.protocol == "ollama":
+                reason = scrub_host(reason, provider.base_url)
             reason = self._scrub(reason, provider)[:_MAX_REASON_CHARS]
             if disable:
                 self._disabled.add(provider.name)
@@ -355,10 +479,10 @@ class FreeTierSummarizer(OllamaSummarizer):
         try:
             scope = self._scope
             if scope is None:
-                response = self._send(provider, request, self._timeout, None)
+                response = self._send(provider, request, timeout, None)
             else:
                 response = call_abortably(
-                    lambda handle: self._send(provider, request, self._timeout, handle),
+                    lambda handle: self._send(provider, request, timeout, handle),
                     cancelled=scope.cancelled,
                     poll_interval=self._cancel_poll_sec,
                 )
@@ -369,21 +493,32 @@ class FreeTierSummarizer(OllamaSummarizer):
             return None
 
         status = response.status
-        if status in _UNUSABLE_STATUSES:
-            fail(f"HTTP {status}, key rejected or out of credit", disable=True)
-            return None
-        if not 200 <= status < 300:
-            snippet = response.body[:MAX_BODY_IN_MESSAGE_BYTES].decode("utf-8", "replace")
-            fail(f"HTTP {status} {' '.join(snippet.split())}")
-            return None
-        self._calls += 1
-        if len(response.body) > MAX_RESPONSE_BYTES:
-            fail("response too large")
-            return None
-        parsed = self._parse(response.body, provider.protocol)
-        if parsed is None:
-            fail("reply is not a chat completion")
-            return None
+        parsed: tuple[str, str | None, tuple[int, int]] | None
+        if provider.protocol == "ollama":
+            # Ollama's own reply shape and status handling; a 4xx here is a skip, never a BUG.
+            self._calls += 1
+            try:
+                reply = parse_ollama_reply(response, model=provider.model)
+            except (LLMUnavailableError, BugError) as err:
+                fail(str(err))
+                return None
+            parsed = (reply.content, reply.done_reason, (reply.input_tokens, reply.output_tokens))
+        else:
+            if status in _UNUSABLE_STATUSES:
+                fail(f"HTTP {status}, key rejected or out of credit", disable=True)
+                return None
+            if not 200 <= status < 300:
+                snippet = response.body[:MAX_BODY_IN_MESSAGE_BYTES].decode("utf-8", "replace")
+                fail(f"HTTP {status} {' '.join(snippet.split())}")
+                return None
+            self._calls += 1
+            if len(response.body) > MAX_RESPONSE_BYTES:
+                fail("response too large")
+                return None
+            parsed = self._parse(response.body, provider.protocol)
+            if parsed is None:
+                fail("reply is not a chat completion")
+                return None
         content, finish_reason, counts = parsed
         self._input_tokens += counts[0]
         self._output_tokens += counts[1]
@@ -403,6 +538,8 @@ class FreeTierSummarizer(OllamaSummarizer):
                 "response_chars": len(content),
             },
         )
+        if provider.protocol == "ollama" and sum(counts) >= provider.context_tokens:
+            finish_reason = "length"  # the window is full: the reply may be cut
         if finish_reason == "length":
             raise LLMInvalidOutputError(
                 f"{provider.name} ({provider.model}) ran out of output length "
