@@ -1,0 +1,29 @@
+{
+ "seed": 3821,
+ "units": {
+  "U01": {
+   "video_id": "PxP7IoagbtA",
+   "setting": "r3-ctx16k",
+   "X": "gemma4:e4b",
+   "Y": "qwen3.5:4b"
+  },
+  "U02": {
+   "video_id": "YjdfcHo_lE4",
+   "setting": "r3-ctx16k",
+   "X": "gemma4:e4b",
+   "Y": "qwen3.5:4b"
+  },
+  "U03": {
+   "video_id": "_Yt7NuD-nbk",
+   "setting": "r3-ctx16k",
+   "X": "qwen3.5:4b",
+   "Y": "gemma4:e4b"
+  },
+  "U04": {
+   "video_id": "_m1XcP1addc",
+   "setting": "r3-ctx16k",
+   "X": "gemma4:e4b",
+   "Y": "qwen3.5:4b"
+  }
+ }
+}

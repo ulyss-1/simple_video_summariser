@@ -1,0 +1,35 @@
+{
+ "seed": 3861,
+ "units": {
+  "A01": {
+   "video_id": "iM3YsKfRh6E",
+   "model": "gemma4:e4b",
+   "label": "r4-ctx16k"
+  },
+  "A02": {
+   "video_id": "hoYWNqh_u5I",
+   "model": "gemma4:e4b",
+   "label": "r4-ctx16k"
+  },
+  "A03": {
+   "video_id": "SMFV5A8aq0c",
+   "model": "gemma4:e4b",
+   "label": "r4-ctx16k"
+  },
+  "A04": {
+   "video_id": "k1xJbNAGmFg",
+   "model": "gemma4:e4b",
+   "label": "r4-ctx16k"
+  },
+  "A05": {
+   "video_id": "zVc-S0Od8_0",
+   "model": "gemma4:e4b",
+   "label": "r4-ctx16k"
+  },
+  "A06": {
+   "video_id": "eeawNrRi-cc",
+   "model": "gemma4:e4b",
+   "label": "r4-ctx16k"
+  }
+ }
+}

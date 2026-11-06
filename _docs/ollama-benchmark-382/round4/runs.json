@@ -1,0 +1,434 @@
+[
+ {
+  "label": "r4-ctx16k",
+  "video": "SMFV5A8aq0c",
+  "model": "gemma4:e4b",
+  "num_ctx": 16384,
+  "status": "ok",
+  "wall_s": 1204.1482429709868,
+  "calls": 4,
+  "ok_calls": 4,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 2,
+   "reduce": 1,
+   "repair": 0
+  },
+  "prefill_tps": 22.12489811558291,
+  "gen_tps": 6.7356888470340115,
+  "load_s": 20.722336502,
+  "prompt_tokens": [
+   3227,
+   5158,
+   4576,
+   3212
+  ],
+  "out_tokens": [
+   61,
+   1337,
+   1476,
+   169
+  ],
+  "chunk_out_tokens": [
+   1337,
+   1476
+  ],
+  "length_calls": 0,
+  "chunk_over_2048": 0,
+  "cause": "analyzed (forced repeat)",
+  "last_call_error": null,
+  "peak_used_gb": 11.997325897216797,
+  "peak_swap_gb": 2.791797637939453,
+  "peak_runner_gb": 7.899158477783203,
+  "min_avail_gb": 2.5483055114746094,
+  "sec_per_video_min": 46.612190050489815,
+  "sidecar_samples": 241,
+  "max_psi_full10": 0.12,
+  "swapin_mb": 0.520192,
+  "swapout_mb": 0.057344,
+  "loadavg_before": "4.18 4.37 4.36 1/1412 160740",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "r4-ctx16k",
+  "video": "eeawNrRi-cc",
+  "model": "gemma4:e4b",
+  "num_ctx": 16384,
+  "status": "ok",
+  "wall_s": 1417.471574189025,
+  "calls": 4,
+  "ok_calls": 4,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 2,
+   "reduce": 1,
+   "repair": 0
+  },
+  "prefill_tps": 21.67914111461453,
+  "gen_tps": 6.347315790516957,
+  "load_s": 19.471901295,
+  "prompt_tokens": [
+   3750,
+   7105,
+   5648,
+   3313
+  ],
+  "out_tokens": [
+   18,
+   1636,
+   1262,
+   151
+  ],
+  "chunk_out_tokens": [
+   1636,
+   1262
+  ],
+  "length_calls": 0,
+  "chunk_over_2048": 0,
+  "cause": "analyzed (forced repeat)",
+  "last_call_error": null,
+  "peak_used_gb": 12.06612777709961,
+  "peak_swap_gb": 2.7908668518066406,
+  "peak_runner_gb": 7.954296112060547,
+  "min_avail_gb": 2.4809608459472656,
+  "sec_per_video_min": 56.10045808135983,
+  "sidecar_samples": 283,
+  "max_psi_full10": 0.0,
+  "swapin_mb": 0.679936,
+  "swapout_mb": 0.077824,
+  "loadavg_before": "1.01 3.05 3.83 3/1427 189099",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "r4-ctx16k",
+  "video": "hoYWNqh_u5I",
+  "model": "gemma4:e4b",
+  "num_ctx": 16384,
+  "status": "ok",
+  "wall_s": 1162.1192532869754,
+  "calls": 4,
+  "ok_calls": 4,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 2,
+   "reduce": 1,
+   "repair": 0
+  },
+  "prefill_tps": 22.278178447809932,
+  "gen_tps": 7.308980242028538,
+  "load_s": 20.023843936,
+  "prompt_tokens": [
+   2918,
+   4158,
+   2981,
+   3998
+  ],
+  "out_tokens": [
+   21,
+   2436,
+   1122,
+   153
+  ],
+  "chunk_out_tokens": [
+   2436,
+   1122
+  ],
+  "length_calls": 0,
+  "chunk_over_2048": 1,
+  "cause": "analyzed (forced repeat)",
+  "last_call_error": null,
+  "peak_used_gb": 11.898677825927734,
+  "peak_swap_gb": 2.8027915954589844,
+  "peak_runner_gb": 7.864570617675781,
+  "min_avail_gb": 2.6484107971191406,
+  "sec_per_video_min": 47.43343890967247,
+  "sidecar_samples": 233,
+  "max_psi_full10": 0.14,
+  "swapin_mb": 2.121728,
+  "swapout_mb": 0.0,
+  "loadavg_before": "4.04 4.27 4.25 1/1410 1547086",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "r4-ctx16k",
+  "video": "iM3YsKfRh6E",
+  "model": "gemma4:e4b",
+  "num_ctx": 16384,
+  "status": "ok",
+  "wall_s": 1315.5529967210023,
+  "calls": 4,
+  "ok_calls": 4,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 2,
+   "reduce": 1,
+   "repair": 0
+  },
+  "prefill_tps": 22.04897393196514,
+  "gen_tps": 7.222904264457287,
+  "load_s": 20.235260872,
+  "prompt_tokens": [
+   3915,
+   5008,
+   3523,
+   4149
+  ],
+  "out_tokens": [
+   19,
+   2167,
+   1543,
+   186
+  ],
+  "chunk_out_tokens": [
+   2167,
+   1543
+  ],
+  "length_calls": 0,
+  "chunk_over_2048": 1,
+  "cause": "analyzed (forced repeat)",
+  "last_call_error": null,
+  "peak_used_gb": 11.870681762695312,
+  "peak_swap_gb": 2.8538894653320312,
+  "peak_runner_gb": 7.903141021728516,
+  "min_avail_gb": 2.6764068603515625,
+  "sec_per_video_min": 58.08181000975728,
+  "sidecar_samples": 263,
+  "max_psi_full10": 0.0,
+  "swapin_mb": 2.924544,
+  "swapout_mb": 0.0,
+  "loadavg_before": "3.62 4.18 4.33 1/1412 2033231",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "r4-ctx16k",
+  "video": "iM3YsKfRh6E",
+  "model": "qwen3.5:4b",
+  "num_ctx": 16384,
+  "status": "failed",
+  "wall_s": 1074.958896658034,
+  "calls": 2,
+  "ok_calls": 1,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 1,
+   "reduce": 0,
+   "repair": 0
+  },
+  "prefill_tps": 24.05884771607925,
+  "gen_tps": 5.131075774016672,
+  "load_s": 10.907185319,
+  "prompt_tokens": [
+   3842
+  ],
+  "out_tokens": [
+   21
+  ],
+  "chunk_out_tokens": [],
+  "length_calls": 0,
+  "chunk_over_2048": 0,
+  "cause": "failed: LLM_UNAVAILABLE: Ollama at http://172.17.0.1:11434/api/chat did not answer: TimeoutError: timed out",
+  "last_call_error": "TimeoutError",
+  "peak_used_gb": 8.436904907226562,
+  "peak_swap_gb": 2.843730926513672,
+  "peak_runner_gb": 4.312835693359375,
+  "min_avail_gb": 6.108509063720703,
+  "sec_per_video_min": null,
+  "sidecar_samples": 215,
+  "max_psi_full10": 0.0,
+  "swapin_mb": 0.651264,
+  "swapout_mb": 0.0,
+  "loadavg_before": "3.96 4.14 4.21 6/1423 2062009",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "r4-ctx16k",
+  "video": "k1xJbNAGmFg",
+  "model": "gemma4:e4b",
+  "num_ctx": 16384,
+  "status": "ok",
+  "wall_s": 1511.9200341849937,
+  "calls": 4,
+  "ok_calls": 4,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 2,
+   "reduce": 1,
+   "repair": 0
+  },
+  "prefill_tps": 21.86271255693457,
+  "gen_tps": 7.1459796825661295,
+  "load_s": 21.262232514,
+  "prompt_tokens": [
+   3604,
+   6293,
+   2269,
+   5237
+  ],
+  "out_tokens": [
+   21,
+   3016,
+   1743,
+   179
+  ],
+  "chunk_out_tokens": [
+   3016,
+   1743
+  ],
+  "length_calls": 0,
+  "chunk_over_2048": 1,
+  "cause": "analyzed (forced repeat)",
+  "last_call_error": null,
+  "peak_used_gb": 11.983623504638672,
+  "peak_swap_gb": 2.9004478454589844,
+  "peak_runner_gb": 7.916194915771484,
+  "min_avail_gb": 2.563465118408203,
+  "sec_per_video_min": 83.68561074824689,
+  "sidecar_samples": 303,
+  "max_psi_full10": 0.6,
+  "swapin_mb": 9.44128,
+  "swapout_mb": 112.099328,
+  "loadavg_before": "4.44 4.34 3.92 1/1411 428149",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "r4-ctx16k",
+  "video": "k1xJbNAGmFg",
+  "model": "qwen3.5:4b",
+  "num_ctx": 16384,
+  "status": "failed",
+  "wall_s": 1059.9979323250009,
+  "calls": 2,
+  "ok_calls": 1,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 1,
+   "reduce": 0,
+   "repair": 0
+  },
+  "prefill_tps": 24.48129541670666,
+  "gen_tps": 5.295567698096155,
+  "load_s": 10.932276873,
+  "prompt_tokens": [
+   3559
+  ],
+  "out_tokens": [
+   18
+  ],
+  "chunk_out_tokens": [],
+  "length_calls": 0,
+  "chunk_over_2048": 0,
+  "cause": "failed: LLM_UNAVAILABLE: Ollama at http://172.17.0.1:11434/api/chat did not answer: TimeoutError: timed out",
+  "last_call_error": "TimeoutError",
+  "peak_used_gb": 8.227340698242188,
+  "peak_swap_gb": 2.8929672241210938,
+  "peak_runner_gb": 4.306591033935547,
+  "min_avail_gb": 6.317752838134766,
+  "sec_per_video_min": null,
+  "sidecar_samples": 212,
+  "max_psi_full10": 0.0,
+  "swapin_mb": 4.214784,
+  "swapout_mb": 0.0,
+  "loadavg_before": "4.43 4.38 4.26 2/1436 461783",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "r4-ctx16k",
+  "video": "zVc-S0Od8_0",
+  "model": "gemma4:e4b",
+  "num_ctx": 16384,
+  "status": "ok",
+  "wall_s": 1470.2898399739643,
+  "calls": 4,
+  "ok_calls": 4,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 2,
+   "reduce": 1,
+   "repair": 0
+  },
+  "prefill_tps": 21.913432698726698,
+  "gen_tps": 7.0236894796985725,
+  "load_s": 19.022655383,
+  "prompt_tokens": [
+   4003,
+   6197,
+   2634,
+   4835
+  ],
+  "out_tokens": [
+   17,
+   2256,
+   2108,
+   144
+  ],
+  "chunk_out_tokens": [
+   2256,
+   2108
+  ],
+  "length_calls": 0,
+  "chunk_over_2048": 2,
+  "cause": "analyzed (forced repeat)",
+  "last_call_error": null,
+  "peak_used_gb": 11.875595092773438,
+  "peak_swap_gb": 2.8817520141601562,
+  "peak_runner_gb": 7.921916961669922,
+  "min_avail_gb": 2.6714935302734375,
+  "sec_per_video_min": 78.9770728723705,
+  "sidecar_samples": 295,
+  "max_psi_full10": 0.56,
+  "swapin_mb": 24.641536,
+  "swapout_mb": 0.0,
+  "loadavg_before": "3.95 4.12 4.16 3/1421 254313",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ },
+ {
+  "label": "r4-ctx16k",
+  "video": "zVc-S0Od8_0",
+  "model": "qwen3.5:4b",
+  "num_ctx": 16384,
+  "status": "failed",
+  "wall_s": 1075.1669959179708,
+  "calls": 2,
+  "ok_calls": 1,
+  "by_kind": {
+   "roster": 1,
+   "chunk": 1,
+   "reduce": 0,
+   "repair": 0
+  },
+  "prefill_tps": 24.207830100456878,
+  "gen_tps": 5.127562356855551,
+  "load_s": 9.410174685,
+  "prompt_tokens": [
+   3920
+  ],
+  "out_tokens": [
+   18
+  ],
+  "chunk_out_tokens": [],
+  "length_calls": 0,
+  "chunk_over_2048": 0,
+  "cause": "failed: LLM_UNAVAILABLE: Ollama at http://172.17.0.1:11434/api/chat did not answer: TimeoutError: timed out",
+  "last_call_error": "TimeoutError",
+  "peak_used_gb": 8.418464660644531,
+  "peak_swap_gb": 2.8825111389160156,
+  "peak_runner_gb": 4.317909240722656,
+  "min_avail_gb": 6.128623962402344,
+  "sec_per_video_min": null,
+  "sidecar_samples": 215,
+  "max_psi_full10": 0.0,
+  "swapin_mb": 0.98304,
+  "swapout_mb": 0.0,
+  "loadavg_before": "3.67 4.18 4.26 1/1409 239044",
+  "unsuspected_cache_hits": null,
+  "suspected_cache_hits": 0
+ }
+]

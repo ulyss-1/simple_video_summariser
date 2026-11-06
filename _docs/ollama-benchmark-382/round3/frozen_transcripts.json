@@ -1,0 +1,66 @@
+[
+ {
+  "video_id": "YjdfcHo_lE4",
+  "title": "S&P 500 (459 to 440) - 6 Extremely Interesting Investing Stories (PNW, SOLV, GNRC, ECHO, GEN, IVZ)",
+  "channel_id": "UCrTTBSUr0zhPU56UQljag5A",
+  "duration_sec": 1553,
+  "transcript_source": "whisper",
+  "lang": "en",
+  "segments": 480,
+  "chars": 20229,
+  "est_tokens": 6743,
+  "sha256": {
+   "meta": "bf451966a93f72c073e2f31b34fa7e642a52f316659f8238408900e84f2b7db4",
+   "segments": "778546d5cfcc1bc4ad6faaf34c86a544c0678fbe41c0b8aff494cea155b4184e"
+  },
+  "transcript_id": 1
+ },
+ {
+  "video_id": "PxP7IoagbtA",
+  "title": "Crash, Debt Crisis, AI Bubble Warnings or Just Stay Long?",
+  "channel_id": "UCrTTBSUr0zhPU56UQljag5A",
+  "duration_sec": 1046,
+  "transcript_source": "whisper",
+  "lang": "en",
+  "segments": 165,
+  "chars": 13909,
+  "est_tokens": 4639,
+  "sha256": {
+   "meta": "4d25c330b5aa147f38bd7a91b1719779679274c1bba05b2bbf523b1c124fcefd",
+   "segments": "77eda21093311433d2c6005922cdba2ae567218ab8dea6e969089b0ff33b65da"
+  },
+  "transcript_id": 2
+ },
+ {
+  "video_id": "_Yt7NuD-nbk",
+  "title": "The AI Bubble Is Popping",
+  "channel_id": "UCfCT7SSFEWyG4th9ZmaGYqQ",
+  "duration_sec": 1235,
+  "transcript_source": "whisper",
+  "lang": "en",
+  "segments": 256,
+  "chars": 23174,
+  "est_tokens": 7725,
+  "sha256": {
+   "meta": "938b942141fb468049871d39140f80f14a62e76569f82f94b0419fad6c75e6fc",
+   "segments": "595051de3db3bbfbe0612ed4047c7b06ad495f0bacfd779816443e8d3953420b"
+  },
+  "transcript_id": 3
+ },
+ {
+  "video_id": "_m1XcP1addc",
+  "title": "A Dip Like This Only Comes Once a Decade",
+  "channel_id": "UCyqlbzLoYtpqDXwRI9Yh5LA",
+  "duration_sec": 1342,
+  "transcript_source": "whisper",
+  "lang": "en",
+  "segments": 416,
+  "chars": 25519,
+  "est_tokens": 8507,
+  "sha256": {
+   "meta": "535ec63ccc982250bc89da6a2abaae5ed67a20cf3a308a869dcab0df221413fb",
+   "segments": "1f1cd647eef74b39a3c6aedc36eb9e61a48ee107297fdd14830a76a8949efecd"
+  },
+  "transcript_id": 4
+ }
+]

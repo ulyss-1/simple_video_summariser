@@ -1,0 +1,116 @@
+date: 2026-11-04T23:55:01+02:00
+repo commit (worktree HEAD): 81c60f5 (git archive of origin/master, copy in round3/repo)
+--- ollama --version
+ollama version is 0.40.13
+--- ollama list
+NAME          ID              SIZE      MODIFIED   
+gemma4:e4b    dc35e8d9c606    6.6 GB    2 days ago    
+qwen3.5:4b    d8b0f5e9760c    3.3 GB    2 days ago    
+--- systemctl show ollama -p Environment
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin OLLAMA_HOST=172.17.0.1:11434
+--- docker image ls (ytdigest)
+ytdigest-whisper:latest 2978f76d4654
+ytdigest-web:latest 08c03a511e39
+ytdigest-backend:latest 483c89df7e41
+ytdigest-deps:latest f94bd06b90cf
+ytdigest-web-test:43c84ff7 88cf31f1e5be
+--- docker volume ls
+1da49aade88be3fa26b56f86a185d79b8f4750b7a6c4c60fc2c6735b31a2f6b8
+2c9e88d01161b8d74c954601fcc794b179e2c47bb5311a7d9b31d776d0830be3
+3fddb5f462eb41d8d3f681f670522cc1b9ed10d5c302fd5f90ed8900e5c1ca98
+4fb49df3c3c23ec82ab4b14714eda58dbd02954d5e24a4adbc5566673b1513de
+5cc211b24fc4c0fe07402814cf986ef3cf5222c750444e27cb15135f193b25ea
+6dbfca61c9714f22090d9b4d96fb184af58e578b8cb47690da5df954c71f326f
+9b39c743b05dd36ee7c1da1025333ad3e2472f8db16aef21b8c827595697fbf5
+9fe05690fccea69e8c846ba50b4edee3f44f9e409eae6d38b7d4eb61eef52342
+15cc887b3c1cfc3caff1e9ad693a48726aebc8439167fe3b681977314a496949
+34e4aa885ef599ebc3ee331cf2be2b20b2c4a753821f552d82579627093559a5
+54d7b8d7993a7d2d8086cf354bd66a1e5db3f7ca4f7114343e6f9d19a4c28330
+56cab76f7644e5524c45ff42f3eb551d1a0b801da695da4ec7ff4e207deccb9e
+76dcceb4cba4499d0f3dac7b5edd44fae7b6d8b4308ee44d8335701f0b891e46
+3880b7dd0f594c18e193344499fd666d65671bfd42bf28d59b8aecf5412dea86
+6484ccf01b7c2bbbc70657902ff315248571789f52bf4287fcbc2ed54ba950f9
+9088ac2e76e1ff83642e97cdc1a674f0318268c308b47d7d2abbae216ec02040
+82276a3c9c90c0d32615cdebcaaf9c86e1e5136f6192e250f66b2eac1d3dde46
+430073b4491be0728dfdfd7b2592ff021c0e100c061494befb6824b9575d7f3b
+200232542dbe4efe8009e2052c456d7a353e0fb85924075f01d80c78b75540b9
+a70287fec84733d328c9104ca2ab777e2142cd47e481b6b67ac9e494ae7880fb
+ad083eaf1c591ffd2fe2ad171bbc6ec8d583415ea51303f6b450d9b21b7c7fd3
+b00deaca7f17e92eae6027dda64ba26f85116d2a96c85e4000ab5857f0270972
+b24e7afb442c04be6820ab3a10b7448ed015be43ae6bfb9f96cd3f38b45f68fe
+b51b425f2aa483d91be18c2db59284bfb22cd64410fec1e3e7945fda964e9cc6
+bb4a00303943d91c6cfbbed552fb0b361ffd98db5dfeac5ca08d0bac7c3e8c49
+bfb065536e89a4e245e9afb183df105b67a443f459a59ff22fd327ae41cf58bc
+c1d6729ab2c09598c7d633a9c1625bd04fbe4a4e5e00bd690ac2184a818fd7cb
+c47a2e762be63723e7c4da529ffe0d5bd11e4b59efccc5d7bb81e768e7109e08
+c20546e5e39ec6ebf2ca1f500954d3ad84217c951634a50b37be684fd6d754db
+cef68fff063020dbe204a1a64a175b0a84cf0880feeeb9a95230e666b9a1782d
+core_minio_data
+core_pgdata
+d2f1a0c7d2e8211a155bc01806213e7e8a0aa0e8af6c2210821999009a0e2da3
+d6a7b3be88a866b7c047d27394cc3f686859ae229fe93492d58b082c129b08f4
+d6f95f38a2b41c2202162aa3ffc4ee43ee31af609332310ea90a7c33621c85c8
+d477b669d48e4c36a05430868ff2c83b0799bbc94fe42270c518260f0ca026a8
+dfb397b1c63fe0fb18c834b7ef5be8ad390c650ffdc9154b42eba441474a5fe5
+ec9ea5652b5f0268c0bc900f1c41f0d005098a1473dba46ee22d36b36f81a460
+ef1d1482db6d46a21a245dec8f8baea363cfae5b7fd6af7e40969ee34362aeda
+f1fc6b445d32488b19b240cc69074c6e4efcb75d1feaa586ceaa26c7bff93d40
+f759c876fb31f6c51eb24150cfb12c81d5cac8aee2d114e47cc1cae7179f7fd4
+f934d66b30c16f5cc20baeed3343a09aaa910f9922db4ccba54bb7027423c783
+helix-demo2_demo_minio_data
+helix-demo2_demo_postgres_data
+helix-demo2_demo_redis_data
+helix-demo-clean-flags_demo_minio_data
+helix-demo-clean-flags_demo_postgres_data
+helix-demo-clean-flags_demo_redis_data
+helix-demo-integr-test3_demo_minio_data
+helix-demo-integr-test3_demo_postgres_data
+helix-demo-integr-test3_demo_redis_data
+helix-demo-integr-test4_demo_minio_data
+helix-demo-integr-test4_demo_postgres_data
+helix-demo-integr-test4_demo_redis_data
+helix-demo-intergr_demo_minio_data
+helix-demo-intergr_demo_postgres_data
+helix-demo-intergr_demo_redis_data
+helix-demo-tempaltes_demo_minio_data
+helix-demo-tempaltes_demo_postgres_data
+helix-demo-tempaltes_demo_redis_data
+helix-demo_demo_minio_data
+helix-demo_demo_postgres_data
+helix-demo_demo_redis_data
+helix-demo_minio_data
+helix-demo_postgres_data
+helix-demo_redis_data
+helix-integr-blank_demo_minio_data
+helix-integr-blank_demo_postgres_data
+helix-integr-blank_demo_redis_data
+issue136-probe-2167887_pgdata
+monitoring_stack_grafana_data
+monitoring_stack_loki_data
+monitoring_stack_promtail_positions
+qa136missing_pgdata
+whisper-models
+ytdigest-dev_pgdata
+ytdigest_audio
+ytdigest_pgdata
+ytdigest_whisper-models
+--- docker ps -a
+ytdigest-t382d-db postgres:18-alpine Up 4 minutes
+ytdigest-web-1 ytdigest-web:latest Up 23 hours
+ytdigest-transcriber-1 ytdigest-whisper:latest Exited (0) 4 minutes ago
+ytdigest-planner-1 ytdigest-backend:latest Up 23 hours (healthy)
+ytdigest-analyzer-1 ytdigest-backend:latest Up 23 hours (healthy)
+ytdigest-api-1 ytdigest-backend:latest Up 23 hours (healthy)
+ytdigest-migrate-1 ytdigest-backend:latest Exited (0) 23 hours ago
+ytdigest-dev-db-1 postgres:18-alpine Up 39 hours (healthy)
+ytdigest-db-1 postgres:18-alpine Up 45 hours (healthy)
+issue136-probe-2167887-db-1 postgres:18-alpine Created
+--- loadavg
+0.29 0.51 0.91 1/1424 1016618
+--- cpu
+CPU(s):                                  8
+Model name:                              Intel(R) Core(TM) i7-4712MQ CPU @ 2.30GHz
+CPU(s) scaling MHz:                      93%
+               total        used        free      shared  buff/cache   available
+Mem:           14896        4143        9160         233        2157       10752
+Swap:          11544        2842        8701
