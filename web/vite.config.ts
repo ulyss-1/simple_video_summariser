@@ -43,6 +43,10 @@ export default defineConfig({
     },
     // Pinned here, not in a developer's shell, so UTC-only date handling fails.
     env: { TZ: TEST_TIME_ZONE },
+    // Cap parallel workers so a busy host is not oversubscribed (heavy jsdom
+    // files were timing out under CPU load). In the config, not the npm script,
+    // so every vitest entry point (npm test, npx vitest, IDE) gets the same cap.
+    maxWorkers: 4,
     // Two mutually exclusive projects. `extends: true` reuses the plugin list
     // above, so the React Compiler is configured in exactly one place.
     projects: [
@@ -62,6 +66,8 @@ export default defineConfig({
           environment: 'jsdom',
           include: ['src/**/*.dom.test.{ts,tsx}'],
           setupFiles: ['./src/test/setup.ts'],
+          // Generous per-test budget: jsdom files are CPU-bound and slow on a busy host.
+          testTimeout: 30000,
         },
       },
     ],

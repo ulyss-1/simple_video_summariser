@@ -1,8 +1,11 @@
 // The single setup file of the jsdom Vitest project (web/vite.config.ts, #127).
 // Do not duplicate any of this per test file.
 import '@testing-library/jest-dom/vitest'
-import { cleanup } from '@testing-library/react'
+import { cleanup, configure } from '@testing-library/react'
 import { afterEach, beforeEach, expect, vi } from 'vitest'
+
+// findBy*/waitFor default to 1 s; raised so CPU-bound renders on a busy host do not time out.
+configure({ asyncUtilTimeout: 5000 })
 
 // Vitest `globals` is off (as in #47), so Testing Library cannot register its
 // own automatic cleanup: it only does so when a global `afterEach` exists.
