@@ -63,7 +63,7 @@ def test_a_cancelled_transcribe_is_not_a_dead_letter_so_ingest_transcribes_again
 ) -> None:
     path = choose_transcript_path(
         SubtitleAvailability(manual=None, auto="en"),
-        prefer_whisper=False,
+        prefer_whisper=True,  # captions-first (#416) would take the auto track up front
         auto_caption_fallback=True,
         existing_source=None,
         transcribe_state="dead",

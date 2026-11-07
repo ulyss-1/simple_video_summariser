@@ -343,7 +343,8 @@ def test_a_dry_run_reports_and_writes_nothing(
     assert result.estimate.rtf_samples == 1
     assert result.estimate.transcription_sec == 150
     assert result.estimate.assumes == ESTIMATE_ASSUMES == (
-        "manual-subtitle videos skip speech-to-text; unchecked videos are assumed to need it"
+        "videos with English captions (manual or auto) skip speech-to-text; "
+        "unchecked videos are assumed to need it"
     )
 
 

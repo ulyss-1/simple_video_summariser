@@ -44,12 +44,14 @@ channel the owner added by hand earlier with none of those is removed too.
 
 ## Load
 
-With `PREFER_WHISPER=1` (set in the deploy host's `.env` for the real
-transcription test) each new video of these channels, several per day, is
-transcribed by Whisper `large-v3` at about 0.5x realtime on this CPU. Every
-video is then analysed by the configured `SUMMARIZER` (LLM time on Ollama, or
-Anthropic spend). Captions-first is `PREFER_WHISPER=0`. The migration changes no
-setting.
+Ingest is captions-first (#416, the default): each new video of these channels uses
+YouTube's English captions, manual else auto-generated, and only a video with no
+usable captions (or one whose captions could not be fetched within the 30 s
+`CAPTIONS_CHECK_TIMEOUT_SEC` cap, for example on an HTTP 429) is transcribed by Whisper `large-v3` at about
+0.5x realtime on this CPU. Every video is then analysed by the configured `SUMMARIZER`
+(LLM time on Ollama, or Anthropic spend). `PREFER_WHISPER=1` forces Whisper for every
+video; it is an explicit override for tests, not for production. The migration changes
+no setting.
 
 ## What the owner runs
 

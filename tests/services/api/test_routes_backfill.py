@@ -50,7 +50,7 @@ class _Conn:
 
 _PROBE = SubtitleProbe(
     metadata_factory=lambda timeout: (_ for _ in ()).throw(AssertionError("no real probe")),
-    has_manual=lambda meta: False,
+    has_captions=lambda meta: None,
 )
 
 
@@ -309,11 +309,12 @@ def test_the_response_has_exactly_the_documented_keys(
             "rtf_samples": 4,
             "transcription_sec": 150,
             "assumes": (
-                "manual-subtitle videos skip speech-to-text;"
+                "videos with English captions (manual or auto) skip speech-to-text;"
                 " unchecked videos are assumed to need it"
             ),
             "probed": 1,
             "manual_subtitles": 1,
+            "auto_subtitles": 0,
             "needs_transcription": 0,
             "unchecked": 1,
             "probe_failed": 0,

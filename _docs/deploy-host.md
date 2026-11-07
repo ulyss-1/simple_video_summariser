@@ -459,7 +459,9 @@ valid analysis.
 
 The video is `iG9CE55wbtY` (TED, "Do schools kill creativity?", 1203 s), the
 same one #137 replays. It has manual English captions, so the path is
-`ingest` then `analyze` with no `transcribe` job.
+`ingest` then `analyze` with no `transcribe` job. Ingest is captions-first (#416), so
+`PREFER_WHISPER` must be unset or `0` in the host `.env`: with `1` the captions are
+ignored and the smoke video goes to Whisper.
 
 **Preconditions**
 
@@ -546,7 +548,8 @@ Read them from `GET /api/videos/iG9CE55wbtY` and `GET /api/ops/jobs`:
 
 - `status` is `done`
 - `transcript.source` is `youtube_manual` and `transcript.language` is `en`
-- `analysis.model` equals the `OLLAMA_MODEL` printed by the guard
+- `analysis.model` equals the `OLLAMA_MODEL` printed by the guard (with
+  `SUMMARIZER=free`, the label `free-tier` instead)
 - `analysis.tldr` is non-empty
 - the video's jobs are exactly one `ingest` and one `analyze`, both
   `state: done`, with **no** `transcribe` job

@@ -44,7 +44,7 @@ class Meta:
         return video_id
 
     def probe(self) -> SubtitleProbe:
-        return SubtitleProbe(self.factory, lambda meta: str(meta) in self.manual)
+        return SubtitleProbe(self.factory, lambda meta: "manual" if str(meta) in self.manual else None)
 
 
 @pytest.fixture

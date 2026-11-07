@@ -1,19 +1,23 @@
 """The ``ingest`` job handler (issue #28, architecture.md §7.1).
 
 Fetches metadata, upserts the ``videos`` row, then picks exactly one
-transcript path (see ``choose_transcript_path``). The handler holds no state
+transcript path (see ``choose_transcript_path``). Captions first (#416):
+YouTube's English captions (manual, else auto) are used whenever they can be had;
+the video goes to Whisper only when they cannot be acquired. The handler holds no state
 between jobs and writes no SQL: the database is reached through
 ``common.repo`` and the ``JobQueue`` port.
 """
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Protocol
 
 import psycopg
+import structlog
 
 from adapters.youtube.errors import UpcomingVideoError
 from adapters.youtube.subtitles import SubtitleAvailability, speaker_source
@@ -21,7 +25,9 @@ from common.config import Settings
 from common.errors import (
     Defer,
     PermanentSourceError,
+    RateLimitedError,
     ToolFailureError,
+    TransientNetworkError,
     UnavailableReason,
 )
 from common.models import MetadataSource, Segment, VideoMeta
@@ -43,6 +49,27 @@ from services.transcriber.persist import enqueue_analyze, save_transcript_with_c
 _VIDEO_ID = VIDEO_ID_PATTERN
 _ORIGINS = frozenset({"adhoc", "rss", "backfill"})
 _STRONG_SOURCES = frozenset({"youtube_manual", "whisper"})
+
+#: Why a video went to Whisper (recorded in the transcribe payload, the transcript's
+#: ``engine_meta`` and the job log).
+WHISPER_NO_TRACKS = "none"
+WHISPER_AUTO_DISABLED = "auto_disabled"
+WHISPER_EMPTY_TRACK = "empty"
+WHISPER_RATE_LIMITED = "rate_limited"
+WHISPER_TIMEOUT = "timeout"
+WHISPER_TOOL_FAILURE = "tool_failure"
+WHISPER_PREFERRED = "prefer_whisper"
+
+_log = structlog.get_logger(__name__)
+
+
+def warn_if_prefer_whisper(settings: Settings) -> None:
+    """One startup WARNING when the override that ignores captions is on (#416)."""
+    if settings.PREFER_WHISPER:
+        _log.warning(
+            "PREFER_WHISPER is on: YouTube captions are ignored and every video goes to "
+            "Whisper. This is an override for tests, not for production."
+        )
 
 
 #: Rescheduling of premieres and live streams (#65). A premiere often starts a
@@ -82,11 +109,13 @@ class SubtitleSource(Protocol):
         kind: str,
         *,
         cancelled: Callable[[], bool] | None = None,
+        timeout: float | None = None,
     ) -> list[Segment]: ...
 
 
 class TranscriptPath(StrEnum):
     MANUAL = "manual"
+    AUTO = "auto"
     TRANSCRIBE = "transcribe"
     AUTO_FALLBACK = "auto_fallback"
     HAVE_TRANSCRIPT = "have_transcript"
@@ -102,16 +131,32 @@ def choose_transcript_path(
     transcribe_state: str | None,
     transcribe_error_class: str | None = None,
 ) -> TranscriptPath:
-    """The ingest decision table (issue #28), as a pure function.
+    """The ingest decision table (issues #28, #416), as a pure function. First match wins.
 
-    A newest ``transcribe`` job that a user cancelled (``CANCELLED``, #237) is
-    not a dead-letter: the video transcribes again, it does not fall back to
-    auto-captions.
+    1. An existing ``youtube_manual`` or ``whisper`` transcript -> ``HAVE_TRANSCRIPT``; an
+       existing ``youtube_auto`` one too, unless a manual track can be used now.
+    2. ``PREFER_WHISPER`` off, manual EN available -> ``MANUAL``.
+    3. ``PREFER_WHISPER`` off, ``AUTO_CAPTION_FALLBACK`` on, auto EN available -> ``AUTO``.
+    4. Newest ``transcribe`` job not dead -> ``TRANSCRIBE``. A user-cancelled one
+       (``CANCELLED``, #237) is not a dead-letter: the video transcribes again.
+    5. Newest ``transcribe`` job dead -> auto EN available and enabled -> ``AUTO_FALLBACK``,
+       else ``NONE`` (the #92 planner sweep keeps working).
+
+    Row 4 is reached when YouTube lists no usable English track, a track could not be
+    acquired (the handler removes it from ``availability`` and asks again), or
+    ``PREFER_WHISPER`` is on. No origin appears here: every origin is treated alike.
     """
     if existing_source in _STRONG_SOURCES:
         return TranscriptPath.HAVE_TRANSCRIPT
-    if availability.manual is not None and not prefer_whisper:
-        return TranscriptPath.MANUAL
+    if existing_source == "youtube_auto" and not prefer_whisper:
+        if availability.manual is not None:
+            return TranscriptPath.MANUAL
+        return TranscriptPath.HAVE_TRANSCRIPT
+    if not prefer_whisper:
+        if availability.manual is not None:
+            return TranscriptPath.MANUAL
+        if availability.auto is not None and auto_caption_fallback:
+            return TranscriptPath.AUTO
     if transcribe_state != "dead" or transcribe_error_class == "CANCELLED":
         return TranscriptPath.TRANSCRIBE
     if availability.auto is not None and auto_caption_fallback:
@@ -138,10 +183,11 @@ def make_ingest_handler(
     settings: Settings,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     guard_writes: bool = True,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> Callable[[Job, JobContext], None]:
     """Build the handler. ``guard_writes`` puts its ``videos`` writes under the job-row
     guard (#303, architecture.md 7.1); only the CLI, whose in-process jobs have no
-    ``jobs`` row, turns it off."""
+    ``jobs`` row, turns it off. ``now`` and ``monotonic`` (the caption cap's clock) are injectable."""
     def not_yet_available(
         job: Job, ctx: JobContext, status: str, until_of: Callable[[datetime], datetime]
     ) -> None:
@@ -211,13 +257,34 @@ def make_ingest_handler(
         clear_unavailable(conn, video_id)
         conn.commit()
 
-        def download(lang: str, kind: str) -> list[Segment]:
+        # The caption step (every download together) has a hard wall-clock cap, #416: the
+        # yt-dlp child is killed at it. Anything short of captions sends the video to Whisper.
+        cap = float(settings.CAPTIONS_CHECK_TIMEOUT_SEC)
+        started = monotonic()
+
+        def try_track(kind: str, lang: str) -> tuple[list[Segment], str | None]:
+            """The segments of one track, or why it could not be acquired."""
             ctx.check_cancelled()
+            remaining = cap - (monotonic() - started)
+            if remaining <= 0:
+                return [], WHISPER_TIMEOUT
             try:
-                return subtitles.fetch(video_id, lang, kind, cancelled=lambda: ctx.cancelled)
+                segments = subtitles.fetch(
+                    video_id, lang, kind, cancelled=lambda: ctx.cancelled, timeout=remaining
+                )
             except PermanentSourceError as exc:
                 permanent(exc)
                 raise
+            except RateLimitedError as exc:
+                ctx.logger.warning("captions rate limited", track=lang, kind=kind, error=str(exc))
+                return [], WHISPER_RATE_LIMITED
+            except TransientNetworkError as exc:
+                ctx.logger.warning("caption download timed out or failed", kind=kind, error=str(exc))
+                return [], WHISPER_TIMEOUT
+            except ToolFailureError as exc:
+                ctx.logger.warning("caption download failed", track=lang, kind=kind, error=str(exc))
+                return [], WHISPER_TOOL_FAILURE
+            return segments, (None if segments else WHISPER_EMPTY_TRACK)
 
         available = subtitles.available(meta)
         best = get_best_transcript(conn, video_id)
@@ -235,31 +302,41 @@ def make_ingest_handler(
                 transcribe_error_class=transcribe_error_class,
             )
 
-        path = choose(available)
+        tracks = available
+        path = choose(tracks)
         saved_source: str | None = None
         segments: list[Segment] = []
         kind = ""
         lang = ""
+        whisper_reason: str | None = None
 
-        if path is TranscriptPath.MANUAL:
-            assert available.manual is not None
-            kind, lang = "manual", available.manual
-            segments = download(lang, kind)
-            if not segments:
-                path = choose(SubtitleAvailability(manual=None, auto=available.auto))
-        if path is TranscriptPath.AUTO_FALLBACK:
-            assert available.auto is not None
-            kind, lang = "auto", available.auto
-            segments = download(lang, kind)
-            if not segments:
-                path = TranscriptPath.NONE
+        # A track that cannot be acquired is removed and the table asked again:
+        # manual -> auto -> Whisper. A 429 or a timeout skips every remaining track.
+        while path in (TranscriptPath.MANUAL, TranscriptPath.AUTO, TranscriptPath.AUTO_FALLBACK):
+            if path is TranscriptPath.MANUAL:
+                assert tracks.manual is not None
+                kind, lang = "manual", tracks.manual
+            else:
+                assert tracks.auto is not None
+                kind, lang = "auto", tracks.auto
+            segments, why = try_track(kind, lang)
+            if segments:
+                break
+            if whisper_reason is None or why in (WHISPER_RATE_LIMITED, WHISPER_TIMEOUT):
+                whisper_reason = why
+            if why in (WHISPER_RATE_LIMITED, WHISPER_TIMEOUT):
+                tracks = SubtitleAvailability(manual=None, auto=None)
+            elif kind == "manual":
+                tracks = SubtitleAvailability(manual=None, auto=tracks.auto)
+            else:
+                tracks = SubtitleAvailability(manual=tracks.manual, auto=None)
+            path = choose(tracks)
 
         if segments:
             saved_source = "youtube_manual" if kind == "manual" else "youtube_auto"
             if kind == "auto":
-                ctx.logger.warning(
-                    "using auto-captions as a last resort: transcript is degraded",
-                    track=lang,
+                ctx.logger.info(
+                    "using YouTube auto-generated captions: no manual track", track=lang
                 )
             save_transcript_with_chunks(
                 conn,
@@ -275,8 +352,21 @@ def make_ingest_handler(
         elif path is TranscriptPath.HAVE_TRANSCRIPT:
             enqueue_analyze(queue, settings, job.id, video_id, priority=job.priority)
         elif path is TranscriptPath.TRANSCRIBE:
+            if whisper_reason is None:
+                if settings.PREFER_WHISPER:
+                    whisper_reason = WHISPER_PREFERRED
+                elif available.auto is not None and not settings.AUTO_CAPTION_FALLBACK:
+                    whisper_reason = WHISPER_AUTO_DISABLED
+                else:
+                    whisper_reason = WHISPER_NO_TRACKS
+            log = (
+                ctx.logger.warning
+                if whisper_reason in (WHISPER_RATE_LIMITED, WHISPER_TOOL_FAILURE, WHISPER_TIMEOUT)
+                else ctx.logger.info
+            )
+            log("whisper chosen: captions could not be acquired", reason=whisper_reason)
             # duration_sec lets the worker derive this job's runtime limit (#66).
-            payload: dict[str, Any] = {}
+            payload: dict[str, Any] = {"captions_unavailable": whisper_reason}
             if meta.language:
                 payload["language"] = meta.language
             if meta.duration_sec:
@@ -285,7 +375,7 @@ def make_ingest_handler(
                 job.id,
                 "transcribe",
                 video_id,
-                payload=payload or None,
+                payload=payload,
                 priority=job.priority,
             )
             if job_id is None:
@@ -299,6 +389,8 @@ def make_ingest_handler(
         summary: dict[str, Any] = {"transcript_path": path.value}
         if saved_source is not None:
             summary["transcript_source"] = saved_source
+        if path is TranscriptPath.TRANSCRIBE:
+            summary["whisper_reason"] = whisper_reason
         ctx.logger.info("ingest finished", **summary)
 
     return handler

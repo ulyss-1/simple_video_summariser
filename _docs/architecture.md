@@ -980,14 +980,41 @@ attempt's in-memory usage; usage already stored on `llm_batches` rows survives.
 1. yt-dlp --dump-json                       → VideoMeta
    ├─ error → classify (§8.4); mark videos.unavailable; dead-letter
 2. upsert videos            (under the job-row guard, see below)
-3. evaluate subtitle availability:
+3. evaluate subtitle availability (captions first, #416):
+     PREFER_WHISPER=1?         → skip to (5), reason prefer_whisper
      manual EN present?        → fetch, parse VTT, speaker_source per labels
-     PREFER_WHISPER=1?         → skip to (5)
-     auto EN present?          → fetch only if allow_auto (see below)
-     none                      → (5)
+     auto EN present and
+       AUTO_CAPTION_FALLBACK=1 → fetch ("auto captions allowed")
+     none                      → (5), reason none
+   The whole caption step has a hard wall-clock cap, CAPTIONS_CHECK_TIMEOUT_SEC (default
+   30, range 5..120): each download gets what is left of it as its yt-dlp timeout, and
+   the yt-dlp process group is killed at the cap. A track that cannot be acquired is
+   dropped and the list is asked again (manual → auto → Whisper): zero segments (reason
+   empty), a ToolFailureError such as "exit 0 but no subtitle file" (tool_failure), a
+   TransientNetworkError, i.e. no answer within the cap (timeout), a 429 or bot check
+   (rate_limited; no second request is made into a 429).
 4. if transcript obtained: persist, chunk (§7.3), enqueue analyze
-5. else: enqueue transcribe (same priority as this job)
+5. else: enqueue transcribe (same priority as this job); its payload and the
+   resulting transcript's engine_meta carry captions_unavailable = the reason
+   (none | auto_disabled | empty | tool_failure | rate_limited | timeout | prefer_whisper),
+   and the ingest log line says "whisper chosen: captions could not be acquired".
 ```
+
+The decision is one pure function, `choose_transcript_path`, first match wins:
+(1) an existing `youtube_manual` or `whisper` transcript → analyze only; an existing
+`youtube_auto` one too, unless a manual track can be used now; (2) `PREFER_WHISPER` off
+and manual EN → `MANUAL`; (3) `PREFER_WHISPER` off, `AUTO_CAPTION_FALLBACK` on and auto
+EN → `AUTO`; (4) newest `transcribe` job not dead (a user-cancelled one is not dead) →
+`TRANSCRIBE`; (5) newest `transcribe` job dead → auto EN if allowed (`AUTO_FALLBACK`,
+kept for the #92 sweep) else `NONE`. No origin (`adhoc`, `rss`, `backfill`) is compared.
+
+**Rate limits and the 30 s cap (#416, owner decision).** Track availability comes from
+the metadata already fetched. The subtitle download is bounded: a 429 or bot check
+(`RateLimitedError`), any caption fetch error, or no answer within
+`CAPTIONS_CHECK_TIMEOUT_SEC` is accepted as "no captions" and the video goes to Whisper
+at once. Nothing is deferred, retried or dead-lettered for it and no attempt is spent on
+the fallback decision. The metadata fetch (`yt-dlp --dump-json`) is a separate step with
+its own, unchanged error handling (§8.4).
 
 **Writes under the job-row guard (#303).** `upsert_video` and `record_unavailable`
 are `INSERT ... ON CONFLICT DO UPDATE`, so after a concurrent delete they would
@@ -1050,13 +1077,17 @@ Until per-channel settings exist there is one global flag, `SKIP_SHORTS`
   `settings.SKIP_SHORTS` to it. Until it does, the poll records and queues
   every entry and ingest is the only enforcement point.
 
-**Auto-caption policy.** D2 ranks `youtube_auto` *below* Whisper. Concretely
-`ingest` does not take auto-captions when Whisper is available; it enqueues
-`transcribe`. Auto-captions are used only when `AUTO_CAPTION_FALLBACK=1` and
-transcription has already dead-lettered — a degraded result beats none, and
-`transcripts.source` records the degradation so §13's comparison can measure it.
-The planner's `auto_caption_fallback` sweep (#92) is what triggers it: it
-enqueues one `ingest` for a video whose newest `transcribe` job is `dead`.
+**Auto-caption policy (captions first, #416; replaces "Whisper before auto-captions").**
+D2's ranking is unchanged (`transcript_rank()`: manual > whisper > auto), so a video that
+already has a Whisper transcript keeps it. But `ingest` now uses YouTube's own English
+captions up front: manual if present, else auto-generated when `AUTO_CAPTION_FALLBACK=1`
+(the name stays; it now means "auto captions allowed"). Whisper runs only when captions
+cannot be acquired, or when the explicit override `PREFER_WHISPER=1` is set (ingest logs
+one startup WARNING that captions are ignored; not for production). Auto captions have
+no punctuation or speaker information and more errors than Whisper `large-v3`;
+`transcripts.source = youtube_auto` records that, and #415 is the upgrade path. The
+planner's `auto_caption_fallback` sweep (#92) still enqueues one `ingest` for a video
+whose newest `transcribe` job is `dead`.
 
 ### 7.2 `transcribe`
 
@@ -1306,7 +1337,7 @@ between a fast dead-letter and four wasted Whisper runs.
 |---|---|---|
 | `PERMANENT_SOURCE` | video removed, private, geo-blocked, age-gated | dead-letter immediately; set `videos.unavailable`; **no retry** |
 | `TRANSIENT_NETWORK` | timeout, 5xx, DNS | retry with backoff |
-| `RATE_LIMITED` | 429, bot-check | retry with long backoff; respect `Retry-After` |
+| `RATE_LIMITED` | 429, bot-check | retry with long backoff; respect `Retry-After`. The `ingest` metadata fetch keeps this handling. A 429 on the *caption download* (#416) is not retried: the video goes to Whisper at once (§7.1) |
 | `TOOL_FAILURE` | yt-dlp extractor broken | retry twice, then dead-letter **with an alert** — means "go update yt-dlp" (§16.11) |
 | `LLM_INVALID_OUTPUT` | schema validation failed | one repair attempt, then dead-letter |
 | `LLM_UNAVAILABLE` | provider 5xx, connection refused | retry with backoff |
@@ -1486,8 +1517,9 @@ than reading `os.environ` directly.
 | `WHISPER_MODEL` | `large-v3` | transcriber |
 | `WHISPER_COMPUTE` | `int8` | transcriber |
 | `WHISPER_THREADS` | `0` (auto) | transcriber |
-| `PREFER_WHISPER` | `0` | transcriber |
-| `AUTO_CAPTION_FALLBACK` | `1` | transcriber, planner |
+| `PREFER_WHISPER` | `0` | transcriber: explicit override, `1` ignores YouTube captions and sends every video to Whisper (startup WARNING; not for production, #416) |
+| `AUTO_CAPTION_FALLBACK` | `1` | transcriber, planner: auto-generated English captions are allowed when there is no manual track (#416) |
+| `CAPTIONS_CHECK_TIMEOUT_SEC` | `30` (5..120) | transcriber: hard wall-clock cap on the caption download step of ingest; a 429, an error or no answer within it sends the video to Whisper at once (#416) |
 | `SKIP_SHORTS` | `0` | planner (poll), transcriber (ingest): `1` records YouTube Shorts found by RSS polling or backfill as `unavailable = 'short'` and never processes them; `0` (default, owner decision on #80) includes them. Never applies to `adhoc` submissions. A global flag for now; the owner intends to promote it to a per-channel choice once per-channel settings exist (§7.1, Shorts policy) |
 | `AUDIO_KEEP` / `AUDIO_TTL_DAYS` / `AUDIO_MAX_GB` | `1` / `30` / `20` | transcriber, planner |
 | `AUDIO_MIN_FREE_GB` / `AUDIO_MIN_FREE_PCT` | `2` / `5` | planner: free-space floor on the `AUDIO_DIR` volume (#105). When free space is below the larger of the two, audio retention evicts the oldest audio beyond what `AUDIO_MAX_GB` would, never a running job's. `0` for either disables that half; `AUDIO_MAX_GB` and `AUDIO_MIN_FREE_GB` are finite floats (`inf`/`NaN`/negative fail at startup, #197); `AUDIO_MIN_FREE_PCT` is `0 <= x < 100`. A floor at or above the volume size evicts nothing and logs `planner.audio_retention.free_space_floor_invalid` |
@@ -2171,6 +2203,7 @@ services:
       WHISPER_THREADS: ${WHISPER_THREADS:-3}
       PREFER_WHISPER: ${PREFER_WHISPER:-0}
       AUTO_CAPTION_FALLBACK: ${AUTO_CAPTION_FALLBACK:-1}
+      CAPTIONS_CHECK_TIMEOUT_SEC: ${CAPTIONS_CHECK_TIMEOUT_SEC:-30}
       MAX_ATTEMPTS_TRANSCRIBE: ${MAX_ATTEMPTS_TRANSCRIBE:-2}
       AUDIO_KEEP: ${AUDIO_KEEP:-1}
       AUDIO_MAX_GB: ${AUDIO_MAX_GB:-20}
@@ -2601,9 +2634,9 @@ subtitles-only until Phase 2.
 
 | # | Item | Blocks | Resolution path |
 |---|---|---|---|
-| O1 | Real channel list + subtitle coverage | Phase 1 scope | **Resolved 2026-10-13 (owner): the Whisper/STT path is deferred from Phase 1 — Phase 1 ships subtitles-only (section 14).** Measured 2026-09-27 (task #2): 9 owner-chosen channels, 15 RSS entries each: manual subtitles 6 videos (1.95 h), auto-only 64 (48.72 h), none 0, error 2 (transient), 63 Shorts excluded. Every non-Short had at least auto-captions, so by default speech-to-text load is ~0 h; with `PREFER_WHISPER=1` it is ~48.7 h per window. The STT adapter stays built (#20, closed) but off by default; revisit when STT quality is wanted or a channel with no captions appears. Evidence: `_docs/progress.md`, "Phase 0 findings"; script `scripts/phase0/subtitle_coverage.py` |
+| O1 | Real channel list + subtitle coverage | Phase 1 scope | **Resolved 2026-10-13 (owner): the Whisper/STT path is deferred from Phase 1 — Phase 1 ships subtitles-only (section 14).** *Update 2026-11-07 (#416): ingest is captions-first, manual then auto, and Whisper runs only when captions cannot be acquired; the auto-only figures below are now caption hours, not Whisper hours.* Measured 2026-09-27 (task #2): 9 owner-chosen channels, 15 RSS entries each: manual subtitles 6 videos (1.95 h), auto-only 64 (48.72 h), none 0, error 2 (transient), 63 Shorts excluded. Every non-Short had at least auto-captions, so by default speech-to-text load is ~0 h; with `PREFER_WHISPER=1` it is ~48.7 h per window. The STT adapter stays built (#20, closed) but off by default; revisit when STT quality is wanted or a channel with no captions appears. Evidence: `_docs/progress.md`, "Phase 0 findings"; script `scripts/phase0/subtitle_coverage.py` |
 | O2 | Transcription engine: whisper vs parakeet | D3 validity, D4 diarization premise, audio sizing | **Resolved 2026-11-01 (owner): `faster-whisper large-v3` (int8) — Option A, the D3 default — is the engine.** Decided without measured numbers: no qualifying bake-off exists (the deploy-host run from #3, >=3 real clips, >=1 noisy or accented, is not done; dev-machine numbers do not count). Because O1 defers STT from Phase 1, no Phase-1 flow depends on the choice today. Options B and C remain open to a later measured switch. The `Transcriber` port (section 3) keeps the switch cheap: B (`large-v3-turbo`) is a `WHISPER_MODEL` flip, C (`parakeet-tdt-0.6b-v3`) is one new adapter plus an engine selector (section 16.6). Until the bake-off, D3 stands and the D4 revisit (only if Parakeet wins) is not triggered |
-| O3 | `AUDIO_TTL_DAYS` 30 vs 90 | Disk provisioning | **Resolved 2026-10-13 (owner): `AUDIO_TTL_DAYS=30`.** Disk need = audio hours ingested per day x TTL days x MB per audio hour (16 kHz mono opus, 7.2/D6b), bounded by `AUDIO_MAX_GB` (default 20). With O1 deferring STT, the by-default hours-per-day input is ~0 (audio is fetched only on the Whisper path), so 30 days is amply within `AUDIO_MAX_GB` and the `AUDIO_MAX_GB` cap is the real bound regardless. 30 keeps retained audio (and the re-analysis window) tighter; raise it if `PREFER_WHISPER=1` is turned on and re-analysis of older episodes becomes routine. The MB-per-hour figure is still unmeasured but is moot while the cap, not the TTL, binds |
+| O3 | `AUDIO_TTL_DAYS` 30 vs 90 | Disk provisioning | **Resolved 2026-10-13 (owner): `AUDIO_TTL_DAYS=30`.** Disk need = audio hours ingested per day x TTL days x MB per audio hour (16 kHz mono opus, 7.2/D6b), bounded by `AUDIO_MAX_GB` (default 20). With O1 deferring STT, the by-default hours-per-day input is ~0 (audio is fetched only on the Whisper path), so 30 days is amply within `AUDIO_MAX_GB` and the `AUDIO_MAX_GB` cap is the real bound regardless. 30 keeps retained audio (and the re-analysis window) tighter; raise it if `PREFER_WHISPER=1` is turned on or caption-less videos become common (#416: Whisper is the path only when captions cannot be acquired) and re-analysis of older episodes becomes routine. The MB-per-hour figure is still unmeasured but is moot while the cap, not the TTL, binds |
 | O4 | Local vs cloud summarizer (D5) | Cost model | Phase 5, via Compare view |
 | O5 | Embedding model + dimension (D9c) | v2 schema | Deferred; chunk table already prepared |
 | O7 | `ctranslate2` wheel availability for Python 3.14 | transcriber image build | **Resolved 2026-09-27 (task #4): wheels exist for the whole tree (ctranslate2 4.8.2, av 18.1.0, tokenizers 0.23.2, onnxruntime 1.30.0); `faster-whisper` 1.2.1 installs and transcribes on `python:3.14-slim`.** The transcriber can derive from the 3.14 backend image; the 3.13 split is not needed, which is what #56 implements (built on the backend's `deps` stage, #135; wheels only). Details in 16.2; also `_docs/progress.md`, "Phase 0 findings" |

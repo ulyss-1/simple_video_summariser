@@ -126,7 +126,7 @@ def test_an_adhoc_short_is_processed_even_with_skip_shorts_set(
 
     assert not rig.skipped
     assert ("clear", SHORT_ID) in rig.events
-    assert len(rig.subtitles.fetch_calls) == 1  # the empty manual track, then transcribe
+    assert rig.subtitles.fetch_calls  # the empty captions, then transcribe
     assert rig.queue.calls == [("transcribe", SHORT_ID)]
 
 

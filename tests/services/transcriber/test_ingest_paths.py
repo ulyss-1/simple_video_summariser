@@ -27,8 +27,9 @@ from tests.services.transcriber.fakes import (
     make_settings,
 )
 
-M, T, A, H, N = (
+M, U, T, A, H, N = (
     TranscriptPath.MANUAL,
+    TranscriptPath.AUTO,
     TranscriptPath.TRANSCRIBE,
     TranscriptPath.AUTO_FALLBACK,
     TranscriptPath.HAVE_TRANSCRIPT,
@@ -47,19 +48,29 @@ TABLE = [
     (None, None, "en", False, None, False, M),
     (None, "dead", "en", False, "en", True, M),
     (None, "running", "en", False, "en", False, M),
-    ("youtube_auto", "done", "en-GB", False, "en", True, M),
+    ("youtube_auto", "done", "en-GB", False, "en", True, M),  # manual now available
+    ("youtube_auto", None, "en", False, "en", True, M),
+    # captions first (#416): auto-only is used up front, whatever the transcribe state
+    (None, None, None, False, "en", True, U),
+    (None, "pending", None, False, "en", True, U),
+    (None, "done", None, False, "en-US", True, U),
+    (None, "running", None, False, "en-GB", True, U),
+    # an existing auto transcript is kept
+    ("youtube_auto", None, None, False, "en", True, H),
+    ("youtube_auto", "dead", None, False, "en-US", True, H),
+    ("youtube_auto", None, None, False, None, True, H),
     # no manual, or PREFER_WHISPER=1, and transcription not dead
     (None, None, None, False, None, False, T),
-    (None, None, None, False, "en", True, T),
+    (None, None, None, False, "en", False, T),  # auto-only, AUTO_CAPTION_FALLBACK=0
     (None, None, "en", True, "en", True, T),
-    (None, "pending", None, False, "en", True, T),
+    (None, "pending", None, False, "en", False, T),
     (None, "running", "en", True, None, False, T),
-    (None, "done", None, False, "en", True, T),
-    ("youtube_auto", None, None, False, "en", True, T),
+    (None, "done", None, False, "en", False, T),
+    (None, None, None, True, "en", True, T),  # PREFER_WHISPER with auto only
     # transcription dead, auto captions present, fallback on
-    (None, "dead", None, False, "en", True, A),
+    (None, "dead", None, True, "en", True, A),
     (None, "dead", "en", True, "en", True, A),
-    ("youtube_auto", "dead", None, False, "en-US", True, A),
+    ("youtube_auto", "dead", None, True, "en-US", True, A),
     # transcription dead and no usable auto captions or fallback off
     (None, "dead", None, False, None, True, N),
     (None, "dead", None, False, "en", False, N),
@@ -89,6 +100,30 @@ def test_choose_transcript_path_follows_the_decision_table(
     assert path is expected
 
 
+def _choose(error_class: str | None, auto: str | None, state: str = "dead") -> TranscriptPath:
+    return choose_transcript_path(
+        SubtitleAvailability(manual=None, auto=auto),
+        prefer_whisper=False,
+        auto_caption_fallback=True,
+        existing_source=None,
+        transcribe_state=state,
+        transcribe_error_class=error_class,
+    )
+
+
+def test_a_cancelled_transcribe_with_no_captions_transcribes_again() -> None:
+    assert _choose("CANCELLED", None) is T
+
+
+def test_a_dead_transcribe_with_no_captions_ends_in_none() -> None:
+    assert _choose("TOOL_FAILURE", None) is N
+
+
+@pytest.mark.parametrize("variant", ["en", "en-US", "en-GB", "en-orig", "en-CA"])
+def test_english_variants_of_an_auto_track_are_used_up_front(variant: str) -> None:
+    assert _choose(None, variant, state="pending") is U
+
+
 def test_the_table_covers_every_path() -> None:
     assert {row[-1] for row in TABLE} == set(TranscriptPath)
 
@@ -96,6 +131,7 @@ def test_the_table_covers_every_path() -> None:
 def test_path_values_are_stable_strings() -> None:
     assert {p.name: p.value for p in TranscriptPath} == {
         "MANUAL": "manual",
+        "AUTO": "auto",
         "TRANSCRIBE": "transcribe",
         "AUTO_FALLBACK": "auto_fallback",
         "HAVE_TRANSCRIPT": "have_transcript",

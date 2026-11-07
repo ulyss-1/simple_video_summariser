@@ -84,8 +84,12 @@ class YouTubeSubtitles:
         kind: str,
         *,
         cancelled: Callable[[], bool] | None = None,
+        timeout: float | None = None,
     ) -> list[Segment]:
         """Download and parse one subtitle track into segments.
+
+        ``timeout`` (seconds) tightens the adapter's own limit for this call; yt-dlp's
+        process group is killed at it and ``TransientNetworkError`` is raised (#416).
 
         Raises ``ToolFailureError`` if yt-dlp exits 0 but writes no matching
         `.vtt` file - silently returning `[]` there would let ingest (#28)
@@ -113,7 +117,7 @@ class YouTubeSubtitles:
             ]
             run_ytdlp(
                 args,
-                timeout=self._timeout,
+                timeout=self._timeout if timeout is None else min(self._timeout, timeout),
                 runner=self._runner,
                 cookie_file=self._cookie_file,
                 cancelled=cancelled,

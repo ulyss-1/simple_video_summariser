@@ -56,7 +56,7 @@ from common.errors import (
     ToolFailureError,
     TransientNetworkError,
 )
-from common.models import CatalogSource, PlaylistSource
+from common.models import CatalogSource, PlaylistSource, VideoMeta
 from common.queue import (
     PRIORITY_INTERACTIVE,
     PRIORITY_NORMAL,
@@ -214,6 +214,7 @@ class BackfillEstimate(BaseModel):
     assumes: str
     probed: int
     manual_subtitles: int
+    auto_subtitles: int
     needs_transcription: int
     unchecked: int
     probe_failed: int
@@ -979,9 +980,17 @@ def get_subtitle_probe() -> SubtitleProbe:
 
     cookie_file = get_settings().YTDLP_COOKIE_FILE
     available = YouTubeSubtitles().available
+    auto_allowed = get_settings().AUTO_CAPTION_FALLBACK
+
+    def has_captions(meta: VideoMeta) -> str | None:
+        found = available(meta)
+        if found.manual is not None:
+            return "manual"
+        return "auto" if found.auto is not None and auto_allowed else None
+
     return SubtitleProbe(
         metadata_factory=lambda timeout: YouTubeMetadata(timeout=timeout, cookie_file=cookie_file),
-        has_manual=lambda meta: available(meta).manual is not None,
+        has_captions=has_captions,
     )
 
 
@@ -1059,6 +1068,7 @@ def post_channel_backfill(
         backfill_id=result.backfill_id,
         probed=result.estimate.probed,
         manual_subtitles=result.estimate.manual_subtitles,
+        auto_subtitles=result.estimate.auto_subtitles,
         unchecked=result.estimate.unchecked,
         probe_failed=result.estimate.probe_failed,
         deadline_reached=result.estimate.deadline_reached,
@@ -1105,6 +1115,7 @@ def _backfill_response(result: BackfillResult) -> BackfillResponse:
             assumes=estimate.assumes,
             probed=estimate.probed,
             manual_subtitles=estimate.manual_subtitles,
+            auto_subtitles=estimate.auto_subtitles,
             needs_transcription=estimate.needs_transcription,
             unchecked=estimate.unchecked,
             probe_failed=estimate.probe_failed,

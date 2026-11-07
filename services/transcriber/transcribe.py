@@ -119,6 +119,14 @@ def progress_reporter(
     return on_progress
 
 
+def _with_caption_reason(job: Job, engine_meta: dict[str, Any]) -> dict[str, Any]:
+    """Record why Whisper ran at all (#416) when ingest put the reason in the payload."""
+    reason = job.payload.get("captions_unavailable")
+    if isinstance(reason, str) and reason:
+        return {**engine_meta, "captions_unavailable": reason}
+    return engine_meta
+
+
 def _payload_duration(job: Job) -> float | None:
     """``payload["duration_sec"]`` (from the video's metadata) when it is a real number."""
     value = job.payload.get("duration_sec")
@@ -270,7 +278,7 @@ def make_transcribe_handler(
             language=result.language,
             speaker_source="none",
             segments=result.segments,
-            engine_meta=result.engine_meta,
+            engine_meta=_with_caption_reason(job, result.engine_meta),
             chunker=chunker,
         )
         hand_off(job, ctx, has_chunks=bool(result.segments))

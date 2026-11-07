@@ -127,8 +127,15 @@ class Settings(BaseSettings):
     WHISPER_MODEL: str = "large-v3"
     WHISPER_COMPUTE: str = "int8"
     WHISPER_THREADS: NonNegativeInt = 0  # 0 = auto
+    # Explicit override, not for production (#416): when on, YouTube captions are
+    # ignored and every video goes to Whisper. Ingest logs one startup WARNING.
     PREFER_WHISPER: bool = False
+    # Auto-generated English captions are allowed when no manual track exists (#416).
     AUTO_CAPTION_FALLBACK: bool = True
+    # Hard wall-clock cap, in seconds, on the caption download step of ingest (#416). A
+    # 429, an error or no answer within it sends the video to Whisper at once. The yt-dlp
+    # child is killed at the cap. Read by the transcriber only.
+    CAPTIONS_CHECK_TIMEOUT_SEC: int = Field(default=30, ge=5, le=120)
     # Skip YouTube Shorts found by RSS polling or channel backfill (#80). Off:
     # Shorts are processed like any video. A video a human submits (`adhoc`)
     # is never skipped. Read by the planner (poll) and the transcriber (ingest).
