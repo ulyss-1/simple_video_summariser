@@ -460,7 +460,7 @@ valid analysis.
 The video is `iG9CE55wbtY` (TED, "Do schools kill creativity?", 1203 s), the
 same one #137 replays. It has manual English captions, so the path is
 `ingest` then `analyze` with no `transcribe` job. Ingest is captions-first (#416), so
-`PREFER_WHISPER` must be unset or `0` in the host `.env`: with `1` the captions are
+the Whisper override flag must be unset or `0` in the host `.env` (see `.env.example`): with `1` the captions are
 ignored and the smoke video goes to Whisper.
 
 **Preconditions**
