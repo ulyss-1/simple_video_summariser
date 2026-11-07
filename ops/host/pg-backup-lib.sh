@@ -196,6 +196,27 @@ restic_run() { # errfile outfile args...
   timeout --foreground "${RESTIC_TIMEOUT:-3600}" restic "$@" >"$out" 2>"$err"
 }
 
+# probe_repository STAGE: one short, bounded "restic cat config". restic retries
+# a rejected request (401/403) or a missing bucket with growing waits for many
+# minutes and offers no option to cap that, so the probe is capped by a timeout
+# instead (AUTH_PROBE_TIMEOUT seconds, default 45). It exits the script itself
+# when restic gave no answer in time. Otherwise it returns 0 (repository
+# readable) or 1 (restic answered with an error, e.g. not initialised; stderr
+# is left in $PROBE_ERR for the caller). Real uploads keep RESTIC_TIMEOUT.
+probe_repository() { # stage
+  local rc=0
+  PROBE_ERR="$(mktemp)"
+  PROBE_OUT="$(mktemp)"
+  RESTIC_TIMEOUT="${AUTH_PROBE_TIMEOUT:-45}" restic_run "$PROBE_ERR" "$PROBE_OUT" cat config || rc=$?
+  rm -f -- "$PROBE_OUT"
+  if ((rc == 124)); then
+    show_tail "$PROBE_ERR"
+    rm -f -- "$PROBE_ERR"
+    fail "$1" "no usable answer from the repository within ${AUTH_PROBE_TIMEOUT:-45}s: R2 credentials rejected (wrong key pair or token deleted), token not scoped to the bucket, bucket missing, or R2 unreachable (runbook: R2 unreachable or a token revoked)"
+  fi
+  ((rc == 0))
+}
+
 # ---- the manifest, one query set shared by backup and drill -----------------
 
 manifest_sql() {
