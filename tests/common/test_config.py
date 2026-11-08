@@ -515,6 +515,30 @@ def test_cancel_poll_equal_to_the_heartbeat_is_accepted() -> None:
     assert s.CANCEL_POLL_SEC == 60
 
 
+# --- CANCEL_OVERDUE_SEC (#411) ---------------------------------------------------
+
+
+def test_cancel_overdue_is_three_polls_plus_fifteen() -> None:
+    assert build_settings(DATABASE_URL=DB_URL).CANCEL_OVERDUE_SEC == 30
+    assert build_settings(DATABASE_URL=DB_URL, CANCEL_POLL_SEC=15).CANCEL_OVERDUE_SEC == 60
+
+
+def test_cancel_overdue_is_derived_not_read_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CANCEL_OVERDUE_SEC", "999")
+
+    assert build_settings(DATABASE_URL=DB_URL).CANCEL_OVERDUE_SEC == 30
+    assert "CANCEL_OVERDUE_SEC" not in Settings.model_fields
+
+
+def test_cancel_overdue_stays_below_the_reaper_at_the_largest_poll() -> None:
+    s = build_settings(DATABASE_URL=DB_URL, HEARTBEAT_SEC=60, REAP_AFTER_SEC=120, CANCEL_POLL_SEC=60)
+
+    assert s.CANCEL_OVERDUE_SEC == 195
+    assert build_settings(DATABASE_URL=DB_URL, HEARTBEAT_SEC=60, CANCEL_POLL_SEC=60).CANCEL_OVERDUE_SEC < 300
+
+
 # --- PROMPT_VERSION -----------------------------------------------------------
 
 

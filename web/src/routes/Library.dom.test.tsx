@@ -575,9 +575,9 @@ describe('rows', () => {
   it('renders a processing row, an unknown status and an unknown job kind without crashing', async () => {
     stubFetch(() =>
       list(3, [
-        vid(1, { status: 'processing', active_job: { id: 1, kind: 'ingest', state: 'running' } }),
+        vid(1, { status: 'processing', active_job: { id: 1, kind: 'ingest', state: 'running', cancel_overdue: false } }),
         vid(2, { status: 'weird' as VideoItem['status'] }),
-        vid(3, { status: 'processing', active_job: { id: 2, kind: 'novel', state: 'pending' } }),
+        vid(3, { status: 'processing', active_job: { id: 2, kind: 'novel', state: 'pending', cancel_overdue: false } }),
       ]),
     )
     await mount()
@@ -1085,7 +1085,7 @@ describe('states', () => {
 })
 
 describe('polling', () => {
-  const active = { id: 1, kind: 'ingest', state: 'running' }
+  const active = { id: 1, kind: 'ingest', state: 'running', cancel_overdue: false }
 
   it('refetches every 15 s while a row has an active job and stops when none does', async () => {
     let calls = 0
@@ -1133,7 +1133,7 @@ describe('polling', () => {
   })
 
   it('a re-analysing done row keeps the poll alive', async () => {
-    stubFetch(() => list(1, [vid(1, { active_job: { id: 3, kind: 'analyze', state: 'pending' } })]))
+    stubFetch(() => list(1, [vid(1, { active_job: { id: 3, kind: 'analyze', state: 'pending', cancel_overdue: false } })]))
     await mount()
     expect(screen.getByText('Analysed · re-analysing')).toBeTruthy()
     await act(async () => {

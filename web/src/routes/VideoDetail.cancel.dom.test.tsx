@@ -43,6 +43,7 @@ function job(over: Partial<ActiveJob> = {}): ActiveJob {
     kind: 'transcribe',
     state: 'running',
     cancel_requested_at: null,
+    cancel_overdue: false,
     ...over,
   }
 }
@@ -167,6 +168,8 @@ const keepBtn = () =>
   screen.getByRole('button', { name: 'Keep processing' }) as HTMLButtonElement
 const HINT =
   'Cancel requested, waiting for the worker (up to 5 s). It then stops its download or model call.'
+const OVERDUE =
+  'The worker has not acknowledged the cancel request yet. It may be in a step it cannot interrupt, or it may have stopped. A job whose worker has stopped is ended automatically. To check, an operator can open Ops (GET /api/ops/jobs) and read the worker logs.'
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -423,6 +426,24 @@ describe('Cancelling state', () => {
     expect(screen.getByRole('button', { name: 'Delete video' })).toBeTruthy()
   })
 
+  it('replaces the hint with the overdue text when the server flags the request, still Delete only', async () => {
+    script(running({ cancel_requested_at: REQUESTED, cancel_overdue: true }))
+    await mount()
+    expect(screen.getByRole('status').textContent).toBe('Cancelling: Transcribing…')
+    expect(screen.getByText(OVERDUE).className).toBe('muted')
+    expect(document.body.textContent).not.toContain('up to 5 s')
+    expect(screen.queryByText(HINT)).toBeNull()
+    expect(queryCancelBtn()).toBeNull()
+    expect(screen.getByRole('button', { name: 'Delete video' })).toBeTruthy()
+  })
+
+  it('keeps the 5 s hint and shows no overdue text for a fresh request', async () => {
+    script(running({ cancel_requested_at: REQUESTED, cancel_overdue: false }))
+    await mount()
+    expect(screen.getByText(HINT)).toBeTruthy()
+    expect(screen.queryByText(OVERDUE)).toBeNull()
+  })
+
   it('says only Cancelling… for an unknown kind', async () => {
     script(running({ kind: 'zzz', cancel_requested_at: REQUESTED }))
     await mount()
@@ -457,6 +478,39 @@ describe('Cancelling state', () => {
 })
 
 describe('Cancelled state', () => {
+  it('shows the overdue text under Cancelling re-analysis… for an analyze job', async () => {
+    script(
+      video({
+        status: 'done',
+        active_job: job({ kind: 'analyze', cancel_requested_at: REQUESTED, cancel_overdue: true }),
+        analysis: ANALYSIS,
+      }),
+    )
+    await mount()
+    expect(screen.getByText('Cancelling re-analysis…')).toBeTruthy()
+    expect(screen.getByText(OVERDUE)).toBeTruthy()
+    expect(screen.queryByText(HINT)).toBeNull()
+  })
+
+  it('shows no cancel text once the job is terminal, whatever the last poll said', async () => {
+    script(running({ cancel_requested_at: REQUESTED, cancel_overdue: true }), cancelled('transcribe'))
+    await mount()
+    expect(screen.getByText(OVERDUE)).toBeTruthy()
+    await advance(POLL_INTERVAL_MS)
+    await settle()
+    expect(screen.getByRole('status').textContent).toBe('Processing cancelled (transcribe)')
+    expect(screen.queryByText(OVERDUE)).toBeNull()
+    expect(screen.queryByText(HINT)).toBeNull()
+  })
+
+  it('shows no cancel text for a done video without an active job', async () => {
+    script(video({ status: 'done', analysis: ANALYSIS, active_job: null }))
+    await mount()
+    expect(screen.queryByText(OVERDUE)).toBeNull()
+    expect(screen.queryByText(HINT)).toBeNull()
+    expect(document.body.textContent).not.toMatch(/Cancelling/)
+  })
+
   it('reads Processing cancelled (kind), not failed or not analysed', async () => {
     script(cancelled('ingest'))
     await mount()
@@ -537,6 +591,16 @@ describe('polling cadence (#395)', () => {
 
   it('refetches after 5 s once the request is stored', async () => {
     script(running({ cancel_requested_at: REQUESTED }))
+    await mount()
+    const start = videoGets()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CANCEL_POLL_INTERVAL_MS)
+    })
+    expect(videoGets()).toBe(start + 1)
+  })
+
+  it('keeps the 5 s refetch for an overdue request', async () => {
+    script(running({ cancel_requested_at: REQUESTED, cancel_overdue: true }))
     await mount()
     const start = videoGets()
     await act(async () => {

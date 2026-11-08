@@ -329,6 +329,17 @@ class Settings(BaseSettings):
             )
         return value
 
+    @property
+    def CANCEL_OVERDUE_SEC(self) -> int:
+        """Age of a stored cancel request after which it counts as overdue (#411).
+
+        Derived, never read from the environment: three poll intervals (one
+        missed poll on top of the normal path) plus 15 s for the kill and the
+        client's refetch. The validators keep ``CANCEL_POLL_SEC <= HEARTBEAT_SEC
+        <= REAP_AFTER_SEC / 2``, so it is always below ``REAP_AFTER_SEC``.
+        """
+        return 3 * self.CANCEL_POLL_SEC + 15
+
     @field_validator("CANCEL_POLL_SEC")
     @classmethod
     def _cancel_poll_not_slower_than_heartbeat(cls, value: int, info: ValidationInfo) -> int:

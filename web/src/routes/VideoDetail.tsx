@@ -55,6 +55,8 @@ function cancellingText(kind: string): string {
 
 const cancelledText = (kind: string) => `Processing cancelled (${kind})`
 
+const CANCEL_OVERDUE_HINT =
+  'The worker has not acknowledged the cancel request yet. It may be in a step it cannot interrupt, or it may have stopped. A job whose worker has stopped is ended automatically. To check, an operator can open Ops (GET /api/ops/jobs) and read the worker logs.'
 const CANCELLING_HINT = `Cancel requested, waiting for the worker (up to ${CANCEL_WAIT_SEC} s). It then stops its download or model call.`
 
 /** `YYYY-MM-DD` in UTC, or null when absent or unparsable. */
@@ -554,7 +556,7 @@ function VideoPage({ videoId }: { videoId: string }) {
       ) : (
         <AnalysisView analysis={analysis} />
       )}
-      {video.active_job?.cancel_requested_at != null && <p className="muted">{CANCELLING_HINT}</p>}
+      {video.active_job?.cancel_requested_at != null && <p className="muted">{video.active_job.cancel_overdue ? CANCEL_OVERDUE_HINT : CANCELLING_HINT}</p>}
       {video.active_job !== null && video.progress != null && (
         <div>
           <JobProgress kind={video.active_job.kind} state={video.active_job.state} progress={video.progress} />

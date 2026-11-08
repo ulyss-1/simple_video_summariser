@@ -247,6 +247,8 @@ class JobRow:
     payload_duration_sec: float | None
     #: When a user asked to cancel this job (#237), else ``None``.
     cancel_requested_at: datetime | None = None
+    #: Server-computed (#411): running, request older than ``cancel_overdue_sec``.
+    cancel_overdue: bool = False
 
 
 #: The columns ``JobRow`` is built from, shared by the list and the single-row read.
@@ -255,6 +257,10 @@ _JOB_COLUMNS = """
     j.state, j.priority, j.attempts, j.error_class, j.last_error,
     j.run_after, j.locked_by, j.heartbeat_at, j.finished_at, j.created_at,
     j.progress, j.cancel_requested_at,
+    COALESCE(j.state = 'running' AND j.cancel_requested_at IS NOT NULL
+             AND now() - j.cancel_requested_at
+                 > make_interval(secs => %(cancel_overdue_sec)s::float8),
+             FALSE) AS cancel_overdue,
     CASE WHEN jsonb_typeof(j.payload -> 'duration_sec') = 'number'
           AND abs((j.payload ->> 'duration_sec')::numeric) < 1e9
          THEN (j.payload ->> 'duration_sec')::float8
@@ -285,6 +291,7 @@ def list_jobs(
     error_class: str | None | _Unset = UNSET,
     before_id: int | None = None,
     limit: int,
+    cancel_overdue_sec: int | None = None,
 ) -> list[JobRow]:
     """One page of ``jobs``, newest first, for the Ops view (#44).
 
@@ -308,13 +315,16 @@ def list_jobs(
                 "error_class": None if error_class is UNSET else error_class,
                 "before_id": before_id,
                 "limit": limit,
+                "cancel_overdue_sec": cancel_overdue_sec,
             },
         )
         rows = cur.fetchall()
     return [JobRow(**row) for row in rows]
 
 
-def get_job(conn: psycopg.Connection[Any], job_id: int) -> JobRow | None:
+def get_job(
+    conn: psycopg.Connection[Any], job_id: int, *, cancel_overdue_sec: int | None = None
+) -> JobRow | None:
     """One job in the Ops view's item shape (#44), or ``None`` without a row.
 
     Used after ``PostgresQueue.retry_dead`` to answer with the shared
@@ -327,9 +337,9 @@ def get_job(conn: psycopg.Connection[Any], job_id: int) -> JobRow | None:
             SELECT {_JOB_COLUMNS}
             FROM jobs j
             LEFT JOIN videos v ON v.video_id = j.video_id
-            WHERE j.id = %s
+            WHERE j.id = %(job_id)s
             """,
-            (job_id,),
+            {"job_id": job_id, "cancel_overdue_sec": cancel_overdue_sec},
         )
         row = cur.fetchone()
     return None if row is None else JobRow(**row)

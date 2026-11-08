@@ -309,7 +309,15 @@ the status line (`tabIndex={-1}`) takes focus: "Cancelling: {stage}…" with the
 hint underneath ("Cancel requested, waiting for the worker (up to 5 s). It then stops
 its download or model call.", #395; the page polls every 5 s meanwhile), later
 "Processing cancelled ({kind})". On the Ops page the `cancelling` badge is followed by
-"Cancel requested {time} · waiting for the worker (up to 5 s)" and the response
+"Cancel requested {time} · waiting for the worker (up to 5 s)". When the server marks
+the request overdue (`cancel_overdue`, #411: 30 s by default, decided on the server so
+the page never reads the clock), the video page replaces the hint with a `muted`
+paragraph, "The worker has not acknowledged the cancel request yet. It may be in a step
+it cannot interrupt, or it may have stopped. A job whose worker has stopped is ended
+automatically. To check, an operator can open Ops (GET /api/ops/jobs) and read the
+worker logs.", and the Ops row note becomes " · not acknowledged by the worker yet;
+check the worker logs". Text only: no alert, no modal, no new button, no seconds. The
+response
 message reads "Cancel requested: the worker is told within about 5 s and the job
 stops at its next checkpoint". Deleting a
 video that is processing adds "Processing is stopped and any running work is

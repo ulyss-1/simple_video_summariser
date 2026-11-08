@@ -33,7 +33,7 @@ function item(over: Partial<VideoItem>): VideoItem {
     ...over,
   }
 }
-const job = (kind: string, state: string) => ({ id: 1, kind, state })
+const job = (kind: string, state: string) => ({ id: 1, kind, state, cancel_overdue: false })
 const failure = (kind: string, error_class: string | null) => ({
   job_id: 1,
   kind,

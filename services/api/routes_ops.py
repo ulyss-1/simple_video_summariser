@@ -262,6 +262,7 @@ def get_ops_jobs(
             error_class=error_class,
             before_id=params.before_id,
             limit=params.limit + 1,
+            cancel_overdue_sec=get_settings().CANCEL_OVERDUE_SEC,
         )
         page = rows[: params.limit]
         # One extra read, and only when a page shows a pending transcribe job to estimate.
@@ -362,7 +363,7 @@ def post_ops_job_retry(
         )
     assert outcome.job is not None
     job = outcome.job
-    row = get_job(conn, job.id)
+    row = get_job(conn, job.id, cancel_overdue_sec=get_settings().CANCEL_OVERDUE_SEC)
     assert row is not None
     _log.warning(
         "ops.job_retried",

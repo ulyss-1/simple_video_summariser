@@ -435,7 +435,8 @@ function isJob(v: unknown): v is JobOut {
     isStringOrNull(v.finished_at) &&
     typeof v.created_at === 'string' &&
     (v.progress === undefined || v.progress === null || isObject(v.progress)) &&
-    (v.cancel_requested_at === undefined || isStringOrNull(v.cancel_requested_at))
+    (v.cancel_requested_at === undefined || isStringOrNull(v.cancel_requested_at)) &&
+    typeof v.cancel_overdue === 'boolean'
   )
 }
 

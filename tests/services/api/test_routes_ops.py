@@ -280,6 +280,7 @@ def test_item_shape_omits_payload_and_includes_every_declared_field(
         "created_at",
         "progress",
         "cancel_requested_at",
+        "cancel_overdue",
     }
     assert item["id"] == 7
     assert item["progress"] is None
