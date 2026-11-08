@@ -3,6 +3,10 @@
     "schemas": {
       "ActiveJobOut": {
         "properties": {
+          "cancel_overdue": {
+            "title": "Cancel Overdue",
+            "type": "boolean"
+          },
           "cancel_requested_at": {
             "anyOf": [
               {
@@ -31,7 +35,8 @@
         "required": [
           "id",
           "kind",
-          "state"
+          "state",
+          "cancel_overdue"
         ],
         "title": "ActiveJobOut",
         "type": "object"
@@ -1884,6 +1889,10 @@
             "title": "Attempts",
             "type": "integer"
           },
+          "cancel_overdue": {
+            "title": "Cancel Overdue",
+            "type": "boolean"
+          },
           "cancel_requested_at": {
             "anyOf": [
               {
@@ -2025,7 +2034,8 @@
           "heartbeat_at",
           "finished_at",
           "created_at",
-          "progress"
+          "progress",
+          "cancel_overdue"
         ],
         "title": "JobOut",
         "type": "object"

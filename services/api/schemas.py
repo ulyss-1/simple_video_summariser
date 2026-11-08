@@ -52,6 +52,8 @@ class ActiveJobOut(BaseModel):
     kind: str
     state: str
     cancel_requested_at: UtcDatetime | None = None
+    # Computed by the server with the database clock (#411); the SPA never compares times.
+    cancel_overdue: bool
 
 
 class LastFailureOut(BaseModel):
@@ -422,6 +424,7 @@ def _video_fields(video: VideoSummary) -> dict[str, Any]:
                 kind=active.kind,
                 state=active.state,
                 cancel_requested_at=active.cancel_requested_at,
+                cancel_overdue=active.cancel_overdue,
             )
         ),
         "last_failure": (
@@ -534,6 +537,7 @@ class JobOut(BaseModel):
     created_at: UtcDatetime
     progress: ProgressOut | None
     cancel_requested_at: UtcDatetime | None = None
+    cancel_overdue: bool
 
 
 class JobListOut(BaseModel):
@@ -560,6 +564,7 @@ def job_out(row: JobRow, history: Sequence[float] | None = None) -> JobOut:
         created_at=row.created_at,
         progress=progress_out(row, history),
         cancel_requested_at=row.cancel_requested_at,
+        cancel_overdue=row.cancel_overdue,
     )
 
 

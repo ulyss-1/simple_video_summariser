@@ -397,6 +397,7 @@ def get_videos(
         limit=params.limit,
         prefer_model=prefer_model,
         prefer_prompt_version=prefer_prompt_version,
+        cancel_overdue_sec=get_settings().CANCEL_OVERDUE_SEC,
     )
     return schemas.VideoList(
         items=[schemas.video_item(v) for v in page.items],
@@ -489,7 +490,7 @@ def _transcribe_progress(
     active = video.active_job
     if active is None or active.kind != "transcribe":
         return None
-    row = get_job(conn, active.id)
+    row = get_job(conn, active.id, cancel_overdue_sec=get_settings().CANCEL_OVERDUE_SEC)
     if row is None:
         return None
     history = transcribe_rtf_history(conn) if row.state == "pending" else None
@@ -501,7 +502,11 @@ def get_video_detail(video_id: VideoId, conn: ReadConn) -> schemas.VideoDetail:
     """One video, its status, best transcript (D2) and latest analysis."""
     prefer_model, prefer_prompt_version = _display_preference()
     video = get_video(
-        conn, video_id, prefer_model=prefer_model, prefer_prompt_version=prefer_prompt_version
+        conn,
+        video_id,
+        prefer_model=prefer_model,
+        prefer_prompt_version=prefer_prompt_version,
+        cancel_overdue_sec=get_settings().CANCEL_OVERDUE_SEC,
     )
     if video is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, VIDEO_NOT_FOUND)

@@ -328,7 +328,7 @@ describe('isJobList', () => {
   const job = {
     id: 1, video_id: 'v', video_title: 't', kind: 'ingest', dedupe_key: 'k', state: 'dead', priority: 0,
     attempts: 1, error_class: 'BUG', last_error: 'e', run_after: '2026-01-01T00:00:00Z', locked_by: null,
-    heartbeat_at: null, finished_at: null, created_at: '2026-01-01T00:00:00Z',
+    heartbeat_at: null, finished_at: null, created_at: '2026-01-01T00:00:00Z', cancel_overdue: false,
   }
   const ok = (over: Record<string, unknown> = {}, next: unknown = null) => ({ items: [{ ...job, ...over }], next_before_id: next })
   it.each([[undefined], [null], ['2026-10-26T10:00:00Z']])('accepts cancel_requested_at %j', (v) => {
@@ -360,6 +360,7 @@ describe('isJobList', () => {
     ['finished_at', 1], ['finished_at', undefined],
     ['created_at', null], ['created_at', 5],
     ['cancel_requested_at', 1], ['cancel_requested_at', true], ['cancel_requested_at', {}],
+    ['cancel_overdue', undefined], ['cancel_overdue', null], ['cancel_overdue', 'true'], ['cancel_overdue', 1],
   ])('rejects a job whose %s is %j', (field, value) => {
     expect(isJobList(ok({ [field]: value }))).toBe(false)
   })

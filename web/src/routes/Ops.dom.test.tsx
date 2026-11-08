@@ -28,6 +28,7 @@ function job(id: number, over: Partial<JobOut> = {}): JobOut {
     last_error: `error ${id}`,
     run_after: '2026-10-01T12:00:00Z',
     locked_by: null,
+    cancel_overdue: false,
     heartbeat_at: null,
     finished_at: '2026-10-01T23:30:00-07:00',
     created_at: '2026-09-30T08:05:00Z',
@@ -1592,6 +1593,23 @@ describe('cancel and CANCELLED jobs (#301)', () => {
     expect(row.textContent).toContain(' · waiting for the worker (up to 5 s)')
     expect(row.textContent).toContain('2026-10-26 10:05 UTC')
     expect(row.textContent).not.toMatch(/cancelled/i)
+    expect(cancelBtn(3)).toBeNull()
+  })
+
+  it('an overdue cancelling row says the worker has not acknowledged it, without the 5 s figure', async () => {
+    stubFetch(
+      api({
+        jobs: () => list([active(3, { cancel_requested_at: REQ_AT, cancel_overdue: true })]),
+      }),
+    )
+    await mount('/ops?state=running')
+    const row = rowFor(3)
+    expect(within(row).getByText('cancelling')).toBeTruthy()
+    expect(row.textContent).toContain('2026-10-26 10:05 UTC')
+    expect(row.textContent).toContain(
+      'Cancel requested 2026-10-26 10:05 UTC · not acknowledged by the worker yet; check the worker logs',
+    )
+    expect(row.textContent).not.toContain('up to 5 s')
     expect(cancelBtn(3)).toBeNull()
   })
 

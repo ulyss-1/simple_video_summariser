@@ -41,6 +41,7 @@ const job = (over: Partial<ActiveJob> = {}): ActiveJob => ({
   kind: 'transcribe',
   state: 'running',
   cancel_requested_at: null,
+  cancel_overdue: false,
   ...over,
 })
 

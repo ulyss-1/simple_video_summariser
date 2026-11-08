@@ -543,6 +543,8 @@ cancelled outcome: a raised `Cancelled`, any other exception, `Defer`, the
 watchdog's `fail_job` and the reaper all end `CANCELLED`, never `pending`. A
 handler that returns normally ends `done`, with `cancel_requested_at` still set.
 A cancel is logged once at INFO as `job.cancelled`, not as a dead letter.
+A request still unacknowledged after `CANCEL_OVERDUE_SEC` (derived, `3 * CANCEL_POLL_SEC + 15`,
+30 s by default; §10) is reported by the API as `cancel_overdue` (§8.3, #411).
 The speech-to-text of a `transcribe` job runs in a child process, and a cancel
 kills it (group `SIGKILL`) within about a second, including before the first
 decoded segment (#324; see 11.5).
@@ -1246,7 +1248,7 @@ separated per D13.
 | `GET` | `/videos/{id}/render` | **server-side HTML render** (D12c) |
 | `GET` | `/search?q=` | FTS over `search_docs` (title, latest analysis, preferred transcript); `matched_in` and transcript `ts_headline` excerpts. Transcript search uses a mapped built-in PostgreSQL configuration or `simple`; with `simple`, exact whole runs/tokens can match, but text inside an unspaced run cannot unless whitespace or punctuation creates a token boundary (#167). |
 | `GET` | `/ops/channels` | current poll health plus nullable feed-gap state; strict `failing` or `attention` filter (mutually exclusive), failures first, then oldest gaps, then healthy channels |
-| `GET` | `/ops/jobs` | filter by state/kind — powers Ops view |
+| `GET` | `/ops/jobs` | filter by state/kind — powers Ops view. Each row carries `cancel_overdue` (boolean, required, #411): `state = 'running' AND cancel_requested_at IS NOT NULL AND now() - cancel_requested_at > CANCEL_OVERDUE_SEC`, computed in the same read with the database clock; `false` for every other state, including a `done` job with a stale request and a `dead` / `CANCELLED` one. `active_job` of `GET /videos/{id}` (and of the library items) carries the same flag |
 | `POST` | `/ops/jobs/{id}/retry` | resurrect a dead job |
 | `GET` | `/healthz` | liveness + queue depth by kind/state |
 | `GET` | `/metrics` | Prometheus text format (optional) |
@@ -1402,7 +1404,10 @@ web/src/
   `cancel_requested_at` is set the status line reads `Cancelling: <stage>…` with the
   hint `Cancel requested, waiting for the worker (up to 5 s). It then stops its download or model call.`
   and the page polls every 5 s instead of 15 s (#395; `CANCEL_WAIT_SEC` in `web/src/lib/ops.ts`); once the job is terminal, `last_cancelled` makes it read
-  `Processing cancelled (<kind>)`. `Delete video` is available in every state and
+  `Processing cancelled (<kind>)`. When the server flags `active_job.cancel_overdue` (#411)
+  the hint is replaced by `The worker has not acknowledged the cancel request yet. It may be in a step it cannot interrupt, or it may have stopped. A job whose worker has stopped is ended automatically. To check, an operator can open Ops (GET /api/ops/jobs) and read the worker logs.`
+  (a `muted` paragraph; the SPA renders the flag and never compares timestamps or holds the threshold);
+  the Ops row replaces its note with ` · not acknowledged by the worker yet; check the worker logs`. `Delete video` is available in every state and
   answers `204` also during processing (#303), so the delete flow has no `409` case.
   When `status = 'idle'` and `last_cancelled` is set, the page offers
   `Restart processing` (#326; inline confirmation, one `POST /videos` with the watch
@@ -1530,6 +1535,7 @@ than reading `os.environ` directly.
 | `UPCOMING_MAX_WAIT_DAYS` | `14` | transcriber: ingest reschedules a premiere or live stream until it is available, and dead-letters it this many days after discovery (#65) |
 | `CANCELLED_JOB_RETENTION_DAYS` | `7` | planner: the `reap` task deletes a `dead` / `CANCELLED` job of a deleted video (tombstone, no `videos` row) this many days after it finished (#327); its returned count includes them |
 | `HEARTBEAT_SEC` / `REAP_AFTER_SEC` | `60` / `300` | workers, planner |
+| `CANCEL_OVERDUE_SEC` | derived, not a variable | `3 * CANCEL_POLL_SEC + 15` (30 s at the default), a property of settings in `common/config.py`; never read from the environment. Always below `REAP_AFTER_SEC` because `CANCEL_POLL_SEC <= HEARTBEAT_SEC <= REAP_AFTER_SEC / 2`. Drives `cancel_overdue` in the API (#411) |
 | `CANCEL_POLL_SEC` | `5` | workers: how often a running job's cancel flag is read (never written) so a user cancel is noticed in seconds; rejected when above `HEARTBEAT_SEC` (#395) |
 | `MAX_ATTEMPTS_TRANSCRIBE` | `2` | transcriber |
 | `INGEST_MAX_RUNTIME_SEC` / `ANALYZE_MAX_RUNTIME_SEC` / `TRANSCRIBE_MAX_RTF` | `600` / `3600` / `3.0` | workers (§11.5); compose passes `ANALYZE_MAX_RUNTIME_SEC` to the analyzer only |

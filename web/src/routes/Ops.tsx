@@ -39,6 +39,8 @@ import {
 // Plain semantic HTML on purpose: styling is #132. Filters and the cursor live
 // in the URL only; TanStack Query owns the server state (architecture §9).
 // Everything shown is a React text node: stored text is never parsed as HTML.
+const CANCEL_OVERDUE_NOTE = ' · not acknowledged by the worker yet; check the worker logs'
+
 export function Ops() {
   const [params, setParams] = useSearchParams()
   const { filters, before, corrected } = parseOpsParams(params)
@@ -528,7 +530,7 @@ function JobRow({
             {' '}
             <small className="muted">
               Cancel requested <time dateTime={j.cancel_requested_at}>{formatUtc(j.cancel_requested_at)}</time>
-              {` · waiting for the worker (up to ${CANCEL_WAIT_SEC} s)`}
+              {j.cancel_overdue ? CANCEL_OVERDUE_NOTE : ` · waiting for the worker (up to ${CANCEL_WAIT_SEC} s)`}
             </small>
           </>
         )}

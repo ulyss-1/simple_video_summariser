@@ -730,6 +730,8 @@ export interface components {
     schemas: {
         /** ActiveJobOut */
         ActiveJobOut: {
+            /** Cancel Overdue */
+            cancel_overdue: boolean;
             /** Cancel Requested At */
             cancel_requested_at?: string | null;
             /** Id */
@@ -1390,6 +1392,8 @@ export interface components {
         JobOut: {
             /** Attempts */
             attempts: number;
+            /** Cancel Overdue */
+            cancel_overdue: boolean;
             /** Cancel Requested At */
             cancel_requested_at?: string | null;
             /**

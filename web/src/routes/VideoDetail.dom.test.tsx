@@ -262,7 +262,7 @@ describe('page states', () => {
       video({
         analysis: null,
         status: status as 'processing',
-        active_job: { id: 1, kind, state },
+        active_job: { id: 1, kind, state, cancel_overdue: false },
       }),
     )
     expect(screen.getByRole('status').textContent).toBe(text)
@@ -324,7 +324,7 @@ describe('page states', () => {
   })
 
   it('an existing analysis plus an active job renders in full with a re-analysis note', async () => {
-    await mountWith(video({ status: 'processing', active_job: { id: 2, kind: 'analyze', state: 'pending' } }))
+    await mountWith(video({ status: 'processing', active_job: { id: 2, kind: 'analyze', state: 'pending', cancel_overdue: false } }))
     expect(screen.getByText('Re-analysis in progress')).toBeTruthy()
     expect(screen.getByText('A short summary.')).toBeTruthy()
     expect(screen.queryByText(/Queued:/)).toBeNull()
@@ -346,7 +346,7 @@ describe('polling', () => {
   it('refetches once after 15 s while processing and stops once done', async () => {
     stubFetch((_u, n) =>
       n === 1
-        ? json(video({ analysis: null, status: 'processing', active_job: { id: 1, kind: 'analyze', state: 'running' } }))
+        ? json(video({ analysis: null, status: 'processing', active_job: { id: 1, kind: 'analyze', state: 'running', cancel_overdue: false } }))
         : json(video()),
     )
     await mount()
@@ -757,7 +757,7 @@ describe('transcription progress (#245)', () => {
     video({
       status: 'processing',
       analysis: null,
-      active_job: { id: 5, kind: 'transcribe', state: 'running' },
+      active_job: { id: 5, kind: 'transcribe', state: 'running', cancel_overdue: false },
       progress: {
         percent: 40,
         done_sec: 400,
@@ -784,7 +784,7 @@ describe('transcription progress (#245)', () => {
   it('shows the estimate for a queued transcription and nothing for another job', async () => {
     await mountWith(
       transcribing({
-        active_job: { id: 5, kind: 'transcribe', state: 'pending' },
+        active_job: { id: 5, kind: 'transcribe', state: 'pending', cancel_overdue: false },
         progress: {
           percent: null,
           done_sec: null,
@@ -866,7 +866,7 @@ describe('Re-analyse button (#126)', () => {
   })
 
   it('is disabled while a job is active, next to the in-progress line', async () => {
-    await mountWith(video({ transcript: summary, active_job: { id: 2, kind: 'analyze', state: 'running' } }))
+    await mountWith(video({ transcript: summary, active_job: { id: 2, kind: 'analyze', state: 'running', cancel_overdue: false } }))
     expect(button().disabled).toBe(true)
     expect(body()).toContain('Re-analysis in progress')
   })

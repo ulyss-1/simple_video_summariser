@@ -476,6 +476,10 @@ _VIDEO_READ = f"""
            {_VIDEO_STATUS_SQL} AS status,
            aj.id AS aj_id, aj.kind AS aj_kind, aj.state AS aj_state,
            aj.cancel_requested_at AS aj_cancel_requested_at,
+           COALESCE(aj.state = 'running' AND aj.cancel_requested_at IS NOT NULL
+                    AND now() - aj.cancel_requested_at
+                        > make_interval(secs => %(cancel_overdue_sec)s::float8),
+                    FALSE) AS aj_cancel_overdue,
            lf.id AS lf_id, lf.kind AS lf_kind, lf.error_class AS lf_error_class,
            lf.finished_at AS lf_finished_at,
            la.created_at AS latest_analysis_at,
@@ -537,6 +541,7 @@ def list_videos(
     limit: int = 50,
     prefer_model: str | None = None,
     prefer_prompt_version: str | None = None,
+    cancel_overdue_sec: int | None = None,
 ) -> VideoPage:
     """One page of the library plus the total match count (#42).
 
@@ -577,6 +582,7 @@ def list_videos(
             "limit": limit,
             "prefer_model": prefer_model,
             "prefer_prompt_version": prefer_prompt_version,
+            "cancel_overdue_sec": cancel_overdue_sec,
         },
     ).fetchall()
     total = int(rows[0][0]) if rows else 0
@@ -590,6 +596,7 @@ def get_video(
     *,
     prefer_model: str | None = None,
     prefer_prompt_version: str | None = None,
+    cancel_overdue_sec: int | None = None,
 ) -> VideoSummary | None:
     """One video with its derived status, or ``None`` without a ``videos`` row (#42)."""
     row = conn.execute(
@@ -598,6 +605,7 @@ def get_video(
             "video_id": video_id,
             "prefer_model": prefer_model,
             "prefer_prompt_version": prefer_prompt_version,
+            "cancel_overdue_sec": cancel_overdue_sec,
         },
     ).fetchone()
     return None if row is None else _summary(row)
@@ -606,7 +614,7 @@ def get_video(
 def _summary(row: Sequence[Any]) -> VideoSummary:
     (
         video_id, title, channel_id, channel_title, published_at, duration_sec, origin,
-        unavailable, status, aj_id, aj_kind, aj_state, aj_cancel_requested_at, lf_id, lf_kind,
+        unavailable, status, aj_id, aj_kind, aj_state, aj_cancel_requested_at, aj_cancel_overdue, lf_id, lf_kind,
         lf_class, lf_finished, latest_analysis_at, _discovered_at, has_transcript,
         nc_id, nc_kind, nc_finished,
     ) = row
@@ -623,7 +631,9 @@ def _summary(row: Sequence[Any]) -> VideoSummary:
         active_job=(
             None
             if aj_id is None
-            else ActiveJob(int(aj_id), aj_kind, aj_state, aj_cancel_requested_at)
+            else ActiveJob(
+                int(aj_id), aj_kind, aj_state, aj_cancel_requested_at, bool(aj_cancel_overdue)
+            )
         ),
         last_failure=(
             None if lf_id is None else JobFailure(int(lf_id), lf_kind, lf_class, lf_finished)

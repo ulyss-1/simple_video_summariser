@@ -559,6 +559,8 @@ class ActiveJob:
     state: str
     #: When a user asked to cancel it (#237), else ``None``.
     cancel_requested_at: datetime | None = None
+    #: Server-computed (#411): running, request older than the injected threshold.
+    cancel_overdue: bool = False
 
 
 @dataclass(frozen=True, slots=True)
