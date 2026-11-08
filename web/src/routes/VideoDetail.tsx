@@ -13,6 +13,7 @@ import { cancelProcessingErrorMessage, useCancelProcessing } from '../hooks/useC
 import { deleteErrorMessage, useDeleteVideo } from '../hooks/useDeleteVideo'
 import { useRestartProcessing } from '../hooks/useRestartProcessing'
 import { reanalyzeErrorMessage, useReanalyze } from '../hooks/useReanalyze'
+import { retranscribeErrorMessage, useRetranscribe } from '../hooks/useRetranscribe'
 import { useVideo, VideoApiError } from '../hooks/useVideo'
 import { parseStartTime } from '../lib/moment'
 import { CANCEL_WAIT_SEC } from '../lib/ops'
@@ -301,6 +302,91 @@ function RestartProcessing({
   )
 }
 
+const SOURCE_LABELS: Record<string, string> = {
+  youtube_manual: 'YouTube captions (manual)',
+  youtube_auto: 'YouTube auto-generated captions',
+  whisper: 'Whisper',
+}
+
+/**
+ * "Transcribe with Whisper" for a video whose transcript is YouTube auto-captions (#415).
+ * Inline confirmation, never a modal (design-system §7.7). The earlier transcript is kept.
+ */
+function RetranscribeWithWhisper({
+  name,
+  disabled,
+  retranscribe,
+}: {
+  name: string
+  disabled: boolean
+  retranscribe: ReturnType<typeof useRetranscribe>
+}) {
+  const [confirming, setConfirming] = useState(false)
+  const openRef = useRef<HTMLButtonElement>(null)
+  const confirmRef = useRef<HTMLButtonElement>(null)
+  const restoreFocus = useRef(false)
+  // Set synchronously on click: isPending only turns true on a later render.
+  const sent = useRef(false)
+
+  useEffect(() => {
+    if (confirming) confirmRef.current?.focus()
+    else if (restoreFocus.current) {
+      restoreFocus.current = false
+      openRef.current?.focus()
+    }
+  }, [confirming])
+
+  const close = () => {
+    restoreFocus.current = true
+    setConfirming(false)
+  }
+
+  const confirm = () => {
+    if (sent.current) return
+    sent.current = true
+    retranscribe.mutate(undefined, {
+      onSettled: () => {
+        sent.current = false
+        close()
+      },
+    })
+  }
+
+  if (!confirming) {
+    return (
+      <button
+        type="button"
+        ref={openRef}
+        disabled={disabled}
+        onClick={() => {
+          retranscribe.reset()
+          setConfirming(true)
+        }}
+      >
+        Transcribe with Whisper
+      </button>
+    )
+  }
+  return (
+    <div
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && !retranscribe.isPending) close()
+      }}
+    >
+      <p>
+        Transcribe {name} with Whisper? A transcription can take hours of CPU. The auto-generated
+        captions are kept.
+      </p>
+      <button ref={confirmRef} type="button" disabled={retranscribe.isPending} onClick={confirm}>
+        Confirm transcription
+      </button>{' '}
+      <button type="button" disabled={retranscribe.isPending} onClick={close}>
+        Cancel
+      </button>
+    </div>
+  )
+}
+
 export function VideoDetail() {
   const videoId = parseVideoId(useParams().videoId)
   if (videoId === null) return <NotFound />
@@ -314,6 +400,7 @@ function VideoPage({ videoId }: { videoId: string }) {
   const [gone, setGone] = useState(false)
   const query = useVideo(gone ? null : videoId)
   const reanalyze = useReanalyze(videoId)
+  const retranscribe = useRetranscribe(videoId)
   // Bumped when a cancel has been answered and the page refetched: the status
   // line then takes focus, since the control that had it is gone.
   const [focusStatus, setFocusStatus] = useState(0)
@@ -410,6 +497,26 @@ function VideoPage({ videoId }: { videoId: string }) {
           </>
         )}
       </p>
+      {video.transcript !== null && (
+        <p>
+          Transcript source: {SOURCE_LABELS[video.transcript.source] ?? video.transcript.source}
+          {video.transcript.source === 'youtube_auto' && (
+            <>
+              {' · '}
+              <RetranscribeWithWhisper
+                name={heading ?? 'this video'}
+                disabled={retranscribe.isPending || video.active_job !== null}
+                retranscribe={retranscribe}
+              />
+            </>
+          )}
+        </p>
+      )}
+      {retranscribe.isError && (
+        <p className="alert alert--danger" role="alert">
+          {retranscribeErrorMessage(retranscribe.error)}
+        </p>
+      )}
       {video.transcript !== null && (
         <>
           <p>

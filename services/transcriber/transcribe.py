@@ -121,6 +121,8 @@ def progress_reporter(
 
 def _with_caption_reason(job: Job, engine_meta: dict[str, Any]) -> dict[str, Any]:
     """Record why Whisper ran at all (#416) when ingest put the reason in the payload."""
+    if job.payload.get("force_whisper") is True:  # an on-demand re-transcription (#415)
+        engine_meta = {**engine_meta, "requested": "retranscribe"}
     reason = job.payload.get("captions_unavailable")
     if isinstance(reason, str) and reason:
         return {**engine_meta, "captions_unavailable": reason}

@@ -704,6 +704,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/videos/{video_id}/retranscribe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Video Retranscribe
+         * @description Transcribe a video that has auto-generated captions with Whisper, on demand (#415).
+         *
+         *     Only enqueues one ``transcribe`` job carrying ``{"force_whisper": true}``: the worker
+         *     runs Whisper whatever ``PREFER_WHISPER`` and the captions say, saves a ``whisper``
+         *     transcript next to the caption one (nothing is deleted) and enqueues ``analyze``.
+         *     ``transcript_rank()`` makes Whisper beat ``youtube_auto`` but not ``youtube_manual``,
+         *     so a video whose best transcript is manual (or already Whisper) is refused with 409.
+         */
+        post: operations["post_video_retranscribe_videos__video_id__retranscribe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/videos/{video_id}/transcript": {
         parameters: {
             query?: never;
@@ -3132,6 +3158,49 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    post_video_retranscribe_videos__video_id__retranscribe_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                video_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VideoSubmission"];
+                };
+            };
+            /** @description No such video */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No transcript yet, the best transcript is already manual captions or Whisper (manual outranks Whisper, so it is refused), or the video has an active job */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Malformed video ID */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

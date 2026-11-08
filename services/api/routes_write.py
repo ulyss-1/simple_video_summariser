@@ -68,10 +68,16 @@ from common.repo.backfill_requests import create_request
 from common.repo.channel_catalog import get_enrichment_state, retry_enrichment
 from common.repo.channels import channel_exists, fill_channel_title, register_channel
 from common.repo.deleted_videos import VideoNotFound, delete_video, delete_videos
-from common.repo.jobs import active_job, cancel_video, cancelled_restart_job, latest_job
+from common.repo.jobs import (
+    active_job,
+    cancel_video,
+    cancelled_restart_job,
+    has_active_job,
+    latest_job,
+)
 from common.repo.media import UnsafeMediaPath, resolve_media_path
 from common.repo.transcripts import get_best_transcript
-from common.repo.videos import insert_submitted_video, video_exists
+from common.repo.videos import get_video_meta, insert_submitted_video, video_exists
 from common.youtube_refs import (
     MAX_REF_CHARS,
     NameRef,
@@ -154,6 +160,8 @@ VIDEO_NOT_FOUND = "video not found"
 CANCELLATION_IN_PROGRESS = "cancellation in progress"
 NO_TRANSCRIPT = "no transcript yet"
 ANALYSIS_RUNNING = "an analysis is already running for this video"
+JOB_ACTIVE = "the video already has a pending or running job"
+WHISPER_NOT_NEEDED = "the best transcript is already manual captions or Whisper"
 REANALYSIS_CONTENDED = "the analysis job kept changing, try again"
 MAX_BATCH_SUBMIT = 200  # POST /videos/batch cap (#341); read at request time like the next one
 MAX_BULK_DELETE = 200  # read at request time, so a test can lower it
@@ -692,6 +700,60 @@ def post_video_reanalyze(
         state=result.state,
         created=result.created,
         restarted=False,
+    )
+
+
+@router.post(
+    "/videos/{video_id:untrusted}/retranscribe",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=VideoSubmission,
+    responses={
+        404: {"description": "No such video"},
+        409: {
+            "description": (
+                "No transcript yet, the best transcript is already manual captions or Whisper "
+                "(manual outranks Whisper, so it is refused), or the video has an active job"
+            )
+        },
+        422: {"description": "Malformed video ID"},
+    },
+)
+def post_video_retranscribe(
+    video_id: Annotated[str, Depends(_reanalyze_video_id)],
+    conn: Annotated[psycopg.Connection[Any], Depends(get_conn)],
+) -> VideoSubmission:
+    """Transcribe a video that has auto-generated captions with Whisper, on demand (#415).
+
+    Only enqueues one ``transcribe`` job carrying ``{"force_whisper": true}``: the worker
+    runs Whisper whatever ``PREFER_WHISPER`` and the captions say, saves a ``whisper``
+    transcript next to the caption one (nothing is deleted) and enqueues ``analyze``.
+    ``transcript_rank()`` makes Whisper beat ``youtube_auto`` but not ``youtube_manual``,
+    so a video whose best transcript is manual (or already Whisper) is refused with 409.
+    """
+    _require_idle(conn)
+    with conn.transaction():
+        if not video_exists(conn, video_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, VIDEO_NOT_FOUND)
+        best = get_best_transcript(conn, video_id)
+        if best is None:
+            raise HTTPException(status.HTTP_409_CONFLICT, NO_TRANSCRIPT)
+        if best.source != "youtube_auto":
+            raise HTTPException(status.HTTP_409_CONFLICT, WHISPER_NOT_NEEDED)
+        if has_active_job(conn, video_id):
+            raise HTTPException(status.HTTP_409_CONFLICT, JOB_ACTIVE)
+        payload: dict[str, Any] = {"force_whisper": True}
+        if best.language:
+            payload["language"] = best.language
+        meta = get_video_meta(conn, video_id)
+        if meta is not None and meta.duration_sec:
+            payload["duration_sec"] = meta.duration_sec
+        job_id = PostgresQueue(conn).enqueue(
+            "transcribe", video_id, payload=payload, priority=PRIORITY_INTERACTIVE
+        )
+        if job_id is None:  # an active transcribe appeared between the check and the insert
+            raise HTTPException(status.HTTP_409_CONFLICT, JOB_ACTIVE)
+    return VideoSubmission(
+        video_id=video_id, job_id=job_id, state="pending", created=True, restarted=False
     )
 
 
