@@ -28,6 +28,16 @@ from common.models import Segment, VideoMeta
 
 DEFAULT_TIMEOUT_SEC = 120.0
 
+# Pauses passed to yt-dlp so subtitle requests are not sent in tight bursts (#417).
+# yt-dlp sleeps inside its own process, so they count against the fetch timeout
+# (#416's 30 s caption cap): keep their sum well below it. Injectable via the
+# constructor; tests pass 0.
+SLEEP_SUBTITLES_SEC = 5.0
+SLEEP_REQUESTS_SEC = 1.0
+
+# Original-language auto track codes, tried before plain `en` (a translation).
+_ORIGINAL_AUTO = ("en-orig", "en-en")
+
 # English track preference: exact codes first, in this order, then any other
 # `en-*` variant (deterministic, alphabetical - the issue does not rank those).
 _PREFERRED_EXACT = ("en", "en-US", "en-GB")
@@ -61,7 +71,11 @@ class YouTubeSubtitles:
         runner: ProcessRunner = run_process,
         cookie_file: Path | None = None,
         poll_interval: float = DEFAULT_POLL_INTERVAL_SEC,
+        sleep_subtitles: float | None = None,
+        sleep_requests: float | None = None,
     ) -> None:
+        self._sleep_subtitles = SLEEP_SUBTITLES_SEC if sleep_subtitles is None else sleep_subtitles
+        self._sleep_requests = SLEEP_REQUESTS_SEC if sleep_requests is None else sleep_requests
         self._timeout = timeout
         self._runner = runner
         self._cookie_file = cookie_file
@@ -74,7 +88,7 @@ class YouTubeSubtitles:
         it is a translation product, not the video's own English captioning.
         """
         manual = _preferred_lang(meta.manual_subtitle_langs)
-        auto = _preferred_lang(meta.auto_caption_langs) if _is_english(meta.language) else None
+        auto = _preferred_lang(meta.auto_caption_langs, auto=True) if _is_english(meta.language) else None
         return SubtitleAvailability(manual=manual, auto=auto)
 
     def fetch(
@@ -111,6 +125,10 @@ class YouTubeSubtitles:
                 "--sub-langs",
                 lang,
                 write_flag,
+                "--sleep-subtitles",
+                f"{self._sleep_subtitles:g}",
+                "--sleep-requests",
+                f"{self._sleep_requests:g}",
                 "--paths",
                 str(tmpdir),
                 url,
@@ -147,8 +165,12 @@ def _is_english(language: str | None) -> bool:
     return language is None or language == "en" or language.startswith("en-")
 
 
-def _preferred_lang(langs: tuple[str, ...]) -> str | None:
+def _preferred_lang(langs: tuple[str, ...], *, auto: bool = False) -> str | None:
     available = set(langs)
+    if auto:
+        for lang in _ORIGINAL_AUTO:
+            if lang in available:
+                return lang
     for lang in _PREFERRED_EXACT:
         if lang in available:
             return lang

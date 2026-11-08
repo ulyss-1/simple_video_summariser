@@ -418,3 +418,56 @@ def test_fetch_keeps_its_own_limit_when_the_callers_is_looser() -> None:
         subs.fetch("iG9CE55wbtY", "en", "auto", timeout=60.0)
 
     assert runner.calls[0][1] == 5.0
+
+
+# --- original auto track and sleeps (#417) -----------------------------------
+
+
+@pytest.mark.parametrize(
+    ("langs", "expected"),
+    [
+        (("en", "en-en"), "en-en"),
+        (("en", "en-orig"), "en-orig"),
+        (("en", "en-en", "en-orig"), "en-orig"),
+        (("en",), "en"),
+    ],
+)
+def test_auto_prefers_the_original_track_before_plain_en(
+    langs: tuple[str, ...], expected: str
+) -> None:
+    meta = make_meta(language="en", auto_caption_langs=langs)
+    assert YouTubeSubtitles().available(meta).auto == expected
+
+
+def test_manual_preference_ignores_original_track_codes() -> None:
+    meta = make_meta(manual_subtitle_langs=("en", "en-orig"))
+    assert YouTubeSubtitles().available(meta).manual == "en"
+
+
+def test_fetch_finds_the_en_orig_file() -> None:
+    runner = WritingFakeRunner(
+        filename="video.en-orig.vtt", content=AUTO_FIXTURE.read_text(encoding="utf-8")
+    )
+    segments = YouTubeSubtitles(runner=runner).fetch("zjkBMFhNj_g", "en-orig", "auto")
+    assert segments[0].text.startswith("hi everyone")
+
+
+def test_fetch_passes_the_sleep_flags() -> None:
+    runner = WritingFakeRunner(filename="x.en.vtt", content="WEBVTT\n")
+    YouTubeSubtitles(runner=runner, sleep_subtitles=0, sleep_requests=0).fetch(
+        "jNQXAC9IVRw", "en", "auto"
+    )
+    [(argv, _)] = runner.calls
+    assert argv[argv.index("--sleep-subtitles") + 1] == "0"
+    assert argv[argv.index("--sleep-requests") + 1] == "0"
+
+
+def test_default_sleeps_are_5_and_1_and_leave_most_of_the_caption_cap() -> None:
+    runner = WritingFakeRunner(filename="x.en.vtt", content="WEBVTT\n")
+    YouTubeSubtitles(runner=runner).fetch("jNQXAC9IVRw", "en", "auto")
+    [(argv, _)] = runner.calls
+    sub = float(argv[argv.index("--sleep-subtitles") + 1])
+    req = float(argv[argv.index("--sleep-requests") + 1])
+    assert (sub, req) == (5.0, 1.0)
+    # The cap kills the yt-dlp process group, sleeps included; stay far below it.
+    assert sub + 2 * req < 30.0 / 2
