@@ -155,7 +155,7 @@ describe('Transcribe with Whisper (#415)', () => {
   })
 
   it('is disabled while a job is active', async () => {
-    await mountWith(video({ transcript: auto, active_job: { id: 2, kind: 'analyze', state: 'running' } }))
+    await mountWith(video({ transcript: auto, active_job: { id: 2, kind: 'analyze', state: 'running', cancel_overdue: false } }))
     expect((open() as HTMLButtonElement).disabled).toBe(true)
   })
 
