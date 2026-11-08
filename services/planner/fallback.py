@@ -2,7 +2,7 @@
 
 ``run_auto_caption_fallback_sweep`` is one pass, called by the planner loop
 (#38) on each tick. It finds videos whose newest ``transcribe`` job is ``dead``
-and enqueues one fresh ``ingest`` job for each. With ``AUTO_CAPTION_FALLBACK``
+and enqueues one fresh ``ingest`` job for each. Auto captions are normally used up front now (#416); with ``AUTO_CAPTION_FALLBACK``
 on, that ingest takes #28's ``AUTO_FALLBACK`` path (it reads the dead state
 from the database, so the job needs no flag in its payload) and the video still
 gets a ``youtube_auto`` transcript and an ``analyze`` job. The sweep does no

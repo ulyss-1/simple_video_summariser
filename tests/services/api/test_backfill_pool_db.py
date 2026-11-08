@@ -78,7 +78,7 @@ def make_client(
         )
         probe = SubtitleProbe(
             metadata_factory=lambda timeout: _GatedMeta(gate),  # type: ignore[arg-type,return-value]
-            has_manual=lambda meta: False,
+            has_captions=lambda meta: None,
         )
         app.dependency_overrides[routes_write.get_subtitle_probe] = lambda: probe
         client = TestClient(app)

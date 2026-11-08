@@ -241,6 +241,7 @@ def test_migrate_uses_the_anchor_and_workers_merge_it() -> None:
                 "WHISPER_THREADS": "3",
                 "PREFER_WHISPER": "0",
                 "AUTO_CAPTION_FALLBACK": "1",
+                "CAPTIONS_CHECK_TIMEOUT_SEC": "30",
                 "MAX_ATTEMPTS_TRANSCRIBE": "2",
                 "AUDIO_KEEP": "1",
                 "AUDIO_MAX_GB": "20",

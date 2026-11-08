@@ -23,7 +23,7 @@ from adapters.youtube.subtitles import (
 )
 from common.errors import PermanentSourceError, ToolFailureError, TransientNetworkError
 from common.models import Segment, VideoMeta
-from tests.adapters.youtube.fakes import completed
+from tests.adapters.youtube.fakes import FakeRunner, completed
 
 FIXTURES = Path(__file__).parents[2] / "fixtures" / "vtt"
 MANUAL_FIXTURE = FIXTURES / "youtube_manual_iG9CE55wbtY.en.vtt"
@@ -395,3 +395,26 @@ def _top_level_imports(module: object) -> set[str]:
 
 def test_subtitles_adapter_imports_no_service() -> None:
     assert "services" not in _top_level_imports(adapters.youtube.subtitles)
+
+
+# --- the per-call timeout (#416) --------------------------------------------------
+
+
+def test_fetch_passes_the_tighter_of_its_own_and_the_callers_timeout_to_yt_dlp() -> None:
+    runner = FakeRunner(subprocess.TimeoutExpired(["yt-dlp"], 7.0))
+    subs = YouTubeSubtitles(runner=runner)
+
+    with pytest.raises(TransientNetworkError):
+        subs.fetch("iG9CE55wbtY", "en", "auto", timeout=7.0)
+
+    assert runner.calls[0][1] == 7.0
+
+
+def test_fetch_keeps_its_own_limit_when_the_callers_is_looser() -> None:
+    runner = FakeRunner(subprocess.TimeoutExpired(["yt-dlp"], 5.0))
+    subs = YouTubeSubtitles(timeout=5.0, runner=runner)
+
+    with pytest.raises(TransientNetworkError):
+        subs.fetch("iG9CE55wbtY", "en", "auto", timeout=60.0)
+
+    assert runner.calls[0][1] == 5.0

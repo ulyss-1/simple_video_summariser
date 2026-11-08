@@ -100,7 +100,11 @@ from common.queue import Job, JobQueue, PostgresQueue
 from common.safe_url import make_redactor
 from common.shutdown import SignalLatch
 from common.worker import JobContext, Worker
-from services.transcriber.ingest import SubtitleSource, make_ingest_handler
+from services.transcriber.ingest import (
+    SubtitleSource,
+    make_ingest_handler,
+    warn_if_prefer_whisper,
+)
 from services.transcriber.persist import Chunker
 from services.transcriber.transcribe import make_transcribe_handler
 
@@ -295,6 +299,8 @@ def build_handlers(
         subtitles if subtitles is not None else YouTubeSubtitles(cookie_file=cookie_file)
     )
     split = chunker if chunker is not None else chunk_segments
+
+    warn_if_prefer_whisper(settings)
 
     def ingest(job: Job, ctx: JobContext) -> None:
         with closing(open_connection()) as conn:

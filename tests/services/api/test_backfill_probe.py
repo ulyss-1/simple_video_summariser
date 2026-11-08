@@ -93,7 +93,7 @@ class FakeMeta:
                 self.active -= 1
 
     def probe(self) -> SubtitleProbe:
-        return SubtitleProbe(self.factory, lambda meta: str(meta) in self.manual)
+        return SubtitleProbe(self.factory, lambda meta: "manual" if str(meta) in self.manual else None)
 
 
 def _run(meta: FakeMeta, entries: list[CatalogEntry], clock: Clock | None = None) -> _ProbeOutcome:

@@ -68,7 +68,8 @@ MAX_BACKFILL_LIMIT = 500
 #: ``MAX_CATALOG_LIMIT`` (checked by a test: ``common/`` never imports adapters).
 MAX_BACKFILL_REQUEST_LIMIT = 5000
 ESTIMATE_ASSUMES = (
-    "manual-subtitle videos skip speech-to-text; unchecked videos are assumed to need it"
+    "videos with English captions (manual or auto) skip speech-to-text; "
+    "unchecked videos are assumed to need it"
 )
 LLM_BASIS = "median recorded analyses.cost_usd per transcript character"
 
@@ -81,6 +82,7 @@ BACKFILL_PROBE_TIMEOUT_SEC = 10
 BACKFILL_PROBE_CONCURRENCY = 4
 
 SUBTITLES_MANUAL = "manual"
+SUBTITLES_AUTO = "auto"
 SUBTITLES_TRANSCRIBE = "transcribe"
 SUBTITLES_UNCHECKED = "unchecked"
 
@@ -103,12 +105,13 @@ class SubtitleProbe:
     """What a dry run needs to check one video's subtitles (#117).
 
     ``metadata_factory(timeout)`` builds a ``MetadataSource`` whose yt-dlp
-    runs are bounded by ``timeout``; ``has_manual(meta)`` is the pure
-    ``YouTubeSubtitles.available(meta).manual is not None``.
+    runs are bounded by ``timeout``; ``has_captions(meta)`` is the pure
+    ``YouTubeSubtitles.available(meta)`` reduced to ``"manual"``, ``"auto"`` (auto
+    English captions that ingest would use, #416) or ``None`` (Whisper is needed).
     """
 
     metadata_factory: Callable[[float], MetadataSource]
-    has_manual: Callable[[VideoMeta], bool]
+    has_captions: Callable[[VideoMeta], str | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +151,7 @@ class Estimate:
     assumes: str = ESTIMATE_ASSUMES
     probed: int = 0
     manual_subtitles: int = 0
+    auto_subtitles: int = 0
     needs_transcription: int = 0
     unchecked: int = 0
     probe_failed: int = 0
@@ -327,8 +331,8 @@ class _ProbeOutcome:
     deadline_reached: bool = False
 
 
-def _probe_one(probe: SubtitleProbe, video_id: str, timeout: float) -> bool:
-    return probe.has_manual(probe.metadata_factory(timeout).fetch(video_id))
+def _probe_one(probe: SubtitleProbe, video_id: str, timeout: float) -> str | None:
+    return probe.has_captions(probe.metadata_factory(timeout).fetch(video_id))
 
 
 def _probe_videos(
@@ -366,7 +370,7 @@ def _probe_videos(
             for future in done:
                 video_id = inflight.pop(future)
                 try:
-                    manual = future.result()
+                    captions = future.result()
                 except RateLimitedError:
                     rate_limited = True
                 except (PermanentSourceError, TransientNetworkError, ToolFailureError, ValueError):
@@ -376,7 +380,13 @@ def _probe_videos(
                     raise
                 else:
                     outcome.probed += 1
-                    outcome.status[video_id] = SUBTITLES_MANUAL if manual else SUBTITLES_TRANSCRIBE
+                    outcome.status[video_id] = (
+                        SUBTITLES_MANUAL
+                        if captions == SUBTITLES_MANUAL
+                        else SUBTITLES_AUTO
+                        if captions == SUBTITLES_AUTO
+                        else SUBTITLES_TRANSCRIBE
+                    )
     if rate_limited:
         _log.warning(
             "backfill.probe_rate_limited", channel_id=channel_id, probed=outcome.probed
@@ -428,7 +438,7 @@ def _estimate(
     for entry in new:
         status = outcome.status.get(entry.video_id, SUBTITLES_UNCHECKED)
         duration = entry.duration_sec
-        if status == SUBTITLES_MANUAL:
+        if status in (SUBTITLES_MANUAL, SUBTITLES_AUTO):
             transcription: int | None = 0
         elif rtf is None or duration is None:
             transcription = None
@@ -459,9 +469,10 @@ def _estimate(
     transcribe_audio = sum(
         v.duration_sec
         for v in videos
-        if v.subtitles != SUBTITLES_MANUAL and v.duration_sec is not None
+        if v.subtitles not in (SUBTITLES_MANUAL, SUBTITLES_AUTO) and v.duration_sec is not None
     )
     manual = sum(v.subtitles == SUBTITLES_MANUAL for v in videos)
+    auto = sum(v.subtitles == SUBTITLES_AUTO for v in videos)
     transcribe = sum(v.subtitles == SUBTITLES_TRANSCRIBE for v in videos)
     tokens = [v.est_input_tokens for v in videos]
     costs = [v.llm_cost_usd for v in videos]
@@ -479,8 +490,9 @@ def _estimate(
         transcription_sec=None if rtf is None else _scaled_int(transcribe_audio, rtf),
         probed=outcome.probed,
         manual_subtitles=manual,
+        auto_subtitles=auto,
         needs_transcription=transcribe,
-        unchecked=len(new) - manual - transcribe,
+        unchecked=len(new) - manual - auto - transcribe,
         probe_failed=outcome.failed,
         deadline_reached=outcome.deadline_reached,
         transcribe_audio_sec=transcribe_audio,

@@ -27,7 +27,7 @@ class _Conn:
     info = _Info()
 
 
-PROBE = SubtitleProbe(lambda timeout: None, lambda meta: False)  # type: ignore[arg-type,return-value]
+PROBE = SubtitleProbe(lambda timeout: None, lambda meta: None)  # type: ignore[arg-type,return-value]
 
 
 @pytest.fixture
@@ -102,10 +102,20 @@ def _meta(manual: tuple[str, ...], auto: tuple[str, ...]) -> VideoMeta:
     return VideoMeta("aaaaaaaaaaa", "UC", "t", "", 60, None, "en", None, manual, auto)
 
 
-def test_the_default_probe_wraps_the_adapters_and_only_a_manual_track_counts() -> None:
+def test_the_default_probe_wraps_the_adapters_and_reports_manual_then_auto() -> None:
     probe = routes_write.get_subtitle_probe()
 
     assert type(probe.metadata_factory(7.0)).__name__ == "YouTubeMetadata"
-    assert probe.has_manual(_meta(("en",), ())) is True
-    assert probe.has_manual(_meta((), ("en",))) is False  # auto-captions are only a fallback
-    assert probe.has_manual(_meta((), ())) is False
+    assert probe.has_captions(_meta(("en",), ())) == "manual"
+    assert probe.has_captions(_meta(("en",), ("en",))) == "manual"
+    assert probe.has_captions(_meta((), ("en",))) == "auto"  # captions first (#416)
+    assert probe.has_captions(_meta((), ())) is None
+
+
+def test_the_default_probe_ignores_auto_captions_when_they_are_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AUTO_CAPTION_FALLBACK", "0")
+    probe = routes_write.get_subtitle_probe()
+
+    assert probe.has_captions(_meta((), ("en",))) is None

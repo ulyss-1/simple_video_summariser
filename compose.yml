@@ -197,8 +197,10 @@ services:
       # Moves together with TRANSCRIBER_CPUS below: threads above the CPU
       # quota only oversubscribe it. 3 threads for the default 3.0 CPUs.
       WHISPER_THREADS: ${WHISPER_THREADS:-3}
+      # Captions first (#416). PREFER_WHISPER=1 ignores captions: not for production.
       PREFER_WHISPER: ${PREFER_WHISPER:-0}
       AUTO_CAPTION_FALLBACK: ${AUTO_CAPTION_FALLBACK:-1}
+      CAPTIONS_CHECK_TIMEOUT_SEC: ${CAPTIONS_CHECK_TIMEOUT_SEC:-30}
       SKIP_SHORTS: ${SKIP_SHORTS:-0}
       MAX_ATTEMPTS_TRANSCRIBE: ${MAX_ATTEMPTS_TRANSCRIBE:-2}
       AUDIO_KEEP: ${AUDIO_KEEP:-1}

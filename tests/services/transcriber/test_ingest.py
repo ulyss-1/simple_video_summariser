@@ -6,6 +6,8 @@ nothing touches the network or yt-dlp.
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
@@ -16,7 +18,6 @@ from common.chunking import chunk_strategy
 from common.errors import (
     Cancelled,
     PermanentSourceError,
-    RateLimitedError,
     ToolFailureError,
     TransientNetworkError,
 )
@@ -56,6 +57,8 @@ class Rig:
         conn: psycopg.Connection[Any],
         metadata: FakeMetadata,
         subtitles: FakeSubtitles,
+        *,
+        monotonic: Callable[[], float] | None = None,
         **settings: Any,
     ) -> None:
         self.conn = conn
@@ -69,6 +72,7 @@ class Rig:
             metadata=metadata,
             subtitles=subtitles,
             settings=self.settings,
+            monotonic=monotonic or time.monotonic,
         )
         self.ctx, self.logs = make_ctx()
 
@@ -234,8 +238,9 @@ def test_an_empty_manual_download_falls_through_to_transcribe(
     assert rig.transcripts() == []
     assert rig.chunk_count() == 0
     assert rig.jobs("analyze") == []
-    assert len(rig.jobs("transcribe")) == 1
-    assert rig.subtitles.fetch_calls == [(MANUAL_ID, "en", "manual")]
+    [(_, _, _, payload)] = rig.jobs("transcribe")
+    assert payload["captions_unavailable"] == "empty"
+    assert rig.subtitles.fetch_calls[0] == (MANUAL_ID, "en", "manual")
 
 
 def test_an_empty_manual_download_then_dead_transcribe_uses_auto_captions(
@@ -266,7 +271,16 @@ def test_no_captions_enqueues_transcribe_with_priority_and_language(
     rig.run(NO_CAPTIONS_ID, priority=3)
 
     assert rig.jobs("transcribe") == [
-        ("pending", "default", 3, {"language": meta.language, "duration_sec": meta.duration_sec})
+        (
+            "pending",
+            "default",
+            3,
+            {
+                "captions_unavailable": "none",
+                "language": meta.language,
+                "duration_sec": meta.duration_sec,
+            },
+        )
     ]
     assert rig.subtitles.fetch_calls == []
     assert rig.jobs("analyze") == []
@@ -292,7 +306,10 @@ def test_the_language_is_omitted_from_the_transcribe_payload_when_unknown(
 
     rig.run(NO_CAPTIONS_ID)
 
-    assert rig.jobs("transcribe")[0][3] == {"duration_sec": meta.duration_sec}
+    assert rig.jobs("transcribe")[0][3] == {
+        "captions_unavailable": "none",
+        "duration_sec": meta.duration_sec,
+    }
 
 
 def test_the_duration_is_omitted_from_the_transcribe_payload_when_unknown(
@@ -318,38 +335,68 @@ def test_prefer_whisper_skips_manual_subtitles_and_never_downloads_any(
     assert rig.transcripts() == []
 
 
-def test_auto_captions_are_not_downloaded_while_transcription_is_still_possible(
+def test_an_auto_only_video_gets_a_youtube_auto_transcript_and_no_whisper(
     conn: psycopg.Connection[Any],
 ) -> None:
     rig = auto_rig(conn)
 
-    rig.run(AUTO_ID)
+    rig.run(AUTO_ID, priority=2)
 
-    assert rig.subtitles.fetch_calls == []
-    assert len(rig.jobs("transcribe")) == 1
-    assert rig.transcripts() == []
+    assert rig.subtitles.fetch_calls == [(AUTO_ID, "en", "auto")]
+    assert rig.transcripts() == [
+        ("youtube_auto", "en", "none", {"track": "en", "kind": "auto"})
+    ]
+    assert rig.chunk_count() > 0
+    assert rig.jobs("analyze") == [("pending", ANALYZE_KEY, 2, {})]
+    assert rig.jobs("transcribe") == []
+    events = " ".join(str(r["event"]) for r in rig.logs.records("info"))
+    assert "auto-generated captions" in events
+    assert not rig.logs.records("warning")  # INFO, not a "last resort" warning
 
 
-@pytest.mark.parametrize("state", ["pending", "running", "done"])
-def test_a_transcribe_job_that_is_not_dead_is_not_replaced_by_auto_captions(
-    conn: psycopg.Connection[Any], state: str
+def test_an_empty_auto_download_enqueues_transcribe_with_the_reason(
+    conn: psycopg.Connection[Any],
 ) -> None:
-    rig = auto_rig(conn)
-    rig.add_transcribe_job(AUTO_ID, state)
+    rig = Rig(conn, FakeMetadata(fixture_meta("auto_only", AUTO_ID)), FakeSubtitles(auto=[]))
+
+    rig.run(AUTO_ID)
+
+    assert rig.transcripts() == []
+    [(_, _, _, payload)] = rig.jobs("transcribe")
+    assert payload["captions_unavailable"] == "empty"
+
+
+def test_auto_captions_are_ignored_when_the_setting_is_off(
+    conn: psycopg.Connection[Any],
+) -> None:
+    rig = auto_rig(conn, AUTO_CAPTION_FALLBACK=False)
 
     rig.run(AUTO_ID)
 
     assert rig.subtitles.fetch_calls == []
-    assert rig.transcripts() == []
+    [(_, _, _, payload)] = rig.jobs("transcribe")
+    assert payload["captions_unavailable"] == "auto_disabled"
+
+
+def test_prefer_whisper_with_both_tracks_records_the_override(
+    conn: psycopg.Connection[Any],
+) -> None:
+    rig = auto_rig(conn, PREFER_WHISPER=True)
+
+    rig.run(AUTO_ID)
+
+    assert rig.subtitles.fetch_calls == []
+    [(_, _, _, payload)] = rig.jobs("transcribe")
+    assert payload["captions_unavailable"] == "prefer_whisper"
 
 
 def test_an_already_active_transcribe_job_is_logged_at_info_and_the_run_succeeds(
     conn: psycopg.Connection[Any],
 ) -> None:
-    rig = auto_rig(conn)
-    rig.add_transcribe_job(AUTO_ID, "pending")
+    rig = Rig(conn, FakeMetadata(fixture_meta("no_captions", NO_CAPTIONS_ID)), FakeSubtitles())
+    rig.add_transcribe_job(NO_CAPTIONS_ID, "pending")
 
-    rig.run(AUTO_ID)
+    rig.run(NO_CAPTIONS_ID)
 
     assert len(rig.jobs("transcribe")) == 1
     messages = " ".join(str(r["event"]) for r in rig.logs.records("info"))
@@ -359,23 +406,23 @@ def test_an_already_active_transcribe_job_is_logged_at_info_and_the_run_succeeds
 def test_a_retry_transcribe_job_after_a_dead_one_counts_as_not_dead(
     conn: psycopg.Connection[Any],
 ) -> None:
-    rig = auto_rig(conn)
-    rig.add_transcribe_job(AUTO_ID, "dead")
-    rig.add_transcribe_job(AUTO_ID, "pending")
+    rig = Rig(conn, FakeMetadata(fixture_meta("no_captions", NO_CAPTIONS_ID)), FakeSubtitles())
+    rig.add_transcribe_job(NO_CAPTIONS_ID, "dead")
+    rig.add_transcribe_job(NO_CAPTIONS_ID, "pending")
 
-    rig.run(AUTO_ID)
+    rig.run(NO_CAPTIONS_ID)
 
     assert rig.subtitles.fetch_calls == []
-    assert rig.transcripts() == []
+    assert [j[0] for j in rig.jobs("transcribe")] == ["dead", "pending"]
 
 
 # --- AUTO_FALLBACK and NONE paths ------------------------------------------------
 
 
-def test_auto_captions_are_used_after_transcription_dead_letters(
+def test_auto_captions_are_used_after_transcription_dead_letters_under_prefer_whisper(
     conn: psycopg.Connection[Any],
 ) -> None:
-    rig = auto_rig(conn)
+    rig = auto_rig(conn, PREFER_WHISPER=True)
     rig.add_transcribe_job(AUTO_ID, "dead")
 
     rig.run(AUTO_ID, priority=2)
@@ -387,8 +434,6 @@ def test_auto_captions_are_used_after_transcription_dead_letters(
     assert rig.chunk_count() > 0
     assert rig.jobs("analyze") == [("pending", ANALYZE_KEY, 2, {})]
     assert len(rig.jobs("transcribe")) == 1  # only the dead one
-    warnings = " ".join(str(r["event"]) for r in rig.logs.records("warning"))
-    assert "degraded" in warnings
 
 
 def test_the_fallback_is_off_when_auto_caption_fallback_is_disabled(
@@ -526,7 +571,7 @@ def test_the_video_row_is_committed_before_the_subtitle_download_and_survives_it
     rig = Rig(
         conn,
         FakeMetadata(fixture_meta("manual_en", MANUAL_ID)),
-        FakeSubtitles(manual=TransientNetworkError("boom")),
+        FakeSubtitles(manual=RuntimeError("boom")),
     )
     visible_during_download: list[Any] = []
 
@@ -536,7 +581,7 @@ def test_the_video_row_is_committed_before_the_subtitle_download_and_survives_it
 
     rig.subtitles.on_fetch = check
 
-    with pytest.raises(TransientNetworkError):
+    with pytest.raises(RuntimeError):
         rig.run(MANUAL_ID)
 
     assert visible_during_download == [(1,)]
@@ -618,7 +663,6 @@ def test_a_permanent_subtitle_error_marks_the_video_after_the_upsert(
 
 ERRORS: list[Exception] = [
     TransientNetworkError("net"),
-    RateLimitedError("slow down"),
     ToolFailureError("tool"),
     RuntimeError("bug"),
 ]
@@ -638,7 +682,7 @@ def test_any_other_metadata_error_propagates_unchanged_and_writes_nothing(
     assert rig.nothing_written()
 
 
-@pytest.mark.parametrize("error", ERRORS, ids=lambda e: type(e).__name__)
+@pytest.mark.parametrize("error", [RuntimeError("bug")], ids=lambda e: type(e).__name__)
 @pytest.mark.parametrize("kind", ["manual", "auto"])
 def test_any_other_subtitle_error_propagates_unchanged_and_saves_no_transcript(
     conn: psycopg.Connection[Any], error: Exception, kind: str
@@ -656,7 +700,6 @@ def test_any_other_subtitle_error_propagates_unchanged_and_saves_no_transcript(
             FakeMetadata(fixture_meta("auto_only", AUTO_ID)),
             FakeSubtitles(auto=error),
         )
-        rig.add_transcribe_job(AUTO_ID, "dead")
         video_id = AUTO_ID
 
     with pytest.raises(type(error)) as info:
@@ -666,7 +709,23 @@ def test_any_other_subtitle_error_propagates_unchanged_and_saves_no_transcript(
     assert rig.scalar("SELECT count(*) FROM transcripts") == 0
     assert rig.chunk_count() == 0
     assert rig.jobs("analyze") == []
-    assert len(rig.jobs("transcribe")) == (1 if kind == "auto" else 0)
+    assert rig.jobs("transcribe") == []
+
+
+def test_a_failing_manual_track_falls_to_the_auto_track_before_whisper(
+    conn: psycopg.Connection[Any],
+) -> None:
+    rig = Rig(
+        conn,
+        FakeMetadata(fixture_meta("manual_en", MANUAL_ID)),
+        FakeSubtitles(manual=ToolFailureError("x"), auto=auto_segments()),
+    )
+
+    rig.run(MANUAL_ID)
+
+    assert [c[2] for c in rig.subtitles.fetch_calls] == ["manual", "auto"]
+    assert [row[0] for row in rig.transcripts()] == ["youtube_auto"]
+    assert rig.jobs("transcribe") == []
 
 
 # --- persist atomicity -----------------------------------------------------------

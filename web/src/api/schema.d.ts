@@ -815,6 +815,8 @@ export interface components {
             assumes: string;
             /** Audio Sec */
             audio_sec: number;
+            /** Auto Subtitles */
+            auto_subtitles: number;
             /** Deadline Reached */
             deadline_reached: boolean;
             llm: components["schemas"]["BackfillLlmEstimate"];

@@ -279,6 +279,10 @@
             "title": "Audio Sec",
             "type": "integer"
           },
+          "auto_subtitles": {
+            "title": "Auto Subtitles",
+            "type": "integer"
+          },
           "deadline_reached": {
             "title": "Deadline Reached",
             "type": "boolean"
@@ -350,6 +354,7 @@
           "assumes",
           "probed",
           "manual_subtitles",
+          "auto_subtitles",
           "needs_transcription",
           "unchecked",
           "probe_failed",

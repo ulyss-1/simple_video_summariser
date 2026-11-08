@@ -34,7 +34,7 @@ class _FakeMetadata:
 
 NO_PROBE = SubtitleProbe(  # a fake: never yt-dlp
     metadata_factory=lambda timeout: _FakeMetadata(),
-    has_manual=lambda meta: False,
+    has_captions=lambda meta: None,
 )
 ENTRIES = tuple(CatalogEntry(f"rt{i:09d}", f"secret title {i}", 60) for i in range(3))
 

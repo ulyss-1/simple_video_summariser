@@ -59,7 +59,7 @@ def test_no_connection_is_checked_out_while_listing_and_probing() -> None:
             during["probe"] = _checked_out(pool)
             return video_id
 
-    probe = SubtitleProbe(lambda timeout: Meta(), lambda meta: False)  # type: ignore[arg-type,return-value]
+    probe = SubtitleProbe(lambda timeout: Meta(), lambda meta: None)  # type: ignore[arg-type,return-value]
     provider = deps.get_conn_provider(request_with(pool))
 
     result = backfill(provider, PostgresQueue, Catalog(), CHANNEL, limit=5, dry_run=True, probe=probe)

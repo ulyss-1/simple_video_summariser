@@ -128,6 +128,7 @@ def test_defaults_match_the_architecture_table() -> None:
     assert s.WHISPER_THREADS == 0
     assert s.PREFER_WHISPER is False
     assert s.AUTO_CAPTION_FALLBACK is True
+    assert s.CAPTIONS_CHECK_TIMEOUT_SEC == 30
     assert s.SKIP_SHORTS is False  # owner decision on #80: include Shorts
     assert s.AUDIO_KEEP is True
     assert s.AUDIO_TTL_DAYS == 30
@@ -159,7 +160,7 @@ def test_every_architecture_variable_is_a_field_except_transcriber_cpus() -> Non
         "GROQ_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "CEREBRAS_API_KEY", "PUTER_AUTH_TOKEN",
         "PROMPT_VERSION", "CHUNK_SEC", "OVERLAP_SEC", "WHISPER_MODEL",
         "WHISPER_COMPUTE", "WHISPER_THREADS", "PREFER_WHISPER",
-        "AUTO_CAPTION_FALLBACK", "AUDIO_KEEP", "AUDIO_TTL_DAYS",
+        "AUTO_CAPTION_FALLBACK", "CAPTIONS_CHECK_TIMEOUT_SEC", "AUDIO_KEEP", "AUDIO_TTL_DAYS",
         "AUDIO_MAX_GB", "POLL_INTERVAL_SEC", "HEARTBEAT_SEC", "CANCEL_POLL_SEC",
         "REAP_AFTER_SEC", "MAX_ATTEMPTS_TRANSCRIBE", "LOG_LEVEL",
         "LOG_FORMAT", "AUDIO_DIR", "YTDLP_COOKIE_FILE",
@@ -575,6 +576,27 @@ def test_log_format_rejects_anything_else(value: str) -> None:
         build_settings(DATABASE_URL=DB_URL, LOG_FORMAT=value)
 
     assert _errors_for(exc_info.value, "LOG_FORMAT")
+
+
+@pytest.mark.parametrize("raw", ["4", "121", "0", "-1", "abc"])
+def test_captions_check_timeout_outside_5_to_120_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, raw: str
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", DB_URL)
+    monkeypatch.setenv("CAPTIONS_CHECK_TIMEOUT_SEC", raw)
+
+    with pytest.raises(ValidationError):
+        get_settings()
+
+
+@pytest.mark.parametrize("raw", ["5", "30", "120"])
+def test_captions_check_timeout_accepts_the_range_edges(
+    monkeypatch: pytest.MonkeyPatch, raw: str
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", DB_URL)
+    monkeypatch.setenv("CAPTIONS_CHECK_TIMEOUT_SEC", raw)
+
+    assert get_settings().CAPTIONS_CHECK_TIMEOUT_SEC == int(raw)
 
 
 # --- boolean flags ------------------------------------------------------------
