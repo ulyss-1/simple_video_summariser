@@ -342,7 +342,7 @@ def test_an_auto_only_video_gets_a_youtube_auto_transcript_and_no_whisper(
 
     rig.run(AUTO_ID, priority=2)
 
-    assert rig.subtitles.fetch_calls == [(AUTO_ID, "en", "auto")]
+    assert rig.subtitles.fetch_calls == [(AUTO_ID, "en-orig", "auto")]
     assert rig.transcripts() == [
         ("youtube_auto", "en", "none", {"track": "en", "kind": "auto"})
     ]
@@ -427,7 +427,7 @@ def test_auto_captions_are_used_after_transcription_dead_letters_under_prefer_wh
 
     rig.run(AUTO_ID, priority=2)
 
-    assert rig.subtitles.fetch_calls == [(AUTO_ID, "en", "auto")]
+    assert rig.subtitles.fetch_calls == [(AUTO_ID, "en-orig", "auto")]
     assert rig.transcripts() == [
         ("youtube_auto", "en", "none", {"track": "en", "kind": "auto"})
     ]
