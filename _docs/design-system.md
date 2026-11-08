@@ -315,6 +315,16 @@ stops at its next checkpoint". Deleting a
 video that is processing adds "Processing is stopped and any running work is
 discarded." to the delete confirmation.
 
+#### Transcribe with Whisper on the video page (#415)
+
+Same pattern. The video page shows `Transcript source: {label}` whenever a transcript
+exists; for `youtube_auto` it is followed by `Transcribe with Whisper`, `disabled` while a
+job is active. It opens an inline sentence: "Transcribe {title} with Whisper? A
+transcription can take hours of CPU. The auto-generated captions are kept." with
+`Confirm transcription` and `Cancel`. Focus moves to `Confirm transcription`; `Cancel` or
+`Escape` returns it to the button. The confirmation closes when the request settles; an
+error shows a fixed `role="alert"` text.
+
 #### Restart a cancelled video (#326)
 
 Same pattern, on the video detail page. `Restart processing` is shown exactly when

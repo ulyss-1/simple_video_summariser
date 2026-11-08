@@ -5399,6 +5399,45 @@
         "summary": "Get Video Render"
       }
     },
+    "/videos/{video_id}/retranscribe": {
+      "post": {
+        "description": "Transcribe a video that has auto-generated captions with Whisper, on demand (#415).\n\nOnly enqueues one ``transcribe`` job carrying ``{\"force_whisper\": true}``: the worker\nruns Whisper whatever ``PREFER_WHISPER`` and the captions say, saves a ``whisper``\ntranscript next to the caption one (nothing is deleted) and enqueues ``analyze``.\n``transcript_rank()`` makes Whisper beat ``youtube_auto`` but not ``youtube_manual``,\nso a video whose best transcript is manual (or already Whisper) is refused with 409.",
+        "operationId": "post_video_retranscribe_videos__video_id__retranscribe_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "video_id",
+            "required": true,
+            "schema": {
+              "title": "Video Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VideoSubmission"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "No such video"
+          },
+          "409": {
+            "description": "No transcript yet, the best transcript is already manual captions or Whisper (manual outranks Whisper, so it is refused), or the video has an active job"
+          },
+          "422": {
+            "description": "Malformed video ID"
+          }
+        },
+        "summary": "Post Video Retranscribe"
+      }
+    },
     "/videos/{video_id}/transcript": {
       "get": {
         "description": "One page of the best transcript's segments (D2, architecture.md 9).",

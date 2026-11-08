@@ -152,6 +152,16 @@ def active_job(
     return ActiveJob(id=int(row[0]), state=str(row[1]), priority=int(row[2]), forced=bool(row[3]))
 
 
+def has_active_job(conn: psycopg.Connection[Any], video_id: str) -> bool:
+    """Whether ``video_id`` has a ``pending`` or ``running`` job of any kind (#415). Read-only."""
+    row = conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM jobs WHERE video_id = %s AND state IN ('pending', 'running'))",
+        (video_id,),
+    ).fetchone()
+    assert row is not None
+    return bool(row[0])
+
+
 def queue_depth(conn: psycopg.Connection[Any]) -> dict[tuple[str, str], int]:
     """Number of jobs per ``(kind, state)``, for ``/healthz`` (#39) and ``/metrics`` (#60).
 

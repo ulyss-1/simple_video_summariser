@@ -350,6 +350,28 @@ def test_a_youtube_transcript_does_not_short_circuit_transcription(
     )
 
 
+def test_a_forced_job_runs_whisper_over_captions_and_prefer_whisper_off(
+    make_rig: Callable[..., Rig],
+) -> None:
+    """#415: the handler never consults captions or PREFER_WHISPER; the flag is recorded."""
+    rig = make_rig(PREFER_WHISPER=False)
+    save_transcript(rig.conn, VID, "youtube_auto", "en", "none", segs(), None)
+    rig.conn.commit()
+
+    rig.run(payload={"force_whisper": True, "language": "en"})
+
+    assert len(rig.audio.calls) == 1
+    assert len(rig.transcriber.calls) == 1
+    assert rig.rows("SELECT source FROM transcripts ORDER BY source") == [
+        ("whisper",),
+        ("youtube_auto",),
+    ]
+    assert rig.rows("SELECT engine_meta -> 'requested' FROM transcripts WHERE source = 'whisper'") == [
+        ("retranscribe",)
+    ]
+    assert len(rig.analyze_jobs()) == 1
+
+
 # --- audio and media -------------------------------------------------------------------
 
 
