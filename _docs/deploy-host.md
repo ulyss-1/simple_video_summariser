@@ -336,6 +336,14 @@ analysis backlog the transcriptions start when it drains. A remote provider
 (`SUMMARIZER=anthropic`, or a free-tier answer) takes no part. The lock is per
 database, so it covers one deployment, not an Ollama shared with another host.
 
+**This host runs production only (#410).** Dev runs on the owner's WSL machine,
+never on this host, so no second compose stack shares this Ollama, these 8 CPUs
+or this 14 GB of RAM, and the per-database lock above covers everything that
+runs here. Do not start a `ytdigest-dev` stack, a Whisper transcription or a
+local-model analysis from a dev checkout on this host. Two stacks here would
+not exclude each other (each has its own Postgres), and two transcribers plus
+the model exceed RAM.
+
 **Free-tier local fallback (#392).** With `FREE_LLM_LOCAL_FALLBACK=1` run
 `ollama pull gemma4:e4b`. The analyzer reaches the same `OLLAMA_HOST` through the
 same ufw rule as `SUMMARIZER=ollama`; `ops/host/preflight.sh`'s
