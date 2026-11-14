@@ -1043,6 +1043,8 @@ Compose volumes.
 
 ## 7. Cloudflare Tunnel into k3s
 
+For the compose-era tunnel (opt-in `compose.tunnel.yml`), see #426 and `_docs/deploy-host.md` "Public access".
+
 Sources: developers.cloudflare.com Kubernetes deployment guide, remote tunnel
 creation guide, Access policies (fetched 2026-11-07).
 
