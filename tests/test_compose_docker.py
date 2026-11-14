@@ -21,6 +21,7 @@ import re
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -57,6 +58,9 @@ _HERMETIC_UNSET = (
     "PROMPT_VERSION",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_API_KEY_FILE",
+    "PUBLIC_HOSTNAME",
+    "CLOUDFLARED_TUNNEL_ID",
+    "CLOUDFLARED_CREDENTIALS_FILE",
 )
 
 ConfigResolver = Callable[..., subprocess.CompletedProcess[str]]
@@ -590,3 +594,79 @@ def test_prod_config_has_none_of_the_dev_overlay(
     assert (ports[0]["host_ip"], str(ports[0]["published"]), ports[0]["target"]) == (
         "127.0.0.1", "8080", 8080
     )  # fmt: skip
+
+
+TUNNEL = ("compose.yml", "compose.tunnel.yml")
+TUNNEL_ENV = {
+    "PUBLIC_HOSTNAME": "ytdigest.example.test",
+    "CLOUDFLARED_TUNNEL_ID": "tunnel-id-for-test",
+    "CLOUDFLARED_CREDENTIALS_FILE": "/nonexistent/credentials-for-test.json",
+}
+
+
+def test_tunnel_variables_do_not_change_the_default_model(
+    compose_config: ConfigResolver,
+) -> None:
+    plain = compose_config(PROD, json_format=False)
+    with_vars = compose_config(PROD, json_format=False, env=TUNNEL_ENV)
+    assert plain.returncode == 0, plain.stderr
+    assert with_vars.stdout == plain.stdout
+    assert "warning" not in with_vars.stderr.lower()
+    assert "cloudflared" not in plain.stdout
+    dev = compose_config(("compose.yml", "compose.override.yml"), json_format=False, env=TUNNEL_ENV)
+    assert "cloudflared" not in dev.stdout
+
+
+@pytest.mark.parametrize("missing", sorted(TUNNEL_ENV))
+@pytest.mark.parametrize("empty", [False, True])
+def test_tunnel_overlay_names_a_missing_variable(
+    compose_config: ConfigResolver, missing: str, empty: bool
+) -> None:
+    env = dict(TUNNEL_ENV)
+    if empty:
+        env[missing] = ""
+    else:
+        del env[missing]
+    result = compose_config(TUNNEL, json_format=False, env=env)
+    assert result.returncode != 0
+    assert missing in result.stderr
+
+
+def test_tunnel_model_shape(compose_config: ConfigResolver) -> None:
+    result = compose_config(TUNNEL, env=TUNNEL_ENV)
+    model = json.loads(result.stdout)
+    services: dict[str, Any] = _services(result)
+    assert "cloudflared" in services
+    cf = services["cloudflared"]
+    assert set(cf["networks"]) == {"tunnel"}
+    assert "ports" not in cf
+    assert cf["deploy"]["replicas"] == 1
+    assert [n for n, s in services.items() if "tunnel" in s.get("networks", {})] == [
+        "cloudflared",
+        "web",
+    ]
+    assert set(services["web"]["networks"]) == {"edge", "tunnel"}
+    ports = {n: s["ports"] for n, s in services.items() if s.get("ports")}
+    assert list(ports) == ["web"]
+    assert len(ports["web"]) == 1
+    assert ports["web"][0]["host_ip"] == "127.0.0.1"
+    assert ports["web"][0]["target"] == 8080
+    holders = [n for n, s in services.items() if "cloudflared_credentials" in str(s.get("secrets", ""))]
+    assert holders == ["cloudflared"]
+    assert "TUNNEL_TOKEN" not in result.stdout
+    assert "sha256:" in str(cf["image"])
+    assert model["configs"]["cloudflared_config"]["content"]
+
+
+def test_tunnel_ingress_follows_only_the_hostname_variable(
+    compose_config: ConfigResolver,
+) -> None:
+    first = compose_config(TUNNEL, json_format=False, env=TUNNEL_ENV).stdout
+    other = dict(TUNNEL_ENV, PUBLIC_HOSTNAME="dev.example.test")
+    second = compose_config(TUNNEL, json_format=False, env=other).stdout
+    assert first != second
+    assert first.replace("ytdigest.example.test", "dev.example.test") == second
+    rules = re.findall(r"^\s+- (?:hostname: (\S+)|service: (\S+))$", first, re.MULTILINE)
+    assert rules[0] == ("ytdigest.example.test", "")
+    assert "service: http://web:8080" in first
+    assert rules[-1] == ("", "http_status:404")

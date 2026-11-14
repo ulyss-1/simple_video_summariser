@@ -231,9 +231,9 @@ Then edit `.env`:
 
 ## 7. Networking and egress
 
-Only the reverse proxy's ports are open inbound (the proxy itself is #141);
-`web` stays on `127.0.0.1:8080` (§11.4, D13). Outbound HTTPS the host and
-containers need:
+No inbound port is open; `web` stays on `127.0.0.1:8080` (§11.4, D13), and the
+optional tunnel connector (#426, "Public access") dials out. Outbound the host
+and containers need:
 
 | Destination                                                     | For                                                                    |
 | --------------------------------------------------------------- | ---------------------------------------------------------------------- |
@@ -244,6 +244,7 @@ containers need:
 | `registry.npmjs.org`                                            | web image build                                                        |
 | `registry-1.docker.io`                                          | base images                                                            |
 | `api.anthropic.com`                                             | only when `SUMMARIZER=anthropic`                                       |
+| Cloudflare edge: TCP and UDP 7844, TCP 443                      | only with `compose.tunnel.yml` (cloudflared); allow outbound in the host firewall |
 
 ---
 
@@ -432,7 +433,7 @@ docker compose ps          # services healthy
 `web` runs nginx as a non-root user (`nginx/nginx-unprivileged:1.30-alpine`)
 on container port 8080 and is published on `127.0.0.1:8080` only
 (`127.0.0.1:8080:8080`); put it behind the host reverse
-proxy (#141) for TLS. Updates are `git pull` of `master`, then
+proxy or the opt-in tunnel overlay ("Public access", #426) for TLS. Updates are `git pull` of `master`, then
 `docker compose run --rm migrate` (if there is a new revision) and
 `docker compose -f compose.yml up -d --build`. A red "base image digest check"
 run means bump the stale base-image digest (nginx, node, python or postgres)
@@ -630,46 +631,72 @@ deletes it anyway.
 
 ## Public access (Cloudflare Tunnel)
 
-Optional. The tunnel is a **host systemd service** (`cloudflared.service`),
-not a compose service: `web` stays on `127.0.0.1:8080` and `cloudflared`
-dials out to Cloudflare and forwards to it. Nothing listens inbound. Do not
-also run a second connector for the same tunnel in a container.
+Optional (#426). `cloudflared` is a service of the compose stack, defined in
+the opt-in overlay `compose.tunnel.yml`; it is not a host systemd unit. It
+dials out to Cloudflare and forwards to `http://web:8080` over a private
+`tunnel` network that only `web` and `cloudflared` join (it cannot reach `api`
+or `db`). `web` still publishes only `127.0.0.1:${WEB_HOST_PORT-8080}`.
+Nothing listens inbound.
 
-The service runs `cloudflared --no-autoupdate --config /etc/cloudflared/config.yml
-tunnel run`. The config holds no secrets of its own; the credentials JSON
-sits next to it and is root-only:
+**One tunnel per environment, one connector per tunnel.** Prod, dev and a
+future staging each have their own tunnel, hostname and credentials file. Two
+connectors on one tunnel load-balance traffic between machines, so **never
+copy a credentials JSON to a second machine**. Do not run a host
+`cloudflared.service` next to the container: remove the old host-side service
+and its `/etc/cloudflared` config (owner action on the host).
 
-```yaml
-tunnel: <tunnel-id>
-credentials-file: /etc/cloudflared/<tunnel-id>.json
+Variables (`.env`, all empty by default, which means the tunnel is off):
 
-ingress:
-  - hostname: dev-ytdigest.devopsdojo.click
-    service: http://127.0.0.1:8080
-  - service: http_status:404 # required catch-all
-```
+| Variable                       | Value                                                   |
+| ------------------------------ | ------------------------------------------------------- |
+| `PUBLIC_HOSTNAME`              | this environment's public hostname                      |
+| `CLOUDFLARED_TUNNEL_ID`        | ID printed by `cloudflared tunnel create`               |
+| `CLOUDFLARED_CREDENTIALS_FILE` | host path of the credentials JSON, outside the checkout |
 
-One-time setup, on a machine where `cloudflared tunnel login` was done for
-the zone:
+The credentials JSON is mounted as a compose secret on `cloudflared` only.
+Compose keeps the host file's owner and mode and ignores `uid/gid/mode`, and
+the image runs as a non-root user (uid 65532), so the file must be readable by
+that user: `sudo chown 65532:65532 <file>` and `sudo chmod 400 <file>`.
+Tokens (`TUNNEL_TOKEN`) are not used: the routes live in the rendered config,
+not in the dashboard.
+
+Enable by listing the overlay explicitly, or once in `.env`
+(`COMPOSE_FILE=compose.yml:compose.tunnel.yml`):
 
 ```bash
-cloudflared tunnel create ytdigest
-cloudflared tunnel route dns <tunnel-id> dev-ytdigest.devopsdojo.click
-# route by ID: right after `create`, the name can briefly be "not found"
-sudo cp ~/.cloudflared/<tunnel-id>.json /etc/cloudflared/   # then write config.yml above
-sudo chmod 600 /etc/cloudflared/<tunnel-id>.json
-sudo systemctl enable --now cloudflared
+docker compose -f compose.yml -f compose.tunnel.yml config >/dev/null  # names a missing variable
+docker compose -f compose.yml -f compose.tunnel.yml up -d
+docker compose -f compose.yml -f compose.tunnel.yml ps cloudflared     # healthy
+docker compose -f compose.yml -f compose.tunnel.yml logs cloudflared
 ```
 
-Check: `systemctl status cloudflared`, `cloudflared tunnel list` (the tunnel
-shows connections), then `curl -I https://dev-ytdigest.devopsdojo.click/`.
+Never use `down -v`. Without the overlay every compose command behaves as
+before.
 
-The app has no login of its own, so **put a Cloudflare Access policy in front
-before sharing the hostname**. In the Zero Trust dashboard (not in this repo):
-Access -> Applications -> Add -> Self-hosted, domain
-`dev-ytdigest.devopsdojo.click`, policy "Allow" for your email with the
-one-time PIN login method. Until that exists the URL is open to anyone, and
+### Owner actions (on your own machine; agents never run these)
+
+```bash
+cloudflared tunnel login
+cloudflared tunnel create <tunnel-name>   # prints the tunnel ID; writes ~/.cloudflared/<tunnel-id>.json
+cloudflared tunnel route dns <tunnel-id> <hostname>
+# route by ID: right after `create`, the name can briefly be "not found"
+```
+
+Copy the JSON to the one host that runs this environment's stack, set the
+three variables, and enable the overlay. Then in the Zero Trust dashboard (not
+in this repo): Access -> Applications -> Add -> Self-hosted, the hostname,
+**one Allow policy listing exact emails** (no Everyone, no email domain, no
+Bypass), and hostname-scoped HSTS. The app has no login of its own, so do this
+before sharing the hostname: until then the URL is open to anyone, and
 `POST /api/videos` spends transcription and LLM time.
 
-Revoke: `sudo systemctl disable --now cloudflared`, then
-`cloudflared tunnel delete ytdigest` and remove the DNS record.
+### Rollback
+
+1. `docker compose -f compose.yml -f compose.tunnel.yml stop cloudflared`
+   (or `up -d` without the overlay). The stack keeps running on loopback.
+2. Remove the DNS route in the Cloudflare dashboard.
+3. Remove the Access application.
+4. `cloudflared tunnel delete <tunnel-id>` and delete the credentials file.
+
+Dev on WSL (`dev-ytdigest...`) uses its own tunnel the same way, or no tunnel.
+The k3s plan is `_docs/k3s-rollout.md` (#210).
