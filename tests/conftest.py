@@ -61,7 +61,7 @@ testcontainers_config.ryuk_disabled = True
 
 # Literal copy of the `db` image in compose.yml (architecture.md 11.3, 11.4, 16.1: >=18.6).
 # tests/test_base_image_copies.py fails until the two agree.
-_POSTGRES_IMAGE = "postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5"
+_POSTGRES_IMAGE = "postgres:18-alpine@sha256:0115267ab5a509022df9319c77be365cef335adb71556c75f60f5360ee247e71"
 _DEFAULT_DOCKER_ENDPOINT = "unix:///var/run/docker.sock"
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 

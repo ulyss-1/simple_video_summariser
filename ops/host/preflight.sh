@@ -8,7 +8,7 @@ set -u
 # Literal copy of the last digest-pinned FROM (the `deps` stage) in ops/Dockerfile.backend; a plain
 # assignment so no ambient variable replaces it. tests/test_base_image_copies.py
 # fails until the two agree.
-probe_image="python:3.14-slim@sha256:cd89c30eda26ee911a4611b18680086e0ea42e6f5f8cbe653d07fa7958c9cec8"
+probe_image="python:3.14-slim@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f"
 ENV_FILE="${ENV_FILE:-.env}"
 PREFLIGHT_MEMINFO="${PREFLIGHT_MEMINFO:-/proc/meminfo}"
 
