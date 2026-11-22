@@ -26,7 +26,7 @@ from tests.adapters.transcription.test_faster_whisper import (
 )
 from tests.adapters.transcription.test_faster_whisper_child_process import (
     AUDIO,
-    DEADLINE_SEC,
+    INFRA_DEADLINE_SEC,
     assert_gone,
     wait_for,
 )
@@ -214,7 +214,7 @@ def test_the_real_child_exits_by_itself_when_its_stdin_closes(
         assert proc.stdin is not None
         proc.stdin.close()  # the parent died without killing anyone
 
-        assert proc.wait(timeout=DEADLINE_SEC) == 3
+        assert proc.wait(timeout=INFRA_DEADLINE_SEC) == 3
     finally:
         if proc.poll() is None:
             proc.kill()
@@ -244,7 +244,7 @@ def test_watch_parent_fires_when_stdin_reaches_eof() -> None:
 
     os.close(write_fd)
 
-    assert gone.wait(DEADLINE_SEC)
+    assert gone.wait(INFRA_DEADLINE_SEC)
     os.close(read_fd)
 
 
@@ -254,6 +254,6 @@ def test_watch_parent_fires_when_the_parent_pid_changes() -> None:
 
     watch_parent(read_fd, 0.01, gone.set, parent_pid=os.getppid() + 1)
 
-    assert gone.wait(DEADLINE_SEC)
+    assert gone.wait(INFRA_DEADLINE_SEC)
     os.close(read_fd)
     os.close(write_fd)
