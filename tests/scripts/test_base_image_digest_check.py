@@ -24,6 +24,7 @@ CHECKED_FILES = [
     "ops/Dockerfile.bakeoff",
     "compose.yml",
     "compose.override.yml",
+    "compose.tunnel.yml",
 ]
 
 
@@ -518,7 +519,7 @@ def _real(path: str) -> list[object]:
     return list(check.pinned_references(text))
 
 
-def test_the_repository_pins_exactly_the_eight_expected_references() -> None:
+def test_the_repository_pins_exactly_the_nine_expected_references() -> None:
     refs = [r for path in CHECKED_FILES for r in _real(path)]
 
     found = sorted((r.name, r.tag) for r in refs)  # type: ignore[attr-defined]
@@ -528,6 +529,7 @@ def test_the_repository_pins_exactly_the_eight_expected_references() -> None:
         + [("library/python", "3.14-slim")] * 3
         + [("library/postgres", "18-alpine")]
         + [("denoland/deno", "bin-2.9.8")]  # the backend's Deno stage (#134)
+        + [("cloudflare/cloudflared", "2026.11.0")]  # the tunnel overlay (#426)
     )
     digests: dict[tuple[str, str], set[str]] = {}
     for r in refs:
@@ -1200,7 +1202,10 @@ def test_the_same_option_twice_is_not_a_fault(tmp_path: Path, capsys: pytest.Cap
 # -- coverage guard: every pinned repository is opted in or exempt ----------------
 
 #: Pinned repositories with no release line or end-of-life calendar.
-EOL_EXEMPT = {"denoland/deno": "exact-version binary stage (#134); the digest check covers it"}
+EOL_EXEMPT = {
+    "denoland/deno": "exact-version binary stage (#134); the digest check covers it",
+    "cloudflare/cloudflared": "exact-version tunnel client (#426); the digest check covers it",
+}
 
 
 def _run_line_options() -> tuple[list[str], list[tuple[str, str]]]:
