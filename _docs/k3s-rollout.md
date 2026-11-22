@@ -537,7 +537,7 @@ Common rules:
 
 Postgres (`StatefulSet`, 1 replica):
 
-- Image `postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5`
+- Image `postgres:18-alpine@sha256:0115267ab5a509022df9319c77be365cef335adb71556c75f60f5360ee247e71`
   (the same digest as `compose.yml`).
 - `volumeClaimTemplates` with `storageClassName: local-path`, `10Gi`, mounted
   at **`/var/lib/postgresql`** (not `/data`, not `.../data`: the compose.yml

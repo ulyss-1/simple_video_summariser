@@ -152,7 +152,7 @@ def test_compose_run_applies_its_default_non_root_user(
 def test_python_3_14_and_the_pinned_yt_dlp() -> None:
     assert _ok("python --version").startswith("Python 3.14.")
     assert _ok("which python") == "/opt/venv/bin/python"
-    assert _ok("python -m yt_dlp --version") == "2026.10.21"
+    assert _ok("python -m yt_dlp --version") == "2026.10.26"
 
 
 @pytest.mark.parametrize("tool", ["ffmpeg", "ffprobe"])
@@ -162,7 +162,7 @@ def test_ffmpeg_tools_run(tool: str) -> None:
 
 def test_harness_interpreter_has_only_yt_dlp() -> None:
     frozen = _ok("pip freeze").splitlines()
-    assert frozen == ["yt-dlp==2026.10.21"]
+    assert frozen == ["yt-dlp==2026.10.26"]
     result = _sh("/opt/venv/bin/python -c 'import faster_whisper'")
     assert result.returncode != 0
     assert "ModuleNotFoundError" in result.stderr

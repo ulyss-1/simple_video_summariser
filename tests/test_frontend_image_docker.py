@@ -35,8 +35,8 @@ pytestmark = [pytest.mark.integration, pytest.mark.image]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STUB = REPO_ROOT / "tests" / "fixtures" / "stub_api.py"
-BASE = "nginx/nginx-unprivileged:1.30-alpine@sha256:2daef144b574804198caccc4041819fa1801ecd5df2252a39646bfa2b1ff3bea"
-STUB_IMAGE = "python:3.14-slim@sha256:cd89c30eda26ee911a4611b18680086e0ea42e6f5f8cbe653d07fa7958c9cec8"
+BASE = "nginx/nginx-unprivileged:1.30-alpine@sha256:0c53a1f2890c3526bfd201440f0fd3970e5b78f80630f58284aad0d34b5ec7bd"
+STUB_IMAGE = "python:3.14-slim@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f"
 CSP = (
     "default-src 'self'; frame-src https://www.youtube-nocookie.com; "
     "img-src 'self' https://i.ytimg.com data:; style-src 'self' 'unsafe-inline'; "

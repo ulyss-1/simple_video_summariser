@@ -1620,7 +1620,7 @@ toolchain.
 FROM denoland/deno:bin-2.9.8@sha256:b507583d3c68ba69f3ed2ce5969ae5b8b70f43421c781279c7aea06435263543 AS deno
 
 # ---- builder ----
-FROM python:3.14-slim@sha256:cd89c30eda26ee911a4611b18680086e0ea42e6f5f8cbe653d07fa7958c9cec8 AS builder
+FROM python:3.14-slim@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f AS builder
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential && rm -rf /var/lib/apt/lists/*
@@ -1631,7 +1631,7 @@ RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip check
 
 # ---- deps: runtime base, no application code ----
-FROM python:3.14-slim@sha256:cd89c30eda26ee911a4611b18680086e0ea42e6f5f8cbe653d07fa7958c9cec8 AS deps
+FROM python:3.14-slim@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f AS deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg curl && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /opt/venv /opt/venv
@@ -1670,7 +1670,7 @@ build tooling. A checksum-verified release binary needs `unzip` in a builder
 stage for no gain, and the `deno` PyPI wheel would be a third dependency. The
 `COPY --from=deno` sits in the `deps` stage, which holds no application code,
 so the backend and whisper images share the layer and a code change keeps it
-cached. Deno 2.9.8 is what yt-dlp 2026.10.21 asks for (`deno>=2.9.8`) and
+cached. Deno 2.9.8 is what yt-dlp 2026.10.26 asks for (`deno>=2.9.8`) and
 `yt-dlp-ejs` 0.8.0 is what its `default` extra pins; the three move together
 when yt-dlp is bumped (#68, checked by #369). Deno keeps its cache under the
 `app` user's home, so nothing needs to be made world-writable. D12's "no Node
@@ -1836,7 +1836,7 @@ Whisper child (#324) inherits it unchanged, like `HF_HOME` and `CT2_VERBOSE`.
 
 ```dockerfile
 # ---- build ----
-FROM node:24-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS build
+FROM node:24-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS build
 WORKDIR /src
 COPY web/package.json web/package-lock.json ./
 RUN npm ci                      # ci, not install — respects the lockfile exactly
@@ -1845,7 +1845,7 @@ ARG VITE_API_BASE=/api
 RUN npm run build               # prebuild runs gen:api first → /src/dist
 
 # ---- runtime ----
-FROM nginx/nginx-unprivileged:1.30-alpine@sha256:2daef144b574804198caccc4041819fa1801ecd5df2252a39646bfa2b1ff3bea
+FROM nginx/nginx-unprivileged:1.30-alpine@sha256:0c53a1f2890c3526bfd201440f0fd3970e5b78f80630f58284aad0d34b5ec7bd
 USER root                       # build-time cleanup only; nothing starts as root
 RUN rm -rf /usr/share/nginx/html/*   # the base image's own index.html, 50x.html
 COPY --from=build /src/dist /usr/share/nginx/html
@@ -2072,7 +2072,7 @@ x-logging: &logging
 
 services:
   db:
-    image: postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5   # >=18.6 (architecture.md 16.1)
+    image: postgres:18-alpine@sha256:0115267ab5a509022df9319c77be365cef335adb71556c75f60f5360ee247e71   # >=18.6 (architecture.md 16.1)
     environment:
       POSTGRES_USER: ytdigest
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
