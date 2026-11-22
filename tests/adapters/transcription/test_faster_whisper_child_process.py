@@ -36,7 +36,12 @@ from common.models import AudioRef
 
 FAKE_CHILD = Path(__file__).with_name("fake_child.py")
 AUDIO = AudioRef(rel_path="ab/abc12345678.opus", bytes=1234, duration_sec=10.0)
+# What the code under test must achieve (a cancel kills the group, the reap
+# timeout): a few seconds, an assertion about the product.
 DEADLINE_SEC = 5.0
+# How long a test waits for infrastructure (a Python child starting, a thread
+# scheduled, a gate crossed) on a loaded CI runner. Only a hang reaches it.
+INFRA_DEADLINE_SEC = 60.0
 POLL_SEC = 0.01
 
 
@@ -75,7 +80,7 @@ class Rig:
 
 
 def wait_for(condition: Callable[[], bool], what: str) -> None:
-    deadline = time.monotonic() + DEADLINE_SEC
+    deadline = time.monotonic() + INFRA_DEADLINE_SEC
     while not condition():
         if time.monotonic() > deadline:
             raise AssertionError(f"timed out waiting for {what}")
@@ -381,7 +386,10 @@ def test_a_dead_child_is_reported_as_its_death_even_when_cancel_is_true(
         if not first_call.is_set():
             first_call.set()
             parked.set()
-            assert release.wait(DEADLINE_SEC), "the test never released the parent"
+            # The test thread starts a child, waits for it, opens the gate and
+            # waits for its death and the reader before it releases us: that
+            # sequence is infrastructure time, not the product's budget.
+            assert release.wait(INFRA_DEADLINE_SEC), "the test never released the parent"
             return False
         return dead_and_queued.is_set()
 
@@ -407,7 +415,7 @@ def test_a_dead_child_is_reported_as_its_death_even_when_cancel_is_true(
     )
     dead_and_queued.set()  # the cancel flag is true from here on
     release.set()
-    worker.join(DEADLINE_SEC)
+    worker.join(INFRA_DEADLINE_SEC)
 
     assert not worker.is_alive(), "transcribe never returned"
     assert len(outcome) == 1
