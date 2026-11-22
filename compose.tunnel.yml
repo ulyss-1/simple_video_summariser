@@ -1,0 +1,57 @@
+# Opt-in Cloudflare Tunnel connector (#426, architecture.md 11.4). Merged
+# explicitly, never by default:
+#   docker compose -f compose.yml -f compose.tunnel.yml up -d
+# Without this file nothing about the stack changes. The hostname, tunnel ID
+# and credentials file come from the environment, so prod, dev and a future
+# staging differ by env values only. One connector per tunnel, one tunnel per
+# environment: never copy a credentials JSON to a second machine.
+# `${VAR:?}` is usable here because this file is not merged unless asked for.
+
+x-logging: &logging
+  driver: json-file
+  options: {max-size: "10m", max-file: "3"}
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:2026.11.0@sha256:b94b96edf2c9c4360f8879c8580cfaa99077f19c849ec595ca2f711b27d4f344
+    command: tunnel --no-autoupdate --config /etc/cloudflared/config.yml run
+    deploy: {replicas: 1}
+    depends_on: {web: {condition: service_started}}
+    configs:
+      - source: cloudflared_config
+        target: /etc/cloudflared/config.yml
+    secrets:
+      - source: cloudflared_credentials
+        target: cloudflared_credentials
+    # The image has no shell or curl; cloudflared ships its own readiness probe.
+    healthcheck:
+      test: ["CMD", "cloudflared", "tunnel", "--metrics", "127.0.0.1:20241", "ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks: [tunnel]
+    logging: *logging
+    restart: unless-stopped
+
+  web:
+    networks: [edge, tunnel]
+
+configs:
+  cloudflared_config:
+    content: |
+      tunnel: ${CLOUDFLARED_TUNNEL_ID:?set CLOUDFLARED_TUNNEL_ID to the tunnel ID}
+      credentials-file: /run/secrets/cloudflared_credentials
+      metrics: 127.0.0.1:20241
+      ingress:
+        - hostname: ${PUBLIC_HOSTNAME:?set PUBLIC_HOSTNAME to the public hostname}
+          service: http://web:8080
+        - service: http_status:404
+
+secrets:
+  cloudflared_credentials:
+    file: ${CLOUDFLARED_CREDENTIALS_FILE:?set CLOUDFLARED_CREDENTIALS_FILE to the host credentials JSON}
+
+# Only `web` and `cloudflared` join: cloudflared cannot reach `api` or `db`.
+networks:
+  tunnel: {}

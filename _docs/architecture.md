@@ -1571,6 +1571,7 @@ Six runtime containers, four build contexts, three custom images.
 | `analyzer` | `ytdigest-backend` | same image | 1..N | worker: `analyze` |
 | `transcriber` | `ytdigest-whisper` | `ops/Dockerfile.whisper`, on the `deps` stage of `ops/Dockerfile.backend` (#135) | 1..N | worker: `ingest`, `transcribe` |
 | `web` | `ytdigest-web` | `ops/Dockerfile.frontend` | 1 | nginx: static SPA + reverse proxy |
+| `cloudflared` *(optional)* | `cloudflare/cloudflared` (tag and digest pinned) | upstream, opt-in overlay `compose.tunnel.yml` (#426) | exactly 1 | outbound Cloudflare Tunnel connector |
 | `metabase` *(optional)* | upstream | — | 1 | ad-hoc queries, read-only role |
 
 **One backend image serves four containers.** `api`, `planner`, `analyzer`, and
@@ -2244,6 +2245,15 @@ networks:
   egress: {}
 ```
 
+For the public hostname, the opt-in `compose.tunnel.yml` (#426) adds one
+`cloudflared` service (pinned image, exactly one replica, no `ports:`) and a
+`tunnel` bridge network that only `web` and `cloudflared` join, so the
+connector cannot reach `api` or `db`. Its config is rendered from
+`PUBLIC_HOSTNAME` and `CLOUDFLARED_TUNNEL_ID` (`configs:` with `content:`), its
+credentials JSON is a file secret from `CLOUDFLARED_CREDENTIALS_FILE`, and the
+file is merged only with an explicit `-f` (or `COMPOSE_FILE`), so `compose.yml`
+and the dev overlay never define it. One tunnel per environment.
+
 For Anthropic secret-file deployments, merge the opt-in
 `compose.anthropic.yml` after this base file. It declares a required host file,
 mounts it read-only at `/run/secrets/anthropic_api_key` on `analyzer` only,
@@ -2349,6 +2359,8 @@ calling thread.
 have no route off the compose bridge. The workers also sit on `egress`.
 Only `api` sits on `internal` and `edge`, and only `web` publishes a port — bound to `127.0.0.1`
 so it is reachable solely through the host's existing reverse proxy (D13).
+With the opt-in tunnel overlay (#426), `cloudflared` publishes no port either;
+it joins only the `tunnel` network, shared with `web`.
 
 **Transcriber resource limits.** `cpus` prevents Whisper from starving the rest
 of the host. The 6 GB memory limit matters because `large-v3` at int8 needs
