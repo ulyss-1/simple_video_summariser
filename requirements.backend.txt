@@ -12,11 +12,11 @@
 
 # YouTube metadata, subtitles and audio. Pinned exactly; a scheduled update
 # check keeps it fresh (architecture.md 16.11).
-yt-dlp==2026.10.21
+yt-dlp==2026.10.26
 
 # yt-dlp's YouTube challenge solver scripts, shipped as a package so nothing is
 # fetched at runtime (#134). Must equal the yt-dlp-ejs==X that the pinned yt-dlp
-# requires in its `default` extra (0.8.0 for yt-dlp 2026.10.21); it moves with
+# requires in its `default` extra (0.8.0 for yt-dlp 2026.10.26); it moves with
 # yt-dlp and with the Deno pin in ops/Dockerfile.backend.
 yt-dlp-ejs==0.8.0
 

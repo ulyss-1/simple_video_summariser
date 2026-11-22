@@ -12,7 +12,7 @@
 # The JavaScript runtime yt-dlp uses to solve YouTube's player challenges
 # (#134). The official image holds only the binary; written as a FROM, its
 # digest is checked by scripts/base_image_digest_check.py. Moves together with
-# yt-dlp and yt-dlp-ejs (requirements.backend.txt); yt-dlp 2026.10.21 asks for
+# yt-dlp and yt-dlp-ejs (requirements.backend.txt); yt-dlp 2026.10.26 asks for
 # deno>=2.9.8.
 FROM denoland/deno:bin-2.9.8@sha256:b507583d3c68ba69f3ed2ce5969ae5b8b70f43421c781279c7aea06435263543 AS deno
 

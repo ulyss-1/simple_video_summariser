@@ -124,9 +124,9 @@ def test_runtime_tools_are_installed(command: tuple[str, ...]) -> None:
 
 
 def test_yt_dlp_is_the_pinned_version() -> None:
-    # requirements.backend.txt pins yt-dlp==2026.10.21; yt-dlp itself prints
+    # requirements.backend.txt pins yt-dlp==2026.10.26; yt-dlp itself prints
     # the zero-padded spelling of the same version.
-    assert _ok("yt-dlp", "--version") == "2026.10.21"
+    assert _ok("yt-dlp", "--version") == "2026.10.26"
 
 
 def test_deno_and_yt_dlp_ejs_are_pinned_and_seen_by_yt_dlp() -> None:

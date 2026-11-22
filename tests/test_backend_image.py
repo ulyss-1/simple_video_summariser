@@ -130,7 +130,7 @@ def test_deno_is_an_exact_version_pinned_by_digest() -> None:
         r"denoland/deno:bin-(\d+\.\d+\.\d+)@sha256:[0-9a-f]{64} AS deno", from_deno
     )
     assert match, from_deno
-    # yt-dlp 2026.10.21 asks for deno>=2.9.8 (#134).
+    # yt-dlp 2026.10.26 asks for deno>=2.9.8 (#134).
     assert tuple(map(int, match.group(1).split("."))) >= (2, 9, 8)
 
 

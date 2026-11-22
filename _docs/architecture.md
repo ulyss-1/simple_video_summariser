@@ -1670,7 +1670,7 @@ build tooling. A checksum-verified release binary needs `unzip` in a builder
 stage for no gain, and the `deno` PyPI wheel would be a third dependency. The
 `COPY --from=deno` sits in the `deps` stage, which holds no application code,
 so the backend and whisper images share the layer and a code change keeps it
-cached. Deno 2.9.8 is what yt-dlp 2026.10.21 asks for (`deno>=2.9.8`) and
+cached. Deno 2.9.8 is what yt-dlp 2026.10.26 asks for (`deno>=2.9.8`) and
 `yt-dlp-ejs` 0.8.0 is what its `default` extra pins; the three move together
 when yt-dlp is bumped (#68, checked by #369). Deno keeps its cache under the
 `app` user's home, so nothing needs to be made world-writable. D12's "no Node
