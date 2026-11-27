@@ -670,7 +670,7 @@ Applied: body padding `1rem`; section margin `1.5rem 0 0.5rem`; input padding `0
 
 ### Layout
 
-- **Max width:** `48rem` (768px) for text-heavy pages (Library, Transcript, Search results)
+- **Max width:** `72rem` (1152px) on every page, one value (`--content-width`) shared by the nav, `<main>` and `.page`, so no page is narrower than another
 - **Content padding:** `1rem` on sides; `1.5rem` vertical between sections
 - **Card styling:** white background, `1rem` padding, `6px` border-radius, `0 2px 8px rgba(0,0,0,0.08)` shadow
 - **Table styling:** `th` background `#f3f4f6`, `border-bottom 2px solid #e5e7eb`; `td` padding `0.75rem`, `border-bottom 1px solid #e5e7eb`
@@ -694,8 +694,10 @@ Behaviour:
 - **Default from the OS.** With no stored choice, `@media (prefers-color-scheme: dark)`
   applies `:root:not([data-theme="light"])`. Light remains the default when the
   OS has no dark preference.
-- **Toggle.** A button in the shell header ("Switch to dark theme" / "Switch to
-  light theme", so its name reflects the state) sets `data-theme` on `<html>`
+- **Toggle.** An icon-only button in the shell header (a moon in light mode, a
+  sun in dark mode: the theme it switches to) whose `aria-label` and `title` are
+  "Switch to dark theme" / "Switch to light theme", so its name reflects the
+  state, sets `data-theme` on `<html>`
   to `light` or `dark`. `:root[data-theme="dark"]` and the `:not([data-theme="light"])`
   guard make the explicit choice win both ways (OS light + dark chosen, OS dark
   + light chosen). `color-scheme` follows, so native controls, scrollbars and

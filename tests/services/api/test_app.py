@@ -95,7 +95,9 @@ def test_metrics_is_the_only_schema_excluded_route() -> None:
         if isinstance(route, APIRoute) and not route.include_in_schema
         for method in route.methods or ()
     }
-    assert excluded == {("/metrics", "GET")}
+    # HEAD /healthz is GET /healthz's twin for curl -I and uptime monitors; the
+    # GET stays in the schema and in the sweep.
+    assert excluded == {("/metrics", "GET"), ("/healthz", "HEAD")}
 
 
 def test_starting_the_app_configures_logging_exactly_once(

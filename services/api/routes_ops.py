@@ -84,6 +84,7 @@ def _zero_filled(depth: dict[tuple[str, str], int]) -> QueueDepth:
 
 
 @router.get("/healthz", response_model=schemas.HealthOut)
+@router.head("/healthz", include_in_schema=False, response_model=None)  # curl -I and uptime monitors probe with HEAD
 def healthz(
     conn: Annotated[psycopg.Connection[Any], Depends(get_conn)],
 ) -> dict[str, object] | JSONResponse:

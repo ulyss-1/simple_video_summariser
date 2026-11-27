@@ -89,7 +89,7 @@ export function RecentlyDeleted({ pageSize = DELETED_PAGE_SIZE }: { pageSize?: n
 
           {data !== undefined && data.items.length > 0 && (
             <div className="card card--flush table-scroll" role="region" aria-label="Deleted videos" tabIndex={0}>
-              <table className="table">
+              <table className="table deleted-table">
                 <thead>
                   <tr>
                     <th scope="col">Title</th>
