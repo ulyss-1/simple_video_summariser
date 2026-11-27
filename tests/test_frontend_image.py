@@ -592,6 +592,12 @@ def test_api_responses_are_not_intercepted_or_compressed() -> None:
         assert forbidden not in body
 
 
+def test_upstream_redirects_are_mapped_back_to_the_public_api_prefix() -> None:
+    # The API sees Host api:8000, so /api/healthz/ got `Location: http://api:8000/healthz`:
+    # an internal name a browser cannot reach.
+    assert "proxy_redirect http://api:8000/ /api/;" in _location("/api/")
+
+
 def test_dockerfile_and_conf_files_exist_where_the_dockerfile_copies_them() -> None:
     assert Path(REPO_ROOT / "ops" / "nginx.conf").is_file()
     assert Path(REPO_ROOT / "web" / "package-lock.json").is_file()

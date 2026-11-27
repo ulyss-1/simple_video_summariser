@@ -50,6 +50,28 @@ def _use(app: FastAPI, conn: FakeConn) -> None:
     app.dependency_overrides[deps.get_conn] = override
 
 
+def test_head_is_answered_like_get_without_a_body(app: FastAPI) -> None:
+    # curl -I and uptime monitors probe with HEAD; a 405 reads as "down".
+    _use(app, FakeConn([]))
+
+    with TestClient(app) as client:
+        response = client.head("/healthz")
+
+    assert response.status_code == 200
+    assert response.content == b""
+
+
+def test_head_reports_503_when_the_database_is_not_usable(app: FastAPI) -> None:
+    _use(app, FakeConn(error=psycopg.OperationalError("down")))
+
+    with TestClient(app) as client:
+        assert client.head("/healthz").status_code == 503
+
+
+def test_head_is_not_published_in_the_openapi_schema(app: FastAPI) -> None:
+    assert "head" not in app.openapi()["paths"]["/healthz"]
+
+
 def test_empty_jobs_table_returns_a_zero_filled_shape(app: FastAPI) -> None:
     _use(app, FakeConn([]))
 
