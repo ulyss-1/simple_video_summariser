@@ -27,6 +27,7 @@ function mount() {
 }
 
 const toggle = () => screen.getByRole('button', { name: /theme/i })
+const label = () => toggle().getAttribute('aria-label')
 
 beforeEach(() => root.removeAttribute('data-theme'))
 afterEach(() => root.removeAttribute('data-theme'))
@@ -35,10 +36,10 @@ describe('theme toggle', () => {
   it('switches between light and dark and names the action', () => {
     stubOs(false)
     mount()
-    expect(toggle().textContent).toBe('Switch to dark theme')
+    expect(label()).toBe('Switch to dark theme')
     fireEvent.click(toggle())
     expect(root.getAttribute('data-theme')).toBe('dark')
-    expect(toggle().textContent).toBe('Switch to light theme')
+    expect(label()).toBe('Switch to light theme')
     fireEvent.click(toggle())
     expect(root.getAttribute('data-theme')).toBe('light')
   })
@@ -52,14 +53,14 @@ describe('theme toggle', () => {
     root.removeAttribute('data-theme')
     mount()
     expect(root.getAttribute('data-theme')).toBe('dark')
-    expect(toggle().textContent).toBe('Switch to light theme')
+    expect(label()).toBe('Switch to light theme')
   })
 
   it('overrides an OS dark preference with an explicit light choice', () => {
     stubOs(true)
     mount()
     expect(root.hasAttribute('data-theme')).toBe(false)
-    expect(toggle().textContent).toBe('Switch to light theme')
+    expect(label()).toBe('Switch to light theme')
     fireEvent.click(toggle())
     expect(root.getAttribute('data-theme')).toBe('light')
   })
@@ -67,9 +68,9 @@ describe('theme toggle', () => {
   it('follows the OS when nothing is stored, including live changes', () => {
     const setOs = stubOs(false)
     mount()
-    expect(toggle().textContent).toBe('Switch to dark theme')
+    expect(label()).toBe('Switch to dark theme')
     setOs(true)
-    expect(toggle().textContent).toBe('Switch to light theme')
+    expect(label()).toBe('Switch to light theme')
     expect(root.hasAttribute('data-theme')).toBe(false)
   })
 

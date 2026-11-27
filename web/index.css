@@ -12,9 +12,9 @@
 
   --color-text: #1f2937;
   --color-muted: #6b7280;
-  --color-bg: #ffffff;
-  --color-surface: #f9fafb;
-  --color-border: #e5e7eb;
+  --color-bg: #f4efe4; /* milk, not white: easy on the eyes after dark */
+  --color-surface: #ece6d8;
+  --color-border: #ddd5c3;
   --color-control-border: #6b7280;
   --color-link: #7c3aed;
   --color-link-visited: #a855f7;
@@ -27,9 +27,9 @@
   --color-success-bg: #ecfdf5;
   --color-warning-bg: #fffbeb;
   --color-danger-bg: #fef2f2;
-  --color-th-bg: #f3f4f6;
-  --color-card: #ffffff;
-  --color-hover: #f9fafb;
+  --color-th-bg: #e8e1d1;
+  --color-card: #faf7f0;
+  --color-hover: #efe9db;
   --color-on-link: #ffffff;
 
   --space-xs: 0.25rem;
@@ -43,7 +43,7 @@
   --radius-md: 6px;
   --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.08);
   --touch-target: 44px;
-  --content-width: 48rem;
+  --content-width: 72rem;
 
   --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: monospace;
@@ -466,6 +466,63 @@ a:focus {
   min-height: var(--touch-target);
 }
 
+/*
+ * Library list: Select, Published, Status and Transcript never break inside
+ * their content; Title and Channel take the remaining width and wrap between
+ * words, so the whole row fits a ~950px viewport without sideways scrolling.
+ * A short channel name stays on one line; only a long one wraps. Below that
+ * the table still scrolls inside .table-scroll.
+ */
+.library-table {
+  min-width: 40rem;
+}
+
+.library-table th,
+.library-table td {
+  padding: 0.75rem;
+}
+
+.library-table th,
+.library-table td:nth-child(1),
+.library-table td:nth-child(4),
+.library-table td:nth-child(5),
+.library-table td:nth-child(6) {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+.library-table td:nth-child(3) {
+  overflow-wrap: normal;
+}
+
+.library-table td:nth-child(2) {
+  min-width: 6rem;
+}
+
+/* .btn breaks anywhere; here it may only break between words. */
+.library-table .btn {
+  padding: var(--space-xs) var(--space-sm);
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.library-table td .btn {
+  max-width: 12rem;
+}
+
+/*
+ * Recently deleted: same treatment as the Library. The Deleted and Action
+ * columns (and every header) never wrap, so "Restore" and the timestamp stay
+ * whole; Title and Channel take the rest and may wrap.
+ */
+.deleted-table th,
+.deleted-table td:nth-child(3),
+.deleted-table td:nth-child(4) .btn {
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
 /* ---- Pagination ---- */
 
 .pagination {
@@ -559,6 +616,10 @@ a:focus {
 /* ---- Theme toggle ---- */
 
 .theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--touch-target);
   min-height: var(--touch-target);
   padding: 0 var(--space-sm);
   background: transparent;

@@ -427,7 +427,7 @@ export function Library() {
 
           {data !== undefined && data.items.length > 0 && (
             <div className="card card--flush table-scroll" role="region" aria-label="Videos" tabIndex={0}>
-              <table className="table">
+              <table className="table library-table">
                 <thead>
                   <tr>
                     <th scope="col">Select</th>
