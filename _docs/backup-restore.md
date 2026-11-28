@@ -15,9 +15,11 @@ raw `pgdata` copies, point-in-time recovery, and the k3s rollout (#210).
 > refuses to confuse with production.
 
 Status of this work: the scripts, units and tests are in the repo and pass
-against stubs and a real local restic and Postgres. **No real R2 bucket has
-been used yet.** What that leaves unproven is listed in section 11. Issue #150
-stays open until the owner records the evidence in section 10.
+against stubs and a real local restic and Postgres. On the deploy host
+(2026-11-06 to 2026-11-28) restic 0.18.1 over S3 to a real R2 bucket has done
+`init`, manual and timer-triggered backups, `check`, retention pruning and
+restore drills; the evidence is on issue #150. What is still unproven is listed
+in section 11.
 
 ---
 
@@ -79,6 +81,9 @@ stable.
      "all buckets". Only the two Object levels can be limited to a bucket.
    - TTL: forever (or a long TTL and a calendar reminder to renew it).
    - Client IP filtering: leave empty unless the host has a fixed address.
+     A token restricted to an IP stops working the moment the host's public IP
+     changes (a home or laptop connection), and every run then fails at stage
+     `auth` (section 7).
    - Create. Copy the **Access Key ID** and the **Secret Access Key** right
      away; the secret is shown once. Ignore the "Token value" (a Cloudflare
      API bearer token we do not use); do not store it.
@@ -208,6 +213,21 @@ change the system are marked **(sudo)**.
     The backup runs nightly at 02:30 UTC (plus up to 10 minutes of jitter) and,
     with `Persistent=true`, a night missed while the host was off runs after
     boot. The freshness check runs every 6 hours.
+
+    Make the units wait for a synchronised clock **(sudo)**. Both are ordered
+    after `time-sync.target`, but that target only waits when a wait service is
+    enabled. Without it, a catch-up run right after boot can start before NTP
+    corrects a wrong hardware clock, and R2 rejects requests signed with a
+    skewed clock (section 7). Enable the one that matches the host's NTP client:
+
+    ```bash
+    systemctl is-active chrony && sudo systemctl enable chrony-wait.service
+    systemctl is-active systemd-timesyncd && sudo systemctl enable systemd-time-wait-sync.service
+    ```
+
+    After upgrading the checkout to a version whose unit files changed,
+    re-run `sudo ops/host/install-pg-backup-units.sh --user "$USER"` (it
+    reloads systemd and leaves the timers' enabled state alone).
 
 16. **Set up failure notification.** The units call
     `ytdigest-pg-backup-notify@<unit>.service` on any failure, which runs the
@@ -500,6 +520,19 @@ into a live Postgres data directory and never edits `pgdata` in place.
   message names no key, account id or bucket on purpose. A repository that
   answers but is not initialised fails fast at stage `auth` or `repository`
   with a different message (run `--init`).
+- **Token restricted to a client IP, and the host's public IP changes.** R2
+  answers 403 to a key pair that worked yesterday, and every run fails at stage
+  `auth` (seen on the deploy host on 2026-11-07). Fix: in the dashboard, add
+  the new address to the token's Client IP filtering, or clear the filter
+  (step 6). Nothing in `r2.env` changes; run `pg-backup.sh --check` afterwards.
+- **Clock wrong at boot.** The freshness check (`FAILED stage=repository:
+cannot list snapshots`) or a catch-up backup (stage `auth`) fails a few
+  seconds after boot, then the next run works. R2 rejects S3 requests whose
+  signature time is more than a few minutes off, and the hardware clock can be
+  hours off until NTP steps it (on the deploy host it was about 2 hours fast;
+  `journalctl -u chrony | grep 'wrong by'` shows the step). Fix: enable
+  `chrony-wait.service` or `systemd-time-wait-sync.service` (step 15), and
+  set the BIOS clock to UTC. The credentials are fine.
 - **R2 unreachable or a token revoked.** The backup fails at stage `auth`,
   `upload` or
   `verify`, the freshness check turns red after 30 hours, and local data is
@@ -539,7 +572,9 @@ Checked on 2026-11-06 against Cloudflare's documentation.
   nightly dumps of the full size (restic dedupes compressed dumps poorly) is
   about 160 MB, **about 1.6% of the 10 GB**. It stays inside the free tier until
   the database reaches roughly 700 MB. A run uses a few hundred
-  operations. Record the real database size at the first backup.
+  operations. Record the real database size at the first backup. Real host,
+  2026-11-28: the dump is about 2.0 MB (`bytes=2038875`) and the whole
+  repository, three snapshots, about 3.0 MB, far inside the free tier.
 - **Data in an unpaid or suspended account is not guaranteed.** Cloudflare
   publishes nothing about R2 data when an invoice goes unpaid, and there are
   anecdotal reports of billing-related suspensions. Treat R2 as **one** copy:
@@ -599,15 +634,19 @@ appears; the scripts print none of them, but check. **Never paste**
 
 ## 11. Not proven by the repository tests
 
-- A real restic run against a real R2 bucket: `init`, `backup`, `check`,
-  `forget --prune` and `restore` over the S3 backend with R2. The tests use a
-  stateful stub restic and, where restic is installed, the real restic 0.18.1
-  against a local directory. restic's documentation does not mention R2 and
-  gives no minimum version for its S3 backend; third-party reports say it works
-  including prune.
-- The minimum restic version. 0.18.1 is the tested version, not a proven floor.
-- The systemd units and timers on the real host (the unit files are checked
-  statically only, and `systemd-analyze calendar` accepted the schedules).
-- The Cloudflare dashboard labels, whether a card is required, and whether
-  bucket lock needs a paid plan.
-- A timer-triggered run, and the notification hook on your channel.
+The repository tests use a stateful stub restic and, where restic is installed,
+the real restic 0.18.1 against a local directory; the unit files are checked
+statically. What only the real host can show:
+
+- **Proven on the deploy host** (restic 0.18.1, S3 backend, real R2 bucket,
+  2026-11-06 to 2026-11-28, evidence on #150): `init`, `check`, manual and
+  timer-triggered backups, retention pruning (`forget --prune` removed the
+  snapshots older than 14 days beyond the floor of 3), status and freshness,
+  and restore drills of the newest snapshot (`event=verified`).
+- Still not proven: restic 0.18.1 as a floor (it is the version used, not a
+  proven minimum; restic's documentation does not mention R2), the Cloudflare
+  dashboard labels and whether bucket lock needs a paid plan, and the
+  notification hook on a real channel (alerting is deferred to #407).
+- Boot ordering after `time-sync.target` (step 15) is proven only once the
+  host has rebooted with the reinstalled units and an enabled wait service,
+  and the catch-up runs after that boot succeed.
