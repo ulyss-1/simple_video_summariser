@@ -1515,6 +1515,7 @@ than reading `os.environ` directly.
 | `FREE_LLM_TIMEOUT_SEC` / `FREE_LLM_COOLDOWN_SEC` | `120` / `120` | analyzer: per-request timeout; how long a provider that rate-limited or failed is skipped (#364) |
 | `GROQ_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY` / `CEREBRAS_API_KEY` / `PUTER_AUTH_TOKEN` | — | analyzer only: the free-tier keys a provider names as its `key_setting`; a provider without a key is skipped (#364) |
 | `ANTHROPIC_BATCH` | `1` | use Batch API — 50% cost (16.8) |
+| `ANTHROPIC_BATCH_POLL_SEC` / `ANTHROPIC_BATCH_MAX_WAIT_SEC` | `30` / `3600` | analyzer, `ANTHROPIC_BATCH=1`: how often a batch is polled; how long one batch may run before it is cancelled and the attempt fails (`LLM_UNAVAILABLE`). Compose passes both to the analyzer only (#190) |
 | `PROMPT_VERSION` | `v1` | analyzer, planner |
 | `SWEEP_MAX_JOBS_ANTHROPIC` | `100` | planner: cumulative per-`PROMPT_VERSION` count of re-analysis sweep jobs allowed while `SUMMARIZER=anthropic` (`0` = none); ignored for ollama (#99); the USD budget below is checked alongside it and whichever binds first stops the sweep (#153) |
 | `SWEEP_MAX_USD_ANTHROPIC` | `2.50` | planner: cumulative per-`PROMPT_VERSION` USD budget of re-analysis sweep jobs while `SUMMARIZER=anthropic` (#153); finite and `>= 0`, `0` = none; not read for ollama or free, so dormant under `SUMMARIZER=free` |
@@ -1539,7 +1540,7 @@ than reading `os.environ` directly.
 | `CANCEL_OVERDUE_SEC` | derived, not a variable | `3 * CANCEL_POLL_SEC + 15` (30 s at the default), a property of settings in `common/config.py`; never read from the environment. Always below `REAP_AFTER_SEC` because `CANCEL_POLL_SEC <= HEARTBEAT_SEC <= REAP_AFTER_SEC / 2`. Drives `cancel_overdue` in the API (#411) |
 | `CANCEL_POLL_SEC` | `5` | workers: how often a running job's cancel flag is read (never written) so a user cancel is noticed in seconds; rejected when above `HEARTBEAT_SEC` (#395) |
 | `MAX_ATTEMPTS_TRANSCRIBE` | `2` | transcriber |
-| `INGEST_MAX_RUNTIME_SEC` / `ANALYZE_MAX_RUNTIME_SEC` / `TRANSCRIBE_MAX_RTF` | `600` / `3600` / `3.0` | workers (§11.5); compose passes `ANALYZE_MAX_RUNTIME_SEC` to the analyzer only |
+| `INGEST_MAX_RUNTIME_SEC` / `ANALYZE_MAX_RUNTIME_SEC` / `TRANSCRIBE_MAX_RTF` | `600` / `3600` / `3.0` | workers (§11.5); compose passes `ANALYZE_MAX_RUNTIME_SEC` to the analyzer only. The analyze limit is per attempt wall time and includes time blocked on a provider batch: in Anthropic batch mode one job makes 3 sequential batch waits (roster, chunks, reduce; up to 6 with repair rounds), each up to `ANTHROPIC_BATCH_MAX_WAIT_SEC`, so batch mode needs the limit above 3 x that value; a watchdog-killed attempt resumes its recorded batches (#89). CPU Ollama on the deploy host costs about 1.0 to 1.4 s per second of video (#382), so 3600 covers videos up to about 45 to 58 minutes. The default itself awaits an owner decision (#190) |
 | `TRANSCRIBER_CPUS` | `3.0` | compose |
 | `ALERT_WEBHOOK_URL` | unset (no channel) | planner: secret; `TOOL_FAILURE` / `RESOURCE` dead-letters are POSTed here (#67) |
 | `ALERT_WEBHOOK_FORMAT` | `json` | planner: `json` (`{"text": ...}`, Slack-compatible) or `text` (plain body plus `Title` header, ntfy) |
@@ -2178,6 +2179,8 @@ services:
       OLLAMA_OUTPUT_RESERVE_TOKENS: ${OLLAMA_OUTPUT_RESERVE_TOKENS:-2048}
       OLLAMA_TIMEOUT_SEC: ${OLLAMA_TIMEOUT_SEC:-900}
       ANALYZE_MAX_RUNTIME_SEC: ${ANALYZE_MAX_RUNTIME_SEC:-3600}
+      ANTHROPIC_BATCH_POLL_SEC: ${ANTHROPIC_BATCH_POLL_SEC:-30}
+      ANTHROPIC_BATCH_MAX_WAIT_SEC: ${ANTHROPIC_BATCH_MAX_WAIT_SEC:-3600}
       # The only service that gets the key. From .env or the deploy shell's
       # environment; a Docker secret file is #136.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}

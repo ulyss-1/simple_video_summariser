@@ -212,6 +212,23 @@ def test_ollama_num_ctx_override_reaches_the_analyzer_only(
         assert not set(keys) & set(_env(services, name)), name
 
 
+def test_anthropic_batch_wait_overrides_reach_the_analyzer_only(
+    compose_config: ConfigResolver,
+) -> None:
+    keys = ("ANTHROPIC_BATCH_POLL_SEC", "ANTHROPIC_BATCH_MAX_WAIT_SEC")
+    defaults = _env(_resolved(compose_config), "analyzer")
+    assert defaults["ANTHROPIC_BATCH_POLL_SEC"] == "30"
+    assert defaults["ANTHROPIC_BATCH_MAX_WAIT_SEC"] == "3600"
+    services = _resolved(
+        compose_config, ANTHROPIC_BATCH_POLL_SEC="15", ANTHROPIC_BATCH_MAX_WAIT_SEC="5400"
+    )
+    analyzer = _env(services, "analyzer")
+    assert analyzer["ANTHROPIC_BATCH_POLL_SEC"] == "15"
+    assert analyzer["ANTHROPIC_BATCH_MAX_WAIT_SEC"] == "5400"
+    for name in ("planner", "transcriber", "api", "migrate"):
+        assert not set(keys) & set(_env(services, name)), name
+
+
 def test_web_is_the_only_published_port_and_on_loopback(
     compose_config: ConfigResolver,
 ) -> None:
