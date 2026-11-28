@@ -1,0 +1,13 @@
+# Optional (#380). Ships DISABLED; enable only per _docs/deploy-host.md
+# "Production releases". A firing during a running deploy does nothing.
+[Unit]
+Description=Check for a new ytdigest release every 15 minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=15min
+RandomizedDelaySec=1min
+Unit=ytdigest-deploy.service
+
+[Install]
+WantedBy=timers.target

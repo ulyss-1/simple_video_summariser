@@ -2279,6 +2279,7 @@ as an additional context from the build-only `deps` service (#135; it was
 Host setup — installing Docker Engine and Compose v2, storage, access, `.env`,
 egress, Ollama and the first deploy — is in `_docs/deploy-host.md`, with a
 read-only preflight at `ops/host/preflight.sh` (#78).
+Production deploys release tags with `ops/host/deploy.sh`, which sets `IMAGE_TAG` so the built images are `ytdigest-{backend,whisper,web}:<tag>` (compose.yml defaults to `latest`), and a dev build never retags what production runs (#380).
 
 **Migration ordering.** `migrate` is a one-shot container; every service gates
 on `service_completed_successfully`. Running `alembic upgrade head` on service

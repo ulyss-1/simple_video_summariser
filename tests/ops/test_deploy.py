@@ -164,7 +164,8 @@ class Rig:
         return out
 
     def state_json(self) -> dict[str, Any]:
-        return json.loads((self.state / "state.json").read_text())
+        data: dict[str, Any] = json.loads((self.state / "state.json").read_text())
+        return data
 
     def head(self) -> str:
         return _git(self.prod, "rev-parse", "HEAD")
@@ -595,3 +596,52 @@ def test_the_script_never_removes_volumes_or_runs_down() -> None:
     assert "--volumes" not in text.replace("--volumes |", "").replace("--volumes=*", "")
     # The body is one function so a checkout that rewrites this file mid-run is safe.
     assert SCRIPT.read_text().rstrip().endswith('main "$@"; exit $?')
+
+
+UNITS = ROOT / "ops" / "host" / "deploy-units"
+DOC = ROOT / "_docs" / "deploy-host.md"
+
+
+def test_the_optional_units_run_latest_and_nothing_installs_or_enables_them() -> None:
+    service = (UNITS / "ytdigest-deploy.service").read_text()
+    timer = (UNITS / "ytdigest-deploy.timer").read_text()
+    assert "ExecStart=@REPO@/ops/host/deploy.sh --latest" in service
+    assert "User=@USER@" in service and "Type=oneshot" in service
+    assert "[Install]" not in service
+    assert "Unit=ytdigest-deploy.service" in timer
+    # The backup installer copies ops/host/systemd/*; the deploy units are elsewhere.
+    assert not list((ROOT / "ops" / "host" / "systemd").glob("ytdigest-deploy*"))
+    for path in (ROOT / "ops" / "host").glob("*.sh"):
+        if path.name != "deploy.sh":
+            assert "ytdigest-deploy.timer" not in path.read_text()
+
+
+def test_the_runbook_covers_releases_rollback_settings_and_the_move() -> None:
+    doc = DOC.read_text()
+    section = doc[doc.index("## Production releases"):]
+    for needle in (
+        "never run `docker compose down -v`",
+        "--allow-schema-behind",
+        "COMPOSE_PROJECT_NAME=ytdigest-dev",
+        "COMPOSE_PROJECT_NAME=ytdigest",
+        "Restrict creations",
+        "Block force pushes",
+        "Require a pull request before merging",
+        "ytdigest_pgdata",
+        "ytdigest_audio",
+        "ytdigest_whisper-models",
+        "pg-restore-drill.sh --snapshot",
+        "systemctl enable --now ytdigest-deploy.timer",
+        "Suspend and lid-close",
+        "ops/host/deploy.sh --compose",
+    ):
+        assert needle.lower() in section.lower(), needle
+    # Cut-over begins with a fresh backup, before anything is recreated.
+    move = section[section.index("moving the live stack"):]
+    assert move.index("Fresh backup") < move.index("deploy.sh vX.Y.Z")
+
+
+def test_env_example_documents_the_dev_project_name_without_setting_it() -> None:
+    text = (ROOT / ".env.example").read_text()
+    assert "\nIMAGE_TAG=latest\n" in text
+    assert "# COMPOSE_PROJECT_NAME=ytdigest-dev" in text
