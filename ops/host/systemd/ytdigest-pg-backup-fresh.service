@@ -1,11 +1,14 @@
 # Freshness check (#150): fails when the newest verified off-host snapshot is
 # older than RPO + grace (backup.conf: 24 h + 6 h by default). A failure runs the
 # same notification hook as a failed backup.
+# time-sync.target: R2 rejects S3 requests signed with a skewed clock, and a
+# Persistent catch-up can start before NTP steps a wrong RTC; the runbook's
+# step 15 enables chrony-wait (or systemd-time-wait-sync) to make this wait real.
 [Unit]
 Description=ytdigest Postgres backup freshness check
 Documentation=file:@REPO@/_docs/backup-restore.md
-After=network-online.target
-Wants=network-online.target
+After=network-online.target time-sync.target
+Wants=network-online.target time-sync.target
 OnFailure=ytdigest-pg-backup-notify@%n.service
 
 [Service]

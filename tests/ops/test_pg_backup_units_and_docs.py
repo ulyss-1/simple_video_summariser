@@ -55,6 +55,18 @@ def test_failures_of_both_services_run_the_notification_unit() -> None:
         assert "OnFailure=ytdigest-pg-backup-notify@%n.service" in unit(name)
 
 
+@pytest.mark.parametrize("name", ["ytdigest-pg-backup.service", "ytdigest-pg-backup-fresh.service"])
+def test_services_wait_for_network_and_a_synchronised_clock(name: str) -> None:
+    # A Persistent catch-up right after boot ran with the RTC two hours fast; R2
+    # rejects S3 requests signed with a skewed clock, so both units must order
+    # after time-sync.target (made effective by chrony-wait / time-wait-sync).
+    text = unit(name)
+    after = " ".join(re.findall(r"^After=(.*)$", text, re.MULTILINE)).split()
+    wants = " ".join(re.findall(r"^Wants=(.*)$", text, re.MULTILINE)).split()
+    assert {"network-online.target", "time-sync.target"} <= set(after)
+    assert {"network-online.target", "time-sync.target"} <= set(wants)
+
+
 def test_the_backup_service_runs_only_the_backup_script() -> None:
     text = unit("ytdigest-pg-backup.service")
     assert "ExecStart=@REPO@/ops/host/pg-backup.sh\n" in text
@@ -200,6 +212,9 @@ RUNBOOK_MUST_MENTION = (
     "1.6%",
     "lifecycle",
     "--keep-within 14d --keep-last 3",
+    "chrony-wait.service",
+    "systemd-time-wait-sync.service",
+    "public IP changes",
 )
 
 
