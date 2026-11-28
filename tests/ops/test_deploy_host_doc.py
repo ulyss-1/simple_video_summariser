@@ -51,7 +51,7 @@ REQUIRED_WORDS = (
     "last_error",
 )
 # UPPER_SNAKE tokens in the section that are settings, not error classes.
-NOT_ERROR_CLASSES = {"OLLAMA_MODEL", "COMPOSE_FILE"}
+NOT_ERROR_CLASSES = {"OLLAMA_MODEL", "COMPOSE_FILE", "FREE_LLM_LOCAL_FALLBACK"}
 FORBIDDEN = {
     "SUMMARIZER=anthropic": r"SUMMARIZER=anthropic",
     "ANTHROPIC_API_KEY": r"ANTHROPIC_API_KEY",

@@ -491,9 +491,13 @@ Show the analyzer's summarizer and model before submitting anything:
 docker compose exec analyzer printenv SUMMARIZER OLLAMA_MODEL
 ```
 
-**Stop** unless the first line is `ollama`. Any other value can spend money on
-a real key. Note the second line: the pass check compares it with
-`analysis.model`.
+**Stop** unless the first line is `ollama` or `free`. `anthropic` spends money
+on a real key. With `ollama`, note the second line: the pass check compares it
+with `analysis.model`. With `free` (§6), the transcript goes to the
+third-party free-tier providers whose keys are set, and the pass check expects
+the label `free-tier` instead. Also run
+`docker compose exec analyzer printenv FREE_LLM_LOCAL_FALLBACK`: with `1` the
+host Ollama is the last resort.
 
 ### Clean start
 
@@ -573,7 +577,8 @@ print("transcript", t.get("source"), t.get("language"))
 print("model", a.get("model"), "| tldr non-empty:", bool(a.get("tldr")))'
 ```
 
-The jobs come from the listing in "When it fails". The analysis text is a real
+The jobs come from the listing in "When it fails". Take it before the cleanup
+below: the delete removes the video's job rows. The analysis text is a real
 model's output, so it differs from #137's stub; only the structure above is
 compared.
 
