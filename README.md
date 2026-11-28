@@ -8,6 +8,39 @@ where earlier analyses can be retrieved and compared. For setup, commands and
 contribution rules see [AGENTS.md](AGENTS.md); the design is in
 [`_docs/architecture.md`](_docs/architecture.md).
 
+## Backup
+
+Postgres is backed up from the deploy host to Cloudflare R2 with restic, on
+systemd timers. The full runbook (first-time setup, restore, recovery, failure
+modes) is [`_docs/backup-restore.md`](_docs/backup-restore.md). These are the
+steps to repeat after the unit files change, from the checkout the units should
+run in.
+
+Install the units and make them wait for a synchronised clock. Without the
+wait, a catch-up run right after boot can start before NTP corrects a wrong
+hardware clock, and R2 rejects the request.
+
+```bash
+sudo ops/host/install-pg-backup-units.sh --user "$USER"
+# for chrony; with systemd-timesyncd enable systemd-time-wait-sync.service instead
+sudo systemctl enable chrony-wait.service
+# both services should show a time-sync.target line
+systemctl cat ytdigest-pg-backup.service ytdigest-pg-backup-fresh.service | grep time-sync
+```
+
+Reboot once, wait a few minutes for the timers, then check:
+
+```bash
+journalctl -b -u ytdigest-pg-backup-fresh.service   # no FAILED
+ops/host/pg-backup-status.sh                         # newest snapshot and its age
+docker compose -f compose.yml ps                     # the stack came back
+```
+
+The timers themselves are enabled once, at first setup (runbook step 15).
+
+**Retention:** every snapshot from the last 14 days is kept, and always at least
+the newest 3.
+
 ## Regenerating API types
 
 The frontend's API types are generated from the backend's OpenAPI schema and
