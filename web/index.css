@@ -328,6 +328,21 @@ a:focus {
   gap: var(--space-md);
 }
 
+/*
+ * A button that directly follows an input in a stacked form (Add video) gets
+ * the same breathing room a hint paragraph gives it elsewhere (Add channel).
+ * Inline .filters rows space their children with their own flex gap.
+ */
+form:not(.filters) > .field + .btn,
+form:not(.filters) > .input + .btn {
+  margin-top: var(--space-lg);
+}
+
+/* The "Add several videos" panel opens right under its toggle button. */
+.btn + form {
+  margin-top: var(--space-md);
+}
+
 /* ---- Buttons ---- */
 
 .btn {
