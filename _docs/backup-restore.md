@@ -267,6 +267,10 @@ change the system are marked **(sudo)**.
 
 ---
 
+A release deploy (`ops/host/deploy.sh`, #380) runs `pg-backup.sh` itself before
+a tag that brings a new Alembic revision and prints the snapshot id; see
+`_docs/deploy-host.md`, "Production releases".
+
 ## 1. Design
 
 ```

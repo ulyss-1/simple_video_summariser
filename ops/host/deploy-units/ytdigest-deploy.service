@@ -1,0 +1,20 @@
+# Optional host-side pull deploy (#380, owner decision 3). Ships DISABLED:
+# nothing enables it; _docs/deploy-host.md "Production releases" says how.
+# Fill in @USER@ (the deploy account) and @REPO@ (/opt/ytdigest) when copying
+# it to /etc/systemd/system. Deploys the newest v* tag that is an ancestor of
+# origin/release; a run that finds a deploy in progress does nothing (lock).
+[Unit]
+Description=ytdigest release deploy (newest v* tag on origin/release)
+Documentation=file:@REPO@/_docs/deploy-host.md
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=@USER@
+WorkingDirectory=@REPO@
+ExecStart=@REPO@/ops/host/deploy.sh --latest
+TimeoutStartSec=2h
+UMask=0077
+NoNewPrivileges=yes

@@ -95,7 +95,7 @@ def test_header_comment_lists_the_stack_and_production_command() -> None:
 
 def test_backend_services_share_the_backend_image_and_only_migrate_builds_it() -> None:
     for name in ("migrate", "api", "planner", "analyzer"):
-        assert "image: ytdigest-backend:latest" in _block(name)
+        assert "image: ytdigest-backend:${IMAGE_TAG:-latest}" in _block(name)
     assert "dockerfile: ops/Dockerfile.backend" in _block("migrate")
     for name in ("api", "planner", "analyzer"):
         assert "build" not in _block(name)
@@ -111,10 +111,10 @@ def test_backend_services_share_the_backend_image_and_only_migrate_builds_it() -
 def test_transcriber_and_web_build_their_own_images() -> None:
     transcriber = _block("transcriber")
     assert "dockerfile: ops/Dockerfile.whisper" in transcriber
-    assert "image: ytdigest-whisper:latest" in transcriber
+    assert "image: ytdigest-whisper:${IMAGE_TAG:-latest}" in transcriber
     web = _block("web")
     assert "dockerfile: ops/Dockerfile.frontend" in web
-    assert "image: ytdigest-web:latest" in web
+    assert "image: ytdigest-web:${IMAGE_TAG:-latest}" in web
 
 
 def test_whisper_build_takes_the_deps_image_from_the_build_only_deps_service() -> None:
@@ -754,7 +754,7 @@ def test_overlay_web_drops_the_nginx_build_with_reset() -> None:
     assert "dockerfile" not in block
     # compose.yml itself keeps the build and its tag.
     assert "ops/Dockerfile.frontend" in _block("web")
-    assert "image: ytdigest-web:latest" in _block("web")
+    assert "image: ytdigest-web:${IMAGE_TAG:-latest}" in _block("web")
 
 
 def test_overlay_web_replaces_the_8080_publish_with_loopback_5173() -> None:

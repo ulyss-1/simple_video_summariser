@@ -220,7 +220,7 @@ def compose(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Compose
     # so `migrate` runs the image built above and never a running stack's.
     rewritten = tmp_path / "compose.yml"
     rewritten.write_text(
-        (REPO_ROOT / "compose.yml").read_text().replace("ytdigest-backend:latest", IMAGE)
+        (REPO_ROOT / "compose.yml").read_text().replace("ytdigest-backend:${IMAGE_TAG:-latest}", IMAGE)
     )
 
     def run(*args: str, timeout: int = 180) -> subprocess.CompletedProcess[str]:

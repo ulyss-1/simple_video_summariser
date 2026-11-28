@@ -5,11 +5,12 @@ How to prepare the Ubuntu server that runs the ytdigest stack
 sections in order, then run `ops/host/preflight.sh` to confirm the host is
 ready, then do the first deploy, then run the smoke check (§12).
 
-> **This host, specifically.** The target is an Ubuntu 26.10 box (Intel Core
-> i7-4712MQ, 4C/8T; 16 GB RAM). The architecture names Ubuntu 26.04 LTS
-> (§16.2) for Python 3.14 parity; 26.10 is fine for the Docker path because the
-> services run in `python:3.14-slim` containers, so host parity holds at the
-> container, not the interpreter build. This same box is also slated to run a
+> **This host, specifically.** The target is a Linux laptop running native
+> Ubuntu 26.04 LTS (Intel Core i7-4712MQ, 4C/8T; 16 GB RAM), the accepted
+> interim production host ("Production releases", #380). Ubuntu 26.10 would
+> also do for the Docker path, because the services run in
+> `python:3.14-slim` containers, so host parity holds at the container, not
+> the interpreter build. This same box is also slated to run a
 > k3s cluster (issue #210, "Platform rollout"). Nothing here conflicts with
 > that — Docker Engine and k3s coexist — but if k3s is installed first, re-run
 > `ops/host/preflight.sh` to confirm Docker's `disk`, `cpu` and `memory`
@@ -145,7 +146,8 @@ first deploy (section 11) and before treating the host as production.
 
 - Clone the repo over a **read-only deploy key** (or HTTPS with a read-only
   token) into one fixed directory owned by the deploy account. Nobody edits the
-  server checkout by hand; updates are `git pull` of `master` plus a rebuild.
+  server checkout by hand; updates are release tags deployed with
+  `ops/host/deploy.sh` ("Production releases", #380).
 
 ---
 
@@ -441,9 +443,10 @@ docker compose ps          # services healthy
 `web` runs nginx as a non-root user (`nginx/nginx-unprivileged:1.30-alpine`)
 on container port 8080 and is published on `127.0.0.1:8080` only
 (`127.0.0.1:8080:8080`); put it behind the host reverse
-proxy or the opt-in tunnel overlay ("Public access", #426) for TLS. Updates are `git pull` of `master`, then
-`docker compose run --rm migrate` (if there is a new revision) and
-`docker compose -f compose.yml up -d --build`. A red "base image digest check"
+proxy or the opt-in tunnel overlay ("Public access", #426) for TLS. Production
+updates are release tags deployed with `ops/host/deploy.sh <tag>` ("Production
+releases", #380), which builds, backs up, migrates and starts in a fixed
+order; the commands above are what it runs, with `IMAGE_TAG` set to the tag. A red "base image digest check"
 run means bump the stale base-image digest (nginx, node, python or postgres)
 per architecture.md §11.3; a red "stable line superseded" or "line withdrawn
 upstream" annotation means move the nginx line as described in the same
@@ -713,3 +716,274 @@ before sharing the hostname: until then the URL is open to anyone, and
 
 Dev on WSL (`dev-ytdigest...`) uses its own tunnel the same way, or no tunnel.
 The k3s plan is `_docs/k3s-rollout.md` (#210).
+---
+
+## Production releases (#380)
+
+Production is Compose project `ytdigest`, run from its own clone
+`/opt/ytdigest`, detached at a release tag, with its own `.env` and
+per-release image tags. Releases are promoted from the `release` branch by a
+`v*` tag and deployed by one script, `ops/host/deploy.sh`. Dev is project
+`ytdigest-dev` on the owner's own machine (#410); this host runs prod only.
+Nothing in this section exposes anything to the internet (that is #408).
+
+**Never run `docker compose down -v`** on this host. It deletes
+`ytdigest_pgdata`, the production database. The script never calls `down`.
+
+### Interim production host (owner decision 0)
+
+This host is a Linux laptop (Intel Core i7-4712MQ, 16 GB RAM) running native
+Ubuntu 26.04 LTS with Docker Engine; it is not WSL and not Docker Desktop. It
+is the accepted interim production host; #149 stays open for a real server and
+#210 is the long-term platform. Named risks:
+
+- **Suspend and lid-close stop everything**, including the backup timers
+  (#150; `Persistent=true` catches a missed run up after wake). Keep the lid
+  open or set `HandleLidSwitch=ignore` in `/etc/systemd/logind.conf` **(sudo)**,
+  and turn automatic suspend off.
+- **Docker starts at boot** (`systemctl is-enabled docker` printed `enabled`
+  on 2026-11-28), and every service has `restart: unless-stopped`, so a reboot
+  brings the stack back without a login.
+- **One disk, no UPS.** A power cut can take the host down mid-write; the only
+  copy that survives a dead disk is the off-host restic backup (#150).
+- **Shared with a desktop session.** Whatever else runs on the laptop competes
+  for the 16 GB with Whisper and the local LLM.
+
+### Layout
+
+| What            | Production                                                                            | Dev (owner's machine)                                  |
+| --------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Checkout        | `/opt/ytdigest`, detached at a `v*` tag                                               | any clone, any branch                                  |
+| Compose project | `ytdigest` (volumes `ytdigest_*`)                                                     | `ytdigest-dev`                                         |
+| `.env`          | `COMPOSE_FILE=compose.yml` (plus overlays), `COMPOSE_PROJECT_NAME=ytdigest`, mode 600 | `COMPOSE_PROJECT_NAME=ytdigest-dev`, no `COMPOSE_FILE` |
+| Images          | `ytdigest-{backend,whisper,web}:vX.Y.Z`                                               | `ytdigest-*:latest` (`IMAGE_TAG` unset or `latest`)    |
+| State           | `/var/lib/ytdigest-deploy/` (mode 700)                                                | none                                                   |
+
+`compose.yml` tags the three built images `${IMAGE_TAG:-latest}`. The deploy
+script sets `IMAGE_TAG` to the release tag on every Compose call, so a dev
+build (always `latest`) cannot change what a production recreate uses, and
+the previous release's images stay on the host for a rollback.
+
+A manual `docker compose -f compose.yml up -d` in `/opt/ytdigest` without
+`IMAGE_TAG` would recreate production onto `:latest` images. For any manual
+command, use the passthrough, which adds the deployed tag and the project and
+files:
+
+```bash
+ops/host/deploy.sh --compose ps
+ops/host/deploy.sh --compose logs --tail 100 analyzer
+ops/host/deploy.sh --compose restart transcriber
+ops/host/deploy.sh --status      # state.json: last attempt and last good deploy
+```
+
+### What `ops/host/deploy.sh <tag>` does
+
+1. **Preflight.** Refuses, with one line and a non-zero exit: a tag that does
+   not match `^v[0-9]+\.[0-9]+\.[0-9]+$`; a dirty checkout; a `.env` with no
+   `COMPOSE_FILE`, one that names `compose.override.yml` or a file other than
+   `compose.yml`, `compose.anthropic.yml`, `compose.tunnel.yml`, or a
+   `COMPOSE_PROJECT_NAME` other than `ytdigest`; `CLOUDFLARED_TUNNEL_ID` or
+   `ANTHROPIC_API_KEY_FILE` set without its overlay listed; the tunnel overlay
+   while a host `cloudflared.service` is active; and any existing `ytdigest`
+   container made with the dev overlay (its Compose files label names
+   `compose.override.yml`, it has a source bind mount under `/app`, or it runs
+   `WHISPER_MODEL=tiny`).
+2. **Fetch and verify.** Fetches `release` and the tag (a tag that moved on
+   GitHub is refused, never forced) and refuses a tag that is not an ancestor
+   of `origin/release`. It reads the tag's Alembic head from
+   `migrations/versions` and the database's revision from `db`, and refuses a
+   tag whose head is behind the database unless `--allow-schema-behind` is
+   given.
+3. **Build** all images as `:<tag>`.
+4. **Backup** with `ops/host/pg-backup.sh` when the tag brings a new Alembic
+   revision; it prints the snapshot id.
+5. **`run --rm migrate`**, then **`up -d --wait`**, then a **health check** of
+   `http://127.0.0.1:8080/api/healthz` with a bounded deadline (180 s;
+   `YTDIGEST_DEPLOY_HEALTH_TIMEOUT_SEC`).
+
+Compose always gets `-p ytdigest -f compose.yml` plus the overlays `.env`'s
+`COMPOSE_FILE` lists. A failure before `migrate` puts the checkout back and
+leaves the running containers untouched. A later failure exits non-zero,
+names the stage, and prints the previous tag and the exact rollback command.
+Running the deployed tag again is a no-op that exits 0 and writes one log line.
+One deploy runs at a time (`flock` on `/var/lib/ytdigest-deploy/deploy.lock`).
+
+`/var/lib/ytdigest-deploy/state.json` (mode 600) holds `tag`, `sha`,
+`deployed_at`, `alembic_head`, `result` and `stage` for the last attempt and
+for the last good deploy; `deploy.log` next to it has one line per event.
+
+### Owner: GitHub settings (once)
+
+The repository is public. Create the branch from `master` once, from your own
+machine:
+
+```bash
+git fetch origin
+git push origin origin/master:refs/heads/release
+```
+
+Then in GitHub, **Settings -> Rules -> Rulesets**:
+
+- **New branch ruleset** `release-branch`: Enforcement status _Active_; Bypass
+  list empty; Target branches _Include by pattern_ `release`; rules
+  _Restrict deletions_, _Require a pull request before merging_ (required
+  approvals 0, since there is one maintainer), _Block force pushes_. A release
+  is a pull request with base `release` and head `master`; GitHub cannot
+  restrict the head branch, so only ever open it from `master`.
+- **New tag ruleset** `release-tags`: Enforcement status _Active_; Bypass list
+  _Repository admin_ (you); Target tags _Include by pattern_ `v*`; rules
+  _Restrict creations_, _Restrict updates_, _Restrict deletions_, _Block force
+  pushes_. Only you can create or move a `v*` tag.
+
+If the rules are ever missing, the script still fails closed: a tag that is
+not an ancestor of `origin/release` is refused, and a moved tag is never
+fetched over the old one.
+
+### Owner: first setup on this host
+
+1. A read-only deploy key: GitHub **Settings -> Deploy keys -> Add**, without
+   write access, from a key generated as the deploy account
+   (`ssh-keygen -t ed25519 -f ~/.ssh/ytdigest_deploy -N ''`). That key is the
+   only long-lived credential the deploy needs.
+2. The clone and the state directory **(sudo)**:
+
+   ```bash
+   sudo install -d -o <deploy-user> -g <deploy-user> /opt/ytdigest
+   sudo install -d -m 700 -o <deploy-user> -g <deploy-user> /var/lib/ytdigest-deploy
+   GIT_SSH_COMMAND='ssh -i ~/.ssh/ytdigest_deploy -o IdentitiesOnly=yes' \
+     git clone git@github.com:ulyss-1/simple_video_summariser.git /opt/ytdigest
+   git -C /opt/ytdigest config core.sshCommand 'ssh -i ~/.ssh/ytdigest_deploy -o IdentitiesOnly=yes'
+   ```
+
+3. `/opt/ytdigest/.env`, mode 600, per section 6, with these two lines set:
+
+   ```dotenv
+   COMPOSE_FILE=compose.yml
+   COMPOSE_PROJECT_NAME=ytdigest
+   ```
+
+   Add `:compose.anthropic.yml` or `:compose.tunnel.yml` to `COMPOSE_FILE`
+   only when that mode is configured. Leave `IMAGE_TAG=latest` as copied; the
+   script overrides it.
+
+4. The backup (#150) runs from `/opt/ytdigest` as the same account, so
+   `/etc/ytdigest-backup` must be owned by it; re-install the units from the
+   new checkout so they point at it:
+   `sudo /opt/ytdigest/ops/host/install-pg-backup-units.sh --user <deploy-user>`.
+
+### Owner: moving the live stack into `/opt/ytdigest` (once)
+
+Today the live `ytdigest` stack runs from the dev checkout
+`/home/hamlet/proj/simple_video_summariser`. The move keeps the project name,
+so Compose re-attaches `ytdigest_pgdata`, `ytdigest_audio` and
+`ytdigest_whisper-models` as they are: nothing is copied, renamed or deleted.
+
+1. Check that no job is running (`curl -s http://127.0.0.1:8080/api/ops/jobs`)
+   and that nobody else is working against the stack.
+2. **Fresh backup and a restore-verified snapshot id**, from the current
+   checkout:
+
+   ```bash
+   ops/host/pg-backup.sh                       # note snapshot=<id>
+   ops/host/pg-restore-drill.sh --snapshot <id>
+   ```
+
+   Write the id down. Do not continue unless the drill passes.
+
+3. Record the before state: `docker volume ls | grep ytdigest_`,
+   `docker compose -p ytdigest -f compose.yml ps`, `ss -ltn`.
+4. Keep a way back. Tag the images the running containers use, so a return
+   to the old checkout does not depend on what `:latest` is by then:
+
+   ```bash
+   for s in api transcriber web; do
+     docker inspect --format '{{.Config.Image}} {{.Image}}' "ytdigest-$s-1"
+   done
+   docker tag <api image id>         ytdigest-backend:pre-380
+   docker tag <transcriber image id> ytdigest-whisper:pre-380
+   docker tag <web image id>         ytdigest-web:pre-380
+   ```
+
+5. Do "first setup" above, with `.env` copied from the old checkout and the
+   two lines adjusted, and the release branch and first tag created.
+6. Deploy: `/opt/ytdigest/ops/host/deploy.sh vX.Y.Z`. The containers are
+   recreated from the new checkout on the same volumes. The backup step runs
+   only if the tag brings a new migration.
+7. Verify: `ops/host/deploy.sh --compose ps` (all healthy),
+   `docker volume ls | grep ytdigest_` (the same three volumes), the video
+   list in the UI, `ss -ltn` (no new listener), and the smoke check (§12).
+8. Retire the old checkout as a production source: set
+   `COMPOSE_PROJECT_NAME=ytdigest-dev` in its `.env` (or delete that `.env`),
+   so a bare `docker compose` there can never touch `ytdigest` again.
+
+Way back, if step 6 or 7 fails: from the old checkout (on a `master` that has
+`IMAGE_TAG` support),
+`IMAGE_TAG=pre-380 docker compose -p ytdigest -f compose.yml up -d --no-build`,
+which recreates the old containers on the same volumes. If the database was
+migrated meanwhile, restore the snapshot from step 2
+(`_docs/backup-restore.md`, 6b).
+
+The tunnel does not move in this step: the host `cloudflared.service` keeps
+forwarding to `127.0.0.1:8080`. Moving it into the stack (`compose.tunnel.yml`,
+stop and disable the host service first) is #408; the script refuses the
+tunnel overlay while the host service is active.
+
+### Releasing
+
+From your own machine:
+
+1. Open a pull request with base `release` and head `master`; merge it.
+2. Tag the merged commit and push the tag:
+
+   ```bash
+   git fetch origin
+   git tag -a v1.4.0 -m "v1.4.0" origin/release
+   git push origin v1.4.0
+   ```
+
+3. On the host: `/opt/ytdigest/ops/host/deploy.sh v1.4.0`, or let the timer
+   pick it up. Record the tag-to-healthy time from `deploy.log`.
+
+### Rolling back
+
+Run the script with the previous tag (`ops/host/deploy.sh --status` shows the
+last good one; a failed deploy prints the exact command):
+
+```bash
+/opt/ytdigest/ops/host/deploy.sh v1.3.2
+```
+
+The previous release's images are still on the host, so the build is a cache
+hit. Migrations are forward-only: if the database is already at a revision
+newer than the tag's Alembic head, the script refuses unless you pass
+`--allow-schema-behind`, which skips `migrate` and starts the old code on the
+newer schema. Do that only when the newer migration is additive; otherwise
+restore the pre-deploy snapshot the failed deploy printed
+(`_docs/backup-restore.md`, 6b) and then deploy the old tag. Automatic
+rollback is #409.
+
+### Optional: the deploy timer
+
+`ops/host/deploy-units/` holds `ytdigest-deploy.service` and
+`ytdigest-deploy.timer`. They ship disabled; nothing installs or enables
+them. The timer runs `deploy.sh --latest` every 15 minutes: it deploys the
+newest `v*` tag that is an ancestor of `origin/release`, does nothing while
+another deploy holds the lock, and does not retry a tag whose last attempt
+failed (deploy that one by hand). To enable **(sudo)**:
+
+```bash
+for u in ytdigest-deploy.service ytdigest-deploy.timer; do
+  sed -e 's|@USER@|<deploy-user>|g' -e 's|@REPO@|/opt/ytdigest|g' \
+    /opt/ytdigest/ops/host/deploy-units/$u | sudo tee /etc/systemd/system/$u >/dev/null
+done
+sudo systemctl daemon-reload
+sudo systemctl enable --now ytdigest-deploy.timer
+journalctl -u ytdigest-deploy.service    # what each run did
+```
+
+### Metrics for the first two releases
+
+Record in the release's issue: inbound ports opened (`ss -ltn` before and
+after; target 0), tag-to-healthy seconds, rollback seconds to the previous
+tag, and the long-lived credentials on the host (target: one read-only deploy
+key).
