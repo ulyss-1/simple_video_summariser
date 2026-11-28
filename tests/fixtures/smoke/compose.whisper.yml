@@ -22,7 +22,7 @@ services:
   # One-shot model seed, the only step with network access. Never started by
   # `up` (profile `seed`); the test runs it once, before the video is submitted.
   whisper-seed:
-    image: ytdigest-whisper:latest
+    image: ytdigest-whisper:${IMAGE_TAG:-latest}
     pull_policy: never    # built as `transcriber` in the same `up --build`
     profiles: [seed]
     command:

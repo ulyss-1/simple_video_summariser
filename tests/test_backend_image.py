@@ -346,7 +346,7 @@ def _migrate() -> str:
 def test_migrate_builds_the_backend_image_under_its_tag() -> None:
     block = _migrate()
     assert "build: {context: ., dockerfile: ops/Dockerfile.backend}" in block
-    assert "image: ytdigest-backend:latest" in block
+    assert "image: ytdigest-backend:${IMAGE_TAG:-latest}" in block
 
 
 def test_migrate_runs_alembic_upgrade_head() -> None:

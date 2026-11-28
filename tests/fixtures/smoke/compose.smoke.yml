@@ -36,7 +36,7 @@ services:
       - ./tests/adapters/youtube/fixtures/metadata/manual_en.json:/smoke/fixtures/manual_en.json:ro
       - ./tests/fixtures/vtt/youtube_manual_iG9CE55wbtY.en.vtt:/smoke/fixtures/youtube_manual_iG9CE55wbtY.en.vtt:ro
   fake-ollama:
-    image: ytdigest-backend:latest
+    image: ytdigest-backend:${IMAGE_TAG:-latest}
     pull_policy: never    # built by `migrate` in the same `up --build`
     command: python /smoke/fake_ollama.py ${OLLAMA_MODEL:-qwen3.5:4b} 11434
     volumes:
