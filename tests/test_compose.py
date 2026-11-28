@@ -231,6 +231,8 @@ def test_migrate_uses_the_anchor_and_workers_merge_it() -> None:
                 "OLLAMA_OUTPUT_RESERVE_TOKENS": "2048",
                 "OLLAMA_TIMEOUT_SEC": "900",
                 "ANALYZE_MAX_RUNTIME_SEC": "3600",
+                "ANTHROPIC_BATCH_POLL_SEC": "30",
+                "ANTHROPIC_BATCH_MAX_WAIT_SEC": "3600",
             },
         ),
         (
@@ -301,6 +303,42 @@ def test_ollama_llm_defaults_equal_settings_in_compose_and_env_example() -> None
         assert f"      {key}: ${{{key}:-{default}}}\n" in block + "\n"
         assert f"\n{key}={default}\n" in env_text
     assert defaults["OLLAMA_OUTPUT_RESERVE_TOKENS"] < defaults["OLLAMA_NUM_CTX"]
+
+
+# The Anthropic batch wait knobs (#190): read only by the analyzer's adapter.
+ANTHROPIC_BATCH_WAIT_KEYS = ("ANTHROPIC_BATCH_POLL_SEC", "ANTHROPIC_BATCH_MAX_WAIT_SEC")
+
+
+def test_anthropic_batch_wait_settings_are_on_the_analyzer_only() -> None:
+    anchor = _anchor_block("x-backend-env: &backend-env")
+    for key in ANTHROPIC_BATCH_WAIT_KEYS:
+        assert key in _block("analyzer"), key
+        assert key not in anchor, key
+        for name in ("db", "migrate", "api", "planner", "transcriber", "web"):
+            assert key not in _block(name), (key, name)
+
+
+def test_anthropic_batch_wait_defaults_equal_settings_in_compose_and_env_example() -> None:
+    from common.config import Settings
+
+    block = _block("analyzer")
+    env_text = (REPO_ROOT / ".env.example").read_text()
+    for key in ANTHROPIC_BATCH_WAIT_KEYS:
+        default = Settings.model_fields[key].default
+        assert f"      {key}: ${{{key}:-{default}}}\n" in block + "\n", key
+        assert f"\n{key}={default}\n" in env_text, key
+
+
+def test_env_example_says_batch_mode_needs_a_higher_analyze_limit() -> None:
+    # The comment block directly above ANALYZE_MAX_RUNTIME_SEC= in .env.example.
+    lines = (REPO_ROOT / ".env.example").read_text().splitlines()
+    end = lines.index(f"ANALYZE_MAX_RUNTIME_SEC={3600}")
+    start = end
+    while start > 0 and lines[start - 1].startswith("#"):
+        start -= 1
+    comment = " ".join(line.lstrip("# ") for line in lines[start:end])
+    assert "ANTHROPIC_BATCH_MAX_WAIT_SEC" in comment
+    assert "batch" in comment.lower()
 
 
 def test_anthropic_overlay_is_explicit_and_analyzer_only() -> None:
