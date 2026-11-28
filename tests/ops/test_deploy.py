@@ -37,12 +37,12 @@ GIT_ENV = {
 DOCKER_STUB = r'''#!{python}
 import json, os, sys
 from pathlib import Path
-d = Path(os.environ["STUB_DIR"])
+d = Path(os.getenv("STUB_DIR", ""))
 sc = json.loads((d / "scenario.json").read_text())
 args = sys.argv[1:]
 with (d / "calls.jsonl").open("a") as fh:
     fh.write(json.dumps({"tool": "docker", "args": args,
-                         "image_tag": os.environ.get("IMAGE_TAG"), "cwd": os.getcwd()}) + "\n")
+                         "image_tag": os.getenv("IMAGE_TAG"), "cwd": os.getcwd()}) + "\n")
 fail = sc.get("fail", {})
 if args[:1] == ["ps"]:
     print("\n".join(sc.get("containers", [])))
@@ -78,7 +78,7 @@ sys.exit(0)
 CURL_STUB = r'''#!{python}
 import json, os, sys
 from pathlib import Path
-d = Path(os.environ["STUB_DIR"])
+d = Path(os.getenv("STUB_DIR", ""))
 sc = json.loads((d / "scenario.json").read_text())
 with (d / "calls.jsonl").open("a") as fh:
     fh.write(json.dumps({"tool": "curl", "args": sys.argv[1:]}) + "\n")
@@ -88,7 +88,7 @@ sys.exit(0 if sc.get("healthy", True) else 22)
 SYSTEMCTL_STUB = r'''#!{python}
 import json, os, sys
 from pathlib import Path
-d = Path(os.environ["STUB_DIR"])
+d = Path(os.getenv("STUB_DIR", ""))
 sc = json.loads((d / "scenario.json").read_text())
 with (d / "calls.jsonl").open("a") as fh:
     fh.write(json.dumps({"tool": "systemctl", "args": sys.argv[1:]}) + "\n")
